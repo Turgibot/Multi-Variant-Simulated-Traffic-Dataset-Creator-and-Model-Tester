@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (QDialog, QFrame, QHBoxLayout, QLabel,
 
 from src.gui.dataset_generation_page import DatasetGenerationPage
 from src.gui.project_dialog import NewProjectDialog
+from src.gui.simulation_page import SimulationPage
 from src.utils.project_manager import ProjectManager
 
 
@@ -366,7 +367,8 @@ class MainWindow(QMainWindow):
     def init_ui(self):
         """Initialize the main window UI."""
         self.setWindowTitle("Traffic Simulation Tool - Multi-Variant Dataset Creator and Model Tester")
-        self.setGeometry(100, 100, 800, 600)
+        self.setGeometry(100, 100, 1200, 800)
+        self.showMaximized()
         
         # Central widget with stacked pages
         self.central_widget = QStackedWidget()
@@ -383,6 +385,9 @@ class MainWindow(QMainWindow):
         self.dataset_page = None
         self.current_project_name = None
         self.current_project_path = None
+        
+        # Simulation page (will be created when needed)
+        self.simulation_page = None
         
         # Placeholder page for model testing
         self.model_page = self.create_placeholder_page("Model Testing", "Coming soon...")
@@ -471,12 +476,65 @@ class MainWindow(QMainWindow):
             # Create new page
             self.dataset_page = DatasetGenerationPage(project_name, project_path)
             self.dataset_page.back_clicked.connect(self.show_welcome)
+            self.dataset_page.run_simulation_clicked.connect(self.open_simulation)
             self.central_widget.addWidget(self.dataset_page)
             self.current_project_name = project_name
             self.current_project_path = project_path
         
         # Show dataset generation page
         self.central_widget.setCurrentWidget(self.dataset_page)
+    
+    def open_simulation(self, project_name: str, sumocfg_path: str, output_folder: str):
+        """Open simulation page for a project."""
+        # Get project info
+        project_info = self.welcome_page.project_manager.get_project_info(project_name)
+        if not project_info:
+            QMessageBox.warning(
+                self,
+                "Error",
+                f"Project '{project_name}' not found."
+            )
+            return
+        
+        project_path = project_info['path']
+        
+        # Check if project folder exists
+        if not Path(project_path).exists():
+            QMessageBox.warning(
+                self,
+                "Error",
+                f"Project folder does not exist: {project_path}"
+            )
+            return
+        
+        # Create or reuse simulation page
+        if (self.simulation_page is None or 
+            self.current_project_name != project_name):
+            # Remove old page if exists
+            if self.simulation_page is not None:
+                self.central_widget.removeWidget(self.simulation_page)
+                self.simulation_page.deleteLater()
+            
+            # Create new page
+            self.simulation_page = SimulationPage(
+                project_name, 
+                project_path, 
+                sumocfg_path, 
+                output_folder
+            )
+            self.simulation_page.back_clicked.connect(self.show_dataset_generation)
+            self.central_widget.addWidget(self.simulation_page)
+        
+        # Show simulation page
+        self.central_widget.setCurrentWidget(self.simulation_page)
+    
+    def show_dataset_generation(self):
+        """Show the dataset generation page for the current project."""
+        if self.dataset_page is not None:
+            self.central_widget.setCurrentWidget(self.dataset_page)
+        else:
+            # If dataset page doesn't exist, go back to welcome
+            self.show_welcome()
     
     def open_model_testing(self, project_name: str):
         """Open model testing for a project."""

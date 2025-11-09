@@ -52,6 +52,40 @@ class SUMOConfigManager:
         config['dataset_output_folder'] = str(path.absolute())
         self._save_config(config)
     
+    def get_sumo_home(self) -> Optional[str]:
+        """
+        Get the SUMO_HOME path.
+        
+        Returns:
+            Path to SUMO_HOME or None if not set
+        """
+        config = self._load_config()
+        return config.get('sumo_home')
+    
+    def set_sumo_home(self, sumo_home_path: str):
+        """
+        Set the SUMO_HOME path.
+        
+        Args:
+            sumo_home_path: Path to the SUMO installation directory
+        """
+        # Validate path exists and is a directory
+        path = Path(sumo_home_path)
+        if not path.exists():
+            raise ValueError(f"Path does not exist: {sumo_home_path}")
+        if not path.is_dir():
+            raise ValueError(f"Path is not a directory: {sumo_home_path}")
+        
+        # Check if it looks like a SUMO installation (has bin directory)
+        bin_dir = path / 'bin'
+        if not bin_dir.exists():
+            raise ValueError(f"Path does not appear to be a SUMO installation (missing bin directory): {sumo_home_path}")
+        
+        # Store absolute path
+        config = self._load_config()
+        config['sumo_home'] = str(path.absolute())
+        self._save_config(config)
+    
     def _ensure_config_file(self):
         """Ensure config file exists."""
         if not self.config_file.exists():
