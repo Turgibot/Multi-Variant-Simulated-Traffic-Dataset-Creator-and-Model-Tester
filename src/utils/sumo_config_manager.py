@@ -181,15 +181,29 @@ class SUMOConfigManager:
             
             if input_elem is not None:
                 # Standard SUMO config format with <input> element
-                # Network file
-                net_file = input_elem.get('net-file')
+                # SUMO can use either:
+                # 1. Attributes directly on <input>: <input net-file="..." route-files="..."/>
+                # 2. Child elements with value attribute: <input><net-file value="..."/></input>
+                
+                # Try child elements first (OSM Web Wizard format)
+                net_elem = input_elem.find('net-file')
+                if net_elem is not None:
+                    net_file = net_elem.get('value')
+                else:
+                    net_file = input_elem.get('net-file')
+                
                 if net_file:
                     net_path = (sumocfg_dir / net_file).resolve()
                     # Store path even if it doesn't exist (for debugging)
                     parsed_files['network'] = str(net_path)
                 
                 # Route files
-                route_files = input_elem.get('route-files')
+                route_elem = input_elem.find('route-files')
+                if route_elem is not None:
+                    route_files = route_elem.get('value')
+                else:
+                    route_files = input_elem.get('route-files')
+                
                 if route_files:
                     # SUMO can have multiple route files separated by comma
                     route_list = []
@@ -202,7 +216,12 @@ class SUMOConfigManager:
                         parsed_files['routes'] = route_list[0] if len(route_list) == 1 else route_list
                 
                 # Additional files
-                additional_files = input_elem.get('additional-files')
+                additional_elem = input_elem.find('additional-files')
+                if additional_elem is not None:
+                    additional_files = additional_elem.get('value')
+                else:
+                    additional_files = input_elem.get('additional-files')
+                
                 if additional_files:
                     add_list = []
                     for add_file in additional_files.split(','):
@@ -214,7 +233,12 @@ class SUMOConfigManager:
                         parsed_files['additional'] = add_list[0] if len(add_list) == 1 else add_list
                 
                 # Configuration file (if referenced)
-                config_file = input_elem.get('configuration-file')
+                config_elem = input_elem.find('configuration-file')
+                if config_elem is not None:
+                    config_file = config_elem.get('value')
+                else:
+                    config_file = input_elem.get('configuration-file')
+                
                 if config_file:
                     config_path = (sumocfg_dir / config_file).resolve()
                     parsed_files['config'] = str(config_path)

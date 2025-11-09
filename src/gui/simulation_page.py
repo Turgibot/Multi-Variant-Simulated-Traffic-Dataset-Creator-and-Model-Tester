@@ -5,7 +5,7 @@ SUMO Simulation page for running and monitoring traffic simulations.
 from pathlib import Path
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QPushButton, QMessageBox, QGroupBox, QTextEdit
+    QPushButton, QMessageBox, QGroupBox, QTextEdit, QSlider
 )
 from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QFont
@@ -144,6 +144,57 @@ class SimulationPage(QWidget):
         
         controls_layout.addStretch()
         
+        # Step interval control (on same row as buttons)
+        step_label = QLabel("Step Interval (ms):")
+        step_label.setStyleSheet("color: #666; padding: 5px; font-size: 13px; font-weight: bold;")
+        controls_layout.addWidget(step_label)
+        
+        # Step interval slider (0ms to 2000ms)
+        # Step interval = real-world delay between rendering SUMO steps
+        # 0ms = maximum speed (as fast as possible)
+        # Lower interval = faster rendering (more steps per second)
+        # Higher interval = slower rendering (fewer steps per second)
+        self.step_interval_slider = QSlider(Qt.Horizontal)
+        self.step_interval_slider.setMinimum(0)  # 0ms = maximum speed
+        self.step_interval_slider.setMaximum(2000)  # 2000ms (0.5 steps/second = 0.5x speed if step=1s)
+        self.step_interval_slider.setValue(0)  # Default: 0ms (maximum speed)
+        self.step_interval_slider.setTickPosition(QSlider.TicksBelow)
+        self.step_interval_slider.setTickInterval(200)
+        self.step_interval_slider.setMaximumWidth(200)  # Limit width
+        self.step_interval_slider.setStyleSheet("""
+            QSlider::groove:horizontal {
+                border: 1px solid #bbb;
+                background: #f0f0f0;
+                height: 8px;
+                border-radius: 4px;
+            }
+            QSlider::handle:horizontal {
+                background: #4CAF50;
+                border: 1px solid #45a049;
+                width: 18px;
+                height: 18px;
+                margin: -5px 0;
+                border-radius: 9px;
+            }
+            QSlider::handle:horizontal:hover {
+                background: #45a049;
+            }
+            QSlider::sub-page:horizontal {
+                background: #4CAF50;
+                border-radius: 4px;
+            }
+        """)
+        self.step_interval_slider.valueChanged.connect(self.on_step_interval_changed)
+        controls_layout.addWidget(self.step_interval_slider)
+        
+        # Step interval display label
+        self.step_interval_label = QLabel("Max")
+        self.step_interval_label.setStyleSheet("color: #666; padding: 5px 10px; font-size: 13px; font-weight: bold; min-width: 60px;")
+        self.step_interval_label.setAlignment(Qt.AlignCenter)
+        controls_layout.addWidget(self.step_interval_label)
+        
+        controls_layout.addStretch()
+        
         # Simulation status
         status_label = QLabel("Status: Not Started")
         status_label.setStyleSheet("color: #666; padding: 5px 15px; font-size: 14px; font-weight: bold;")
@@ -204,6 +255,8 @@ class SimulationPage(QWidget):
         self.network_parser = None
         self.update_timer = QTimer()
         self.update_timer.timeout.connect(self.update_simulation)
+        self.step_interval = 0  # Update interval in ms (default: 0ms = maximum speed)
+        self.sumo_step_length = 1.0  # SUMO step length in seconds (default: 1.0)
         
         # Load network if sumocfg is available (after UI is complete)
         self.load_network()
@@ -237,6 +290,25 @@ class SimulationPage(QWidget):
                         self.network_parser = NetworkParser(str(net_path))
                         self.simulation_view.load_network(self.network_parser)
                         self.log_text.append(f"Network loaded: {net_path}")
+            
+            # Get step length from sumocfg (default is 1.0 second)
+            # SUMO step length = simulated time per step
+            self.sumo_step_length = 1.0  # Default step length in seconds
+            time_elem = root.find('time')
+            if time_elem is not None:
+                step_elem = time_elem.find('step-length')
+                if step_elem is not None:
+                    step_value = step_elem.get('value')
+                    if step_value:
+                        try:
+                            self.sumo_step_length = float(step_value)
+                        except ValueError:
+                            pass
+            
+            # Step interval is the real-world delay between renders
+            # Default: 1000ms = 1 render per second = 1 SUMO step per second = 1x speed (if step=1s)
+            # Don't auto-adjust slider, let user control it
+            
         except Exception as e:
             self.log_text.append(f"Error loading network: {str(e)}")
     
@@ -298,8 +370,10 @@ class SimulationPage(QWidget):
             traci.start(sumo_cmd)
             self.traci_connection = traci
             
-            # Start update timer (update every 100ms)
-            self.update_timer.start(100)
+            # Start update timer with current step interval
+            # If step_interval is 0, use 1ms (minimum for Qt timer, runs as fast as possible)
+            timer_interval = 1 if self.step_interval == 0 else self.step_interval
+            self.update_timer.start(timer_interval)
             
             self.log_text.append("Simulation started successfully!")
             
@@ -328,14 +402,21 @@ class SimulationPage(QWidget):
             )
     
     def update_simulation(self):
-        """Update simulation visualization."""
+        """Update simulation visualization.
+        
+        This is called every step_interval milliseconds.
+        Each call advances the simulation by 1 SUMO step.
+        Step interval controls the rendering speed:
+        - Lower interval = more steps per second = faster simulation
+        - Higher interval = fewer steps per second = slower simulation
+        """
         if not self.simulation_running or not self.traci_connection:
             return
         
         try:
             import traci
             
-            # Step simulation
+            # Step simulation (advance by 1 SUMO step)
             if not self.simulation_paused:
                 traci.simulationStep()
             
@@ -358,10 +439,25 @@ class SimulationPage(QWidget):
             for vehicle_id in existing_vehicles - current_vehicles:
                 self.simulation_view.remove_vehicle(vehicle_id)
             
-            # Update status
+            # Update status with speed information
             sim_time = traci.simulation.getTime()
             vehicle_count = len(vehicle_ids)
-            self.status_label.setText(f"Status: Running | Time: {sim_time:.1f}s | Vehicles: {vehicle_count}")
+            
+            # Calculate effective speed: simulation seconds per real second
+            # If step_interval = 0ms, then maximum speed
+            # If step_interval = 500ms, then 2 steps/second = 2x speed (if step=1s)
+            # If step_interval = 100ms, then 10 steps/second = 10x speed (if step=1s)
+            if self.step_interval == 0:
+                speed_text = "Max"
+            else:
+                steps_per_second = 1000.0 / self.step_interval
+                effective_speed = steps_per_second * self.sumo_step_length  # simulation seconds per real second
+                speed_text = f"{effective_speed:.2f}x"
+            
+            self.status_label.setText(
+                f"Status: Running | Time: {sim_time:.1f}s | Vehicles: {vehicle_count} | "
+                f"Speed: {speed_text}"
+            )
             
         except Exception as e:
             self.log_text.append(f"Error updating simulation: {str(e)}")
@@ -426,4 +522,44 @@ class SimulationPage(QWidget):
         self.simulation_paused = False
         
         self.log_text.append("Simulation stopped.")
+    
+    def on_step_interval_changed(self, value: int):
+        """Handle step interval slider change.
+        
+        Step interval = real-world delay between rendering SUMO steps.
+        0ms = maximum speed (as fast as possible).
+        Lower value = faster rendering (more steps per second).
+        Higher value = slower rendering (fewer steps per second).
+        """
+        # Update step interval (in milliseconds)
+        self.step_interval = value
+        
+        # Update display
+        if value == 0:
+            self.step_interval_label.setText("Max")
+        else:
+            self.step_interval_label.setText(f"{value} ms")
+        
+        # Calculate and show effective speed
+        if hasattr(self, 'sumo_step_length'):
+            if value == 0:
+                # Maximum speed - show as "Max" or calculate theoretical max
+                effective_speed = float('inf')
+            else:
+                steps_per_second = 1000.0 / value
+                effective_speed = steps_per_second * self.sumo_step_length
+            # Update status if simulation is running
+            if self.simulation_running and hasattr(self, 'status_label'):
+                # Status will be updated in next update_simulation call
+                pass
+        
+        # Update timer interval if simulation is running
+        if self.simulation_running and self.update_timer.isActive():
+            self.update_timer.stop()
+            if value == 0:
+                # For 0ms, use 1ms as minimum (Qt timer minimum is 1ms)
+                # This will run as fast as possible
+                self.update_timer.start(1)
+            else:
+                self.update_timer.start(self.step_interval)
 

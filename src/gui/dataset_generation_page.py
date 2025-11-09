@@ -34,6 +34,7 @@ class DatasetGenerationPage(QWidget):
         
         self.init_ui()
         self.load_output_folder()
+        self.load_sumo_home()
         # Load and display sumocfg contents if already set
         existing_sumocfg = self.config_manager.get_sumocfg_path()
         if existing_sumocfg:

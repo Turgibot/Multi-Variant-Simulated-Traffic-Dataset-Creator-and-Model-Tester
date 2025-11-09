@@ -3,6 +3,7 @@ Network parser for extracting geometry from SUMO network files.
 """
 
 import xml.etree.ElementTree as ET
+import gzip
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 
@@ -31,7 +32,15 @@ class NetworkParser:
     def _parse(self):
         """Parse the network file."""
         try:
-            tree = ET.parse(self.net_file)
+            # Handle compressed files (.gz)
+            if self.net_file.suffix == '.gz' or self.net_file.name.endswith('.gz'):
+                # Open compressed file
+                with gzip.open(self.net_file, 'rb') as f:
+                    tree = ET.parse(f)
+            else:
+                # Open regular file
+                tree = ET.parse(self.net_file)
+            
             root = tree.getroot()
             
             # Parse location/bounds
