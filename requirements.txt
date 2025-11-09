@@ -1,0 +1,39 @@
+# GUI Framework
+PySide6>=6.5.0
+
+# Packaging
+pyinstaller>=5.13.0
+
+# Data Processing
+numpy>=1.24.0
+pandas>=2.0.0
+
+# Visualization
+matplotlib>=3.7.0
+plotly>=5.14.0
+
+# Machine Learning Model Support
+torch>=2.0.0
+torch-geometric>=2.3.0  # For Graph Neural Networks (GNN)
+tensorflow>=2.13.0; platform_machine != 'arm64' or python_version < '3.11'
+onnxruntime>=1.15.0
+
+# Data Export Formats
+h5py>=3.9.0
+pyarrow>=12.0.0  # For Parquet support
+
+# SUMO TraCI (Python bindings)
+# Note: SUMO itself needs to be installed separately
+# TraCI Python bindings are typically included with SUMO installation
+# If available via pip, uncomment the line below:
+# sumolib>=1.18.0
+
+# Additional Utilities
+pyyaml>=6.0  # For configuration files
+scipy>=1.10.0  # For statistical analysis
+
+# Development Tools (optional, can be in requirements-dev.txt)
+# black>=23.0.0
+# pylint>=2.17.0
+# pytest>=7.3.0
+

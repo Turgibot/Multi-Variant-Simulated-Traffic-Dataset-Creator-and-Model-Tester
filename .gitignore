@@ -1,0 +1,132 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv
+*.virtualenv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.flake8
+.mypy_cache/
+.ruff_cache/
+.dmypy.json
+dmypy.json
+.vscode/settings.json
+.vscode/launch.json
+
+# PyInstaller
+*.spec
+*.exe
+*.app
+*.dmg
+*.pkg
+*.deb
+*.rpm
+
+# Project specific
+*.log
+*.db
+*.sqlite
+*.sqlite3
+
+# Data files (uncomment if you don't want to track data)
+# *.csv
+# *.json
+# *.h5
+# *.hdf5
+# *.parquet
+# *.pkl
+# *.pickle
+
+# Model files (uncomment if you don't want to track models)
+# *.pth
+# *.pt
+# *.h5
+# *.pb
+# *.onnx
+# *.ckpt
+
+# SUMO files
+*.sumocfg
+*.rou.xml
+*.net.xml
+*.edg.xml
+*.nod.xml
+*.con.xml
+*.tll.xml
+*.fcd.xml
+*.fcd.gz
+*.dump.xml
+*.dump.gz
+
+# Configuration files with sensitive data
+config/local_config.yaml
+config/secrets.yaml
+*.key
+*.pem
+.env
+.env.local
+.env.*.local
+*.secret
+secrets/
+
+# Test coverage
+.coverage
+htmlcov/
+.pytest_cache/
+.tox/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# OS
+Thumbs.db
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Desktop.ini
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+
+# Playback files
+*.playback
+*.recording
+
+# Results and outputs
+results/
+outputs/
+datasets/generated/
+*.out
+*.err
+
+# Documentation builds
+docs/_build/
+docs/.doctrees/
+site/
+
+# Profiling data
+*.prof
+*.lprof
+*.pstats
