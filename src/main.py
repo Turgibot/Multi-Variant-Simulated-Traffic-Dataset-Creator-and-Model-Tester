@@ -2,14 +2,15 @@
 Main application entry point.
 """
 
-import sys
 import os
+import sys
+
 
 # Add SUMO tools to path if available
 def setup_sumo_path():
     """Add SUMO tools directory to Python path."""
     import subprocess
-    
+
     # Try to find SUMO tools
     try:
         result = subprocess.run(['which', 'sumo'], capture_output=True, text=True)
@@ -37,7 +38,7 @@ def setup_sumo_path():
 def check_qt_platform():
     """Check and set Qt platform if needed."""
     import os
-    
+
     # Check if xcb-cursor is available
     def check_xcb_available():
         import subprocess
@@ -76,8 +77,9 @@ def main():
     
     # Import Qt after platform is set
     from PySide6.QtWidgets import QApplication
+
     from src.gui.main_window import MainWindow
-    
+
     # Create application
     app = QApplication.instance()
     if app is None:
