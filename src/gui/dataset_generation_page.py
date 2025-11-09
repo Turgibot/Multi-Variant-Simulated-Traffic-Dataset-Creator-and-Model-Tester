@@ -6,82 +6,12 @@ from pathlib import Path
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QFileDialog, QMessageBox, QFrame,
-    QScrollArea, QGroupBox, QTextEdit
+    QScrollArea, QGroupBox, QTextEdit, QLineEdit
 )
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont
 
 from src.utils.sumo_config_manager import SUMOConfigManager
-
-
-class SUMOConfigWidget(QFrame):
-    """Widget for displaying and managing a SUMO configuration file."""
-    
-    file_removed = Signal(str)  # Emits file_type
-    
-    def __init__(self, file_type: str, file_path: str, parent=None):
-        super().__init__(parent)
-        self.file_type = file_type
-        self.file_path = file_path
-        self.init_ui()
-    
-    def init_ui(self):
-        """Initialize the widget UI."""
-        self.setStyleSheet("""
-            QFrame {
-                background-color: #f9f9f9;
-                border: 1px solid #ddd;
-                border-radius: 5px;
-                padding: 10px;
-            }
-        """)
-        
-        layout = QHBoxLayout()
-        layout.setContentsMargins(10, 8, 10, 8)
-        
-        # File info
-        info_layout = QVBoxLayout()
-        info_layout.setSpacing(5)
-        
-        type_label = QLabel(self.file_type.upper())
-        type_font = QFont()
-        type_font.setBold(True)
-        type_label.setFont(type_font)
-        info_layout.addWidget(type_label)
-        
-        path_label = QLabel(self.file_path)
-        path_label.setStyleSheet("color: #666; font-size: 10px;")
-        path_label.setWordWrap(True)
-        info_layout.addWidget(path_label)
-        
-        # Check if file exists
-        if not Path(self.file_path).exists():
-            status_label = QLabel("⚠ File not found")
-            status_label.setStyleSheet("color: #f44336; font-size: 10px;")
-            info_layout.addWidget(status_label)
-        
-        layout.addLayout(info_layout)
-        layout.addStretch()
-        
-        # Remove button
-        remove_btn = QPushButton("Remove")
-        remove_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #f44336;
-                color: white;
-                border: none;
-                padding: 6px 15px;
-                border-radius: 5px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #d32f2f;
-            }
-        """)
-        remove_btn.clicked.connect(lambda: self.file_removed.emit(self.file_type))
-        layout.addWidget(remove_btn)
-        
-        self.setLayout(layout)
 
 
 class DatasetGenerationPage(QWidget):
@@ -94,8 +24,17 @@ class DatasetGenerationPage(QWidget):
         self.project_name = project_name
         self.project_path = project_path
         self.config_manager = SUMOConfigManager(project_path)
+        
+        # Initialize validation state variables
+        self.sumocfg_valid = False
+        self.output_folder_valid = False
+        
         self.init_ui()
-        self.refresh_config_files()
+        self.load_output_folder()
+        # Load and display sumocfg contents if already set
+        existing_sumocfg = self.config_manager.get_sumocfg_path()
+        if existing_sumocfg:
+            self.display_sumocfg_contents(existing_sumocfg)
     
     def init_ui(self):
         """Initialize the page UI."""
@@ -124,7 +63,7 @@ class DatasetGenerationPage(QWidget):
         
         header_layout.addStretch()
         
-        title = QLabel(f"Dataset Generation - {self.project_name}")
+        title = QLabel(f"Dataset Generation Settings - {self.project_name}")
         title_font = QFont()
         title_font.setPointSize(20)
         title_font.setBold(True)
@@ -164,48 +103,78 @@ class DatasetGenerationPage(QWidget):
         info_label.setStyleSheet("color: #666; padding: 10px;")
         config_layout.addWidget(info_label)
         
-        # Load SUMO config button
-        load_config_btn = QPushButton("+ Load SUMO Configuration File (.sumocfg)")
-        load_config_btn.setStyleSheet("""
+        # SUMO config file path input
+        sumocfg_label = QLabel("SUMO Configuration File (.sumocfg):")
+        config_layout.addWidget(sumocfg_label)
+        
+        sumocfg_layout = QHBoxLayout()
+        sumocfg_layout.setSpacing(10)
+        
+        self.sumocfg_input = QLineEdit()
+        self.sumocfg_input.setPlaceholderText("Enter path to .sumocfg file or use Browse...")
+        self.sumocfg_input.textChanged.connect(self.validate_sumocfg_path)
+        sumocfg_layout.addWidget(self.sumocfg_input)
+        
+        # Validation check mark
+        self.sumocfg_check = QLabel("✓")
+        self.sumocfg_check.setStyleSheet("color: #4CAF50; font-size: 18px; font-weight: bold;")
+        self.sumocfg_check.setVisible(False)
+        sumocfg_layout.addWidget(self.sumocfg_check)
+        
+        # Browse button
+        browse_sumocfg_btn = QPushButton("Browse...")
+        browse_sumocfg_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2196F3;
+                color: white;
+                border: none;
+                padding: 8px 15px;
+                border-radius: 5px;
+            }
+            QPushButton:hover {
+                background-color: #1976D2;
+            }
+        """)
+        browse_sumocfg_btn.clicked.connect(self.browse_sumocfg)
+        sumocfg_layout.addWidget(browse_sumocfg_btn)
+        
+        # Set button
+        set_sumocfg_btn = QPushButton("Set")
+        set_sumocfg_btn.setStyleSheet("""
             QPushButton {
                 background-color: #4CAF50;
                 color: white;
                 border: none;
-                padding: 10px 20px;
+                padding: 8px 20px;
                 border-radius: 5px;
                 font-weight: bold;
-                font-size: 14px;
             }
             QPushButton:hover {
                 background-color: #45a049;
             }
         """)
-        load_config_btn.clicked.connect(self.load_sumocfg)
-        config_layout.addWidget(load_config_btn)
+        set_sumocfg_btn.clicked.connect(self.set_sumocfg_path)
+        sumocfg_layout.addWidget(set_sumocfg_btn)
         
-        # Config files scroll area
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setStyleSheet("""
-            QScrollArea {
-                border: 1px solid #ddd;
-                border-radius: 5px;
-                background-color: white;
-            }
-        """)
+        config_layout.addLayout(sumocfg_layout)
         
-        self.config_files_widget = QWidget()
-        self.config_files_layout = QVBoxLayout()
-        self.config_files_layout.setSpacing(10)
-        self.config_files_widget.setLayout(self.config_files_layout)
-        scroll.setWidget(self.config_files_widget)
-        config_layout.addWidget(scroll)
+        # Store existing sumocfg for validation after UI is complete
+        existing_sumocfg = self.config_manager.get_sumocfg_path()
+        if existing_sumocfg:
+            self.sumocfg_input.setText(existing_sumocfg)
         
+        # SUMO config file contents display
+        self.config_contents_widget = QWidget()
+        self.config_contents_layout = QVBoxLayout()
+        self.config_contents_layout.setSpacing(5)
+        self.config_contents_widget.setLayout(self.config_contents_layout)
+        self.config_contents_widget.setVisible(False)
+        config_layout.addWidget(self.config_contents_widget)
         
         config_group.setLayout(config_layout)
         main_layout.addWidget(config_group)
         
-        # Dataset Configuration section (placeholder)
+        # Dataset Configuration section
         dataset_group = QGroupBox("Dataset Configuration")
         dataset_group.setStyleSheet("""
             QGroupBox {
@@ -222,17 +191,108 @@ class DatasetGenerationPage(QWidget):
             }
         """)
         dataset_layout = QVBoxLayout()
+        dataset_layout.setSpacing(15)
         
-        placeholder_label = QLabel("Dataset configuration options will be available here.")
-        placeholder_label.setStyleSheet("color: #999; padding: 20px;")
-        placeholder_label.setAlignment(Qt.AlignCenter)
-        dataset_layout.addWidget(placeholder_label)
+        # Output folder selection
+        output_folder_label = QLabel("Dataset Output Folder:")
+        dataset_layout.addWidget(output_folder_label)
+        
+        output_folder_layout = QHBoxLayout()
+        output_folder_layout.setSpacing(10)
+        
+        self.output_folder_input = QLineEdit()
+        self.output_folder_input.setPlaceholderText("Enter path to output folder or use Browse...")
+        self.output_folder_input.textChanged.connect(self.validate_output_folder)
+        output_folder_layout.addWidget(self.output_folder_input)
+        
+        # Validation check mark
+        self.output_folder_check = QLabel("✓")
+        self.output_folder_check.setStyleSheet("color: #4CAF50; font-size: 18px; font-weight: bold;")
+        self.output_folder_check.setVisible(False)
+        output_folder_layout.addWidget(self.output_folder_check)
+        
+        # Browse button
+        browse_folder_btn = QPushButton("Browse...")
+        browse_folder_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2196F3;
+                color: white;
+                border: none;
+                padding: 8px 15px;
+                border-radius: 5px;
+            }
+            QPushButton:hover {
+                background-color: #1976D2;
+            }
+        """)
+        browse_folder_btn.clicked.connect(self.browse_output_folder)
+        output_folder_layout.addWidget(browse_folder_btn)
+        
+        # Set button
+        set_folder_btn = QPushButton("Set")
+        set_folder_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #4CAF50;
+                color: white;
+                border: none;
+                padding: 8px 20px;
+                border-radius: 5px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #45a049;
+            }
+        """)
+        set_folder_btn.clicked.connect(self.set_output_folder)
+        output_folder_layout.addWidget(set_folder_btn)
+        
+        dataset_layout.addLayout(output_folder_layout)
+        
+        # Info label
+        info_label = QLabel(
+            "Generated dataset files will be saved to the selected folder. "
+            "If no folder is selected, datasets will be saved to the project's 'datasets' folder."
+        )
+        info_label.setWordWrap(True)
+        info_label.setStyleSheet("color: #666; padding: 10px; font-size: 11px;")
+        dataset_layout.addWidget(info_label)
         
         dataset_group.setLayout(dataset_layout)
         main_layout.addWidget(dataset_group)
         
+        # Run Simulation button (only enabled when all paths are valid)
+        self.run_simulation_btn = QPushButton("▶ Run SUMO Simulation")
+        self.run_simulation_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #4CAF50;
+                color: white;
+                border: none;
+                padding: 15px 30px;
+                border-radius: 5px;
+                font-weight: bold;
+                font-size: 16px;
+            }
+            QPushButton:hover {
+                background-color: #45a049;
+            }
+            QPushButton:pressed {
+                background-color: #3d8b40;
+            }
+            QPushButton:disabled {
+                background-color: #cccccc;
+                color: #666666;
+            }
+        """)
+        self.run_simulation_btn.setEnabled(False)
+        self.run_simulation_btn.clicked.connect(self.run_simulation)
+        main_layout.addWidget(self.run_simulation_btn)
+        
         main_layout.addStretch()
         self.setLayout(main_layout)
+        
+        # Now that all UI elements are created, validate existing paths
+        if existing_sumocfg:
+            self.validate_sumocfg_path()
     
     def refresh_config_files(self):
         """Refresh the list of configuration files."""
@@ -264,25 +324,63 @@ class DatasetGenerationPage(QWidget):
                             f"{file_type} ({i+1})" if len(file_path) > 1 else file_type,
                             path
                         )
-                        widget.file_removed.connect(self.remove_sumocfg)
                         self.config_files_layout.addWidget(widget)
                 else:
                     widget = SUMOConfigWidget(file_type, file_path)
-                    if file_type == 'sumocfg':
-                        widget.file_removed.connect(self.remove_sumocfg)
-                    else:
-                        # Individual files can't be removed, only the main sumocfg
-                        widget.setEnabled(False)
-                        # Hide remove button for parsed files
-                        for child in widget.findChildren(QPushButton):
-                            if child.text() == "Remove":
-                                child.hide()
                     self.config_files_layout.addWidget(widget)
         
         self.config_files_layout.addStretch()
     
-    def load_sumocfg(self):
-        """Load a SUMO configuration file (.sumocfg)."""
+    def load_output_folder(self):
+        """Load the saved output folder path."""
+        existing_folder = self.config_manager.get_dataset_output_folder()
+        if existing_folder:
+            self.output_folder_input.setText(existing_folder)
+            self.validate_output_folder()
+    
+    def validate_sumocfg_path(self):
+        """Validate the SUMO config file path."""
+        path_text = self.sumocfg_input.text().strip()
+        if not path_text:
+            self.sumocfg_check.setVisible(False)
+            self.sumocfg_valid = False
+            self.update_run_button()
+            return
+        
+        path = Path(path_text)
+        is_valid = path.exists() and path.is_file() and path.suffix == '.sumocfg'
+        
+        self.sumocfg_check.setVisible(is_valid)
+        self.sumocfg_valid = is_valid
+        self.update_run_button()
+    
+    def validate_output_folder(self):
+        """Validate the output folder path."""
+        path_text = self.output_folder_input.text().strip()
+        if not path_text:
+            self.output_folder_check.setVisible(False)
+            self.output_folder_valid = False
+            self.update_run_button()
+            return
+        
+        path = Path(path_text)
+        is_valid = path.exists() and path.is_dir()
+        
+        self.output_folder_check.setVisible(is_valid)
+        self.output_folder_valid = is_valid
+        self.update_run_button()
+    
+    def update_run_button(self):
+        """Update the Run Simulation button state based on validation."""
+        # Check if button exists (may not be created yet during initialization)
+        if not hasattr(self, 'run_simulation_btn'):
+            return
+        
+        all_valid = self.sumocfg_valid and self.output_folder_valid
+        self.run_simulation_btn.setEnabled(all_valid)
+    
+    def browse_sumocfg(self):
+        """Open file dialog to browse for SUMO config file."""
         file_path, _ = QFileDialog.getOpenFileName(
             self,
             "Select SUMO Configuration File",
@@ -291,36 +389,236 @@ class DatasetGenerationPage(QWidget):
         )
         
         if file_path:
-            try:
-                self.config_manager.set_sumocfg(file_path)
-                QMessageBox.information(
-                    self,
-                    "Success",
-                    f"SUMO configuration file loaded successfully!\n\n"
-                    f"Found {len(self.config_manager.get_config_files()) - 1} referenced files."
-                )
-                self.refresh_config_files()
-            except ValueError as e:
-                QMessageBox.warning(self, "Error", str(e))
-            except Exception as e:
-                QMessageBox.warning(
-                    self,
-                    "Error",
-                    f"Failed to load SUMO configuration file:\n{str(e)}"
-                )
+            self.sumocfg_input.setText(file_path)
+            self.validate_sumocfg_path()
     
-    def remove_sumocfg(self):
-        """Remove the SUMO configuration file."""
-        reply = QMessageBox.question(
+    def set_sumocfg_path(self):
+        """Set the SUMO config file path from the input field."""
+        path_text = self.sumocfg_input.text().strip()
+        if not path_text:
+            QMessageBox.warning(self, "Error", "Please enter a path to the .sumocfg file.")
+            return
+        
+        try:
+            self.config_manager.set_sumocfg(path_text)
+            self.display_sumocfg_contents(path_text)
+            QMessageBox.information(
+                self,
+                "Success",
+                f"SUMO configuration file set successfully!\n\n"
+                f"Found {len(self.config_manager.get_config_files()) - 1} referenced files."
+            )
+        except ValueError as e:
+            QMessageBox.warning(self, "Error", str(e))
+        except Exception as e:
+            QMessageBox.warning(
+                self,
+                "Error",
+                f"Failed to load SUMO configuration file:\n{str(e)}"
+            )
+    
+    def display_sumocfg_contents(self, sumocfg_path: str):
+        """Display the contents of the sumocfg file."""
+        # Clear existing content
+        while self.config_contents_layout.count():
+            item = self.config_contents_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        
+        try:
+            import xml.etree.ElementTree as ET
+            from pathlib import Path
+            
+            sumocfg_file = Path(sumocfg_path)
+            if not sumocfg_file.exists():
+                return
+            
+            sumocfg_dir = sumocfg_file.parent
+            tree = ET.parse(sumocfg_file)
+            root = tree.getroot()
+            
+            # Find input element
+            input_elem = root.find('input')
+            if input_elem is None:
+                self.config_contents_widget.setVisible(False)
+                return
+            
+            # Title
+            title_label = QLabel("Referenced Files:")
+            title_font = QFont()
+            title_font.setBold(True)
+            title_label.setFont(title_font)
+            self.config_contents_layout.addWidget(title_label)
+            
+            # Display each file type
+            # SUMO config can have attributes directly on <input> or child elements with value attribute
+            file_types = [
+                ('net-file', 'Network File'),
+                ('route-files', 'Route Files'),
+                ('additional-files', 'Additional Files'),
+                ('configuration-file', 'Configuration File')
+            ]
+            
+            has_files = False
+            
+            # First try: child elements with value attribute (e.g., <net-file value="..."/>)
+            for elem_name, display_name in file_types:
+                elem = input_elem.find(elem_name)
+                if elem is not None:
+                    file_value = elem.get('value')
+                    if file_value:
+                        has_files = True
+                        # Handle multiple files (comma-separated)
+                        files = [f.strip() for f in file_value.split(',') if f.strip()]
+                        
+                        for file_name in files:
+                            file_path = (sumocfg_dir / file_name).resolve()
+                            file_exists = file_path.exists()
+                            
+                            # Create file info widget
+                            file_layout = QHBoxLayout()
+                            file_layout.setSpacing(10)
+                            
+                            # File type label
+                            type_label = QLabel(f"{display_name}:")
+                            type_label.setStyleSheet("font-weight: bold; min-width: 120px;")
+                            file_layout.addWidget(type_label)
+                            
+                            # File name
+                            name_label = QLabel(file_name)
+                            name_label.setStyleSheet("color: #666;")
+                            file_layout.addWidget(name_label)
+                            
+                            file_layout.addStretch()
+                            
+                            # Existence check
+                            if file_exists:
+                                status_label = QLabel("✓")
+                                status_label.setStyleSheet("color: #4CAF50; font-size: 16px; font-weight: bold;")
+                            else:
+                                status_label = QLabel("✗")
+                                status_label.setStyleSheet("color: #f44336; font-size: 16px; font-weight: bold;")
+                                status_label.setToolTip(f"File not found: {file_path}")
+                            
+                            file_layout.addWidget(status_label)
+                            
+                            # Container widget
+                            file_widget = QWidget()
+                            file_widget.setLayout(file_layout)
+                            file_widget.setStyleSheet("""
+                                QWidget {
+                                    background-color: #f9f9f9;
+                                    border: 1px solid #ddd;
+                                    border-radius: 3px;
+                                    padding: 5px;
+                                }
+                            """)
+                            self.config_contents_layout.addWidget(file_widget)
+            
+            # Second try: attributes directly on <input> element (fallback)
+            if not has_files:
+                for attr_name, display_name in file_types:
+                    file_value = input_elem.get(attr_name)
+                    if file_value:
+                        has_files = True
+                        # Handle multiple files (comma-separated)
+                        files = [f.strip() for f in file_value.split(',') if f.strip()]
+                        
+                        for file_name in files:
+                            file_path = (sumocfg_dir / file_name).resolve()
+                            file_exists = file_path.exists()
+                            
+                            # Create file info widget
+                            file_layout = QHBoxLayout()
+                            file_layout.setSpacing(10)
+                            
+                            # File type label
+                            type_label = QLabel(f"{display_name}:")
+                            type_label.setStyleSheet("font-weight: bold; min-width: 120px;")
+                            file_layout.addWidget(type_label)
+                            
+                            # File name
+                            name_label = QLabel(file_name)
+                            name_label.setStyleSheet("color: #666;")
+                            file_layout.addWidget(name_label)
+                            
+                            file_layout.addStretch()
+                            
+                            # Existence check
+                            if file_exists:
+                                status_label = QLabel("✓")
+                                status_label.setStyleSheet("color: #4CAF50; font-size: 16px; font-weight: bold;")
+                            else:
+                                status_label = QLabel("✗")
+                                status_label.setStyleSheet("color: #f44336; font-size: 16px; font-weight: bold;")
+                                status_label.setToolTip(f"File not found: {file_path}")
+                            
+                            file_layout.addWidget(status_label)
+                            
+                            # Container widget
+                            file_widget = QWidget()
+                            file_widget.setLayout(file_layout)
+                            file_widget.setStyleSheet("""
+                                QWidget {
+                                    background-color: #f9f9f9;
+                                    border: 1px solid #ddd;
+                                    border-radius: 3px;
+                                    padding: 5px;
+                                }
+                            """)
+                            self.config_contents_layout.addWidget(file_widget)
+            
+            if has_files:
+                self.config_contents_widget.setVisible(True)
+            else:
+                self.config_contents_widget.setVisible(False)
+                
+        except Exception as e:
+            # If parsing fails, just hide the widget
+            self.config_contents_widget.setVisible(False)
+    
+    def browse_output_folder(self):
+        """Open file dialog to browse for output folder."""
+        # Start from current folder if set, otherwise project datasets folder
+        start_path = self.output_folder_input.text()
+        if not start_path:
+            start_path = str(Path(self.project_path) / 'datasets')
+        
+        folder_path = QFileDialog.getExistingDirectory(
             self,
-            "Remove Configuration",
-            "Are you sure you want to remove the SUMO configuration file?\n"
-            "This will remove all associated files.",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No
+            "Select Dataset Output Folder",
+            start_path,
+            QFileDialog.ShowDirsOnly
         )
         
-        if reply == QMessageBox.Yes:
-            self.config_manager.remove_sumocfg()
-            self.refresh_config_files()
+        if folder_path:
+            self.output_folder_input.setText(folder_path)
+            self.validate_output_folder()
+    
+    def set_output_folder(self):
+        """Set the output folder path from the input field."""
+        path_text = self.output_folder_input.text().strip()
+        if not path_text:
+            QMessageBox.warning(self, "Error", "Please enter a path to the output folder.")
+            return
+        
+        try:
+            # Save to JSON immediately
+            self.config_manager.set_dataset_output_folder(path_text)
+            QMessageBox.information(
+                self,
+                "Success",
+                f"Dataset output folder set to:\n{path_text}"
+            )
+        except ValueError as e:
+            QMessageBox.warning(self, "Error", str(e))
+    
+    def run_simulation(self):
+        """Run SUMO simulation (to be implemented)."""
+        QMessageBox.information(
+            self,
+            "Run Simulation",
+            "SUMO simulation will be started here.\n\n"
+            "This feature will be implemented next."
+        )
 

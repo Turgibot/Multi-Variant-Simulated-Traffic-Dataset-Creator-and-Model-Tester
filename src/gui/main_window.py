@@ -2,20 +2,20 @@
 Main application window with opening page and navigation.
 """
 
-import sys
 import os
+import sys
 from pathlib import Path
-from PySide6.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QPushButton, QLabel, QStackedWidget, QScrollArea,
-    QMessageBox, QFrame, QDialog
-)
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont
+from PySide6.QtWidgets import (QDialog, QFrame, QHBoxLayout, QLabel,
+                               QMainWindow, QMessageBox, QPushButton,
+                               QScrollArea, QStackedWidget, QVBoxLayout,
+                               QWidget)
 
-from src.utils.project_manager import ProjectManager
-from src.gui.project_dialog import NewProjectDialog
 from src.gui.dataset_generation_page import DatasetGenerationPage
+from src.gui.project_dialog import NewProjectDialog
+from src.utils.project_manager import ProjectManager
 
 
 class WelcomePage(QWidget):
@@ -177,6 +177,37 @@ class WelcomePage(QWidget):
         layout = QHBoxLayout()
         layout.setContentsMargins(15, 10, 15, 10)
         
+        # Delete button (left side)
+        delete_btn = QPushButton("×")
+        delete_btn.setToolTip("Delete project")
+        delete_btn.setStyleSheet("""
+            QPushButton {
+                background-color: transparent;
+                color: #999;
+                border: none;
+                padding: 5px;
+                border-radius: 3px;
+                font-size: 18px;
+                font-weight: bold;
+                min-width: 25px;
+                max-width: 25px;
+                min-height: 25px;
+                max-height: 25px;
+            }
+            QPushButton:hover {
+                background-color: #ffebee;
+                color: #f44336;
+            }
+            QPushButton:pressed {
+                background-color: #ffcdd2;
+                color: #d32f2f;
+            }
+        """)
+        delete_btn.clicked.connect(
+            lambda: self.delete_project(project['name'])
+        )
+        layout.addWidget(delete_btn)
+        
         # Project info
         info_layout = QVBoxLayout()
         info_layout.setSpacing(5)
@@ -255,30 +286,6 @@ class WelcomePage(QWidget):
         action_buttons_layout.addWidget(model_btn)
         
         buttons_layout.addLayout(action_buttons_layout)
-        
-        # Delete button
-        delete_btn = QPushButton("Delete Project")
-        delete_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #f44336;
-                color: white;
-                border: none;
-                padding: 6px 15px;
-                border-radius: 5px;
-                font-weight: bold;
-                font-size: 11px;
-            }
-            QPushButton:hover {
-                background-color: #d32f2f;
-            }
-            QPushButton:pressed {
-                background-color: #c62828;
-            }
-        """)
-        delete_btn.clicked.connect(
-            lambda: self.delete_project(project['name'])
-        )
-        buttons_layout.addWidget(delete_btn)
         
         layout.addLayout(buttons_layout)
         

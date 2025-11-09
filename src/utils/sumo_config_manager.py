@@ -23,6 +23,35 @@ class SUMOConfigManager:
         self.config_file = self.project_path / 'sumo_config.json'
         self._ensure_config_file()
     
+    def get_dataset_output_folder(self) -> Optional[str]:
+        """
+        Get the dataset output folder path.
+        
+        Returns:
+            Path to dataset output folder or None if not set
+        """
+        config = self._load_config()
+        return config.get('dataset_output_folder')
+    
+    def set_dataset_output_folder(self, folder_path: str):
+        """
+        Set the dataset output folder path.
+        
+        Args:
+            folder_path: Path to the output folder
+        """
+        # Validate path exists and is a directory
+        path = Path(folder_path)
+        if not path.exists():
+            raise ValueError(f"Folder does not exist: {folder_path}")
+        if not path.is_dir():
+            raise ValueError(f"Path is not a directory: {folder_path}")
+        
+        # Store absolute path
+        config = self._load_config()
+        config['dataset_output_folder'] = str(path.absolute())
+        self._save_config(config)
+    
     def _ensure_config_file(self):
         """Ensure config file exists."""
         if not self.config_file.exists():
@@ -113,54 +142,79 @@ class SUMOConfigManager:
             tree = ET.parse(sumocfg_path)
             root = tree.getroot()
             
-            # Find input elements
-            for input_elem in root.findall('input'):
+            # Find input elements (SUMO config uses <input> tag)
+            input_elem = root.find('input')
+            
+            if input_elem is not None:
+                # Standard SUMO config format with <input> element
                 # Network file
                 net_file = input_elem.get('net-file')
                 if net_file:
                     net_path = (sumocfg_dir / net_file).resolve()
-                    if net_path.exists():
-                        parsed_files['network'] = str(net_path)
+                    # Store path even if it doesn't exist (for debugging)
+                    parsed_files['network'] = str(net_path)
                 
                 # Route files
                 route_files = input_elem.get('route-files')
                 if route_files:
                     # SUMO can have multiple route files separated by comma
+                    route_list = []
                     for route_file in route_files.split(','):
                         route_file = route_file.strip()
                         if route_file:
                             route_path = (sumocfg_dir / route_file).resolve()
-                            if route_path.exists():
-                                # Store first route file, or append if multiple
-                                if 'routes' not in parsed_files:
-                                    parsed_files['routes'] = str(route_path)
-                                else:
-                                    # Store as list if multiple files
-                                    if isinstance(parsed_files['routes'], str):
-                                        parsed_files['routes'] = [parsed_files['routes']]
-                                    parsed_files['routes'].append(str(route_path))
+                            route_list.append(str(route_path))
+                    if route_list:
+                        parsed_files['routes'] = route_list[0] if len(route_list) == 1 else route_list
                 
                 # Additional files
                 additional_files = input_elem.get('additional-files')
                 if additional_files:
+                    add_list = []
                     for add_file in additional_files.split(','):
                         add_file = add_file.strip()
                         if add_file:
                             add_path = (sumocfg_dir / add_file).resolve()
-                            if add_path.exists():
-                                if 'additional' not in parsed_files:
-                                    parsed_files['additional'] = str(add_path)
-                                else:
-                                    if isinstance(parsed_files['additional'], str):
-                                        parsed_files['additional'] = [parsed_files['additional']]
-                                    parsed_files['additional'].append(str(add_path))
+                            add_list.append(str(add_path))
+                    if add_list:
+                        parsed_files['additional'] = add_list[0] if len(add_list) == 1 else add_list
                 
                 # Configuration file (if referenced)
                 config_file = input_elem.get('configuration-file')
                 if config_file:
                     config_path = (sumocfg_dir / config_file).resolve()
-                    if config_path.exists():
-                        parsed_files['config'] = str(config_path)
+                    parsed_files['config'] = str(config_path)
+            else:
+                # Try alternative: attributes might be on root element
+                # Network file
+                net_file = root.get('net-file')
+                if net_file:
+                    net_path = (sumocfg_dir / net_file).resolve()
+                    parsed_files['network'] = str(net_path)
+                
+                # Route files
+                route_files = root.get('route-files')
+                if route_files:
+                    route_list = []
+                    for route_file in route_files.split(','):
+                        route_file = route_file.strip()
+                        if route_file:
+                            route_path = (sumocfg_dir / route_file).resolve()
+                            route_list.append(str(route_path))
+                    if route_list:
+                        parsed_files['routes'] = route_list[0] if len(route_list) == 1 else route_list
+                
+                # Additional files
+                additional_files = root.get('additional-files')
+                if additional_files:
+                    add_list = []
+                    for add_file in additional_files.split(','):
+                        add_file = add_file.strip()
+                        if add_file:
+                            add_path = (sumocfg_dir / add_file).resolve()
+                            add_list.append(str(add_path))
+                    if add_list:
+                        parsed_files['additional'] = add_list[0] if len(add_list) == 1 else add_list
             
         except ET.ParseError as e:
             raise ValueError(f"Failed to parse .sumocfg file: {e}")
