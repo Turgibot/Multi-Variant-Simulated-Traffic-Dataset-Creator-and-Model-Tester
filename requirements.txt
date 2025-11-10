@@ -14,7 +14,19 @@ plotly>=5.14.0
 
 # Machine Learning Model Support
 torch>=2.0.0
-torch-geometric>=2.3.0  # For Graph Neural Networks (GNN)
+torch-geometric>=2.3.0
+# LLM Support for Route Generation
+# Option 1: Cloud APIs (optional)
+openai>=1.0.0
+anthropic>=0.18.0
+
+# Option 2: Local LLM via Ollama (recommended for standalone)
+requests>=2.31.0  # For Ollama API calls
+
+# Option 3: Fully local with Transformers (optional, larger download)
+# transformers>=4.35.0
+# accelerate>=0.24.0
+# bitsandbytes>=0.41.0  # For quantization (optional)
 tensorflow>=2.13.0; platform_machine != 'arm64' or python_version < '3.11'
 onnxruntime>=1.15.0
 

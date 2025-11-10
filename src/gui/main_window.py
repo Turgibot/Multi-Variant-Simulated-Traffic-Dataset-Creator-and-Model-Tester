@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (QDialog, QFrame, QHBoxLayout, QLabel,
 
 from src.gui.dataset_generation_page import DatasetGenerationPage
 from src.gui.project_dialog import NewProjectDialog
+from src.gui.route_generation_page import RouteGenerationPage
 from src.gui.simulation_page import SimulationPage
 from src.utils.project_manager import ProjectManager
 
@@ -386,6 +387,9 @@ class MainWindow(QMainWindow):
         self.current_project_name = None
         self.current_project_path = None
         
+        # Route generation page (will be created when needed)
+        self.route_page = None
+        
         # Simulation page (will be created when needed)
         self.simulation_page = None
         
@@ -477,12 +481,52 @@ class MainWindow(QMainWindow):
             self.dataset_page = DatasetGenerationPage(project_name, project_path)
             self.dataset_page.back_clicked.connect(self.show_welcome)
             self.dataset_page.run_simulation_clicked.connect(self.open_simulation)
+            self.dataset_page.route_generation_clicked.connect(self.open_route_generation)
             self.central_widget.addWidget(self.dataset_page)
             self.current_project_name = project_name
             self.current_project_path = project_path
         
         # Show dataset generation page
         self.central_widget.setCurrentWidget(self.dataset_page)
+    
+    def open_route_generation(self):
+        """Open route generation page for current project."""
+        if not hasattr(self, 'current_project_name') or not self.current_project_name:
+            QMessageBox.warning(
+                self,
+                "Error",
+                "No project selected."
+            )
+            return
+        
+        project_name = self.current_project_name
+        project_path = self.current_project_path
+        
+        # Create or reuse route generation page
+        if (not hasattr(self, 'route_page') or 
+            self.route_page is None or
+            self.current_project_name != project_name):
+            # Remove old page if exists
+            if hasattr(self, 'route_page') and self.route_page is not None:
+                self.central_widget.removeWidget(self.route_page)
+                self.route_page.deleteLater()
+            
+            # Create new page
+            self.route_page = RouteGenerationPage(project_name, project_path)
+            self.route_page.back_clicked.connect(self.show_dataset_generation)
+            self.central_widget.addWidget(self.route_page)
+        
+        # Show route generation page
+        self.central_widget.setCurrentWidget(self.route_page)
+    
+    def show_dataset_generation(self):
+        """Show dataset generation page."""
+        if self.dataset_page is not None:
+            self.central_widget.setCurrentWidget(self.dataset_page)
+        else:
+            # Reopen dataset generation if page doesn't exist
+            if hasattr(self, 'current_project_name') and self.current_project_name:
+                self.open_dataset_generation(self.current_project_name)
     
     def open_simulation(self, project_name: str, sumocfg_path: str, output_folder: str):
         """Open simulation page for a project."""

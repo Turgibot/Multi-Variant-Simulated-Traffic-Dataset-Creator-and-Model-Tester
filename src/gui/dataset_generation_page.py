@@ -20,6 +20,7 @@ class DatasetGenerationPage(QWidget):
     
     back_clicked = Signal()
     run_simulation_clicked = Signal(str, str, str)  # Emits project_name, sumocfg_path, output_folder
+    route_generation_clicked = Signal()  # Emits when route generation is requested
     
     def __init__(self, project_name: str, project_path: str, parent=None):
         super().__init__(parent)
@@ -77,6 +78,36 @@ class DatasetGenerationPage(QWidget):
         header_layout.addStretch()
         
         main_layout.addLayout(header_layout)
+        
+        # Route Generation Link
+        route_gen_layout = QHBoxLayout()
+        route_gen_layout.setSpacing(10)
+        route_gen_layout.setContentsMargins(0, 0, 0, 20)
+        
+        route_gen_label = QLabel("Need to generate route files?")
+        route_gen_label.setStyleSheet("color: #666; font-size: 14px;")
+        route_gen_layout.addWidget(route_gen_label)
+        
+        route_gen_btn = QPushButton("🛣️ Generate Routes")
+        route_gen_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #9C27B0;
+                color: white;
+                border: none;
+                padding: 10px 20px;
+                border-radius: 5px;
+                font-weight: bold;
+                font-size: 13px;
+            }
+            QPushButton:hover {
+                background-color: #7B1FA2;
+            }
+        """)
+        route_gen_btn.clicked.connect(self.route_generation_clicked.emit)
+        route_gen_layout.addWidget(route_gen_btn)
+        
+        route_gen_layout.addStretch()
+        main_layout.addLayout(route_gen_layout)
         
         # SUMO Configuration section
         config_group = QGroupBox("SUMO Configuration Files")

@@ -16,6 +16,7 @@ class NetworkEdgeItem(QGraphicsItem):
         super().__init__(parent)
         self.edge_data = edge_data
         self.setZValue(0)  # Background layer
+        self.is_selected = False  # Whether this edge is selected/highlighted
         
         # Calculate bounding rect from lanes
         if edge_data['lanes']:
@@ -35,12 +36,22 @@ class NetworkEdgeItem(QGraphicsItem):
         else:
             self.bounding_rect = QRectF(0, 0, 0, 0)
     
+    def set_selected(self, selected: bool):
+        """Set whether this edge is selected/highlighted."""
+        if self.is_selected != selected:
+            self.is_selected = selected
+            self.update()  # Trigger repaint
+    
     def boundingRect(self) -> QRectF:
         return self.bounding_rect
     
     def paint(self, painter: QPainter, option, widget=None):
         """Paint the edge."""
-        pen = QPen(QColor(100, 100, 100), 2)
+        if self.is_selected:
+            # Thicker, darker line for selected edges
+            pen = QPen(QColor(50, 50, 50), 4)
+        else:
+            pen = QPen(QColor(100, 100, 100), 2)
         painter.setPen(pen)
         
         # Draw each lane
@@ -51,6 +62,50 @@ class NetworkEdgeItem(QGraphicsItem):
                     p1 = QPointF(shape_points[i][0], shape_points[i][1])
                     p2 = QPointF(shape_points[i+1][0], shape_points[i+1][1])
                     painter.drawLine(p1, p2)
+
+
+class NetworkNodeItem(QGraphicsEllipseItem):
+    """Graphics item for rendering a network node/junction."""
+    
+    def __init__(self, node_id: str, x: float, y: float, parent=None):
+        super().__init__(parent)
+        self.node_id = node_id
+        self.is_selected = False
+        self.setPos(x, y)
+        self.setZValue(1)  # Above edges, below vehicles
+        
+        # Default size (small circle)
+        self.default_size = 3.0
+        self.selected_size = 6.0
+        self.setRect(-self.default_size/2, -self.default_size/2, 
+                    self.default_size, self.default_size)
+        
+        # Default appearance
+        brush = QBrush(QColor(150, 150, 150))
+        self.setBrush(brush)
+        pen = QPen(QColor(100, 100, 100), 1)
+        self.setPen(pen)
+    
+    def set_selected(self, selected: bool):
+        """Set whether this node is selected/highlighted."""
+        if self.is_selected != selected:
+            self.is_selected = selected
+            if selected:
+                # Bigger circle for selected nodes
+                self.setRect(-self.selected_size/2, -self.selected_size/2,
+                           self.selected_size, self.selected_size)
+                brush = QBrush(QColor(50, 50, 50))
+                self.setBrush(brush)
+                pen = QPen(QColor(30, 30, 30), 2)
+                self.setPen(pen)
+            else:
+                # Default size
+                self.setRect(-self.default_size/2, -self.default_size/2,
+                           self.default_size, self.default_size)
+                brush = QBrush(QColor(150, 150, 150))
+                self.setBrush(brush)
+                pen = QPen(QColor(100, 100, 100), 1)
+                self.setPen(pen)
 
 
 class VehicleItem(QGraphicsEllipseItem):
@@ -102,6 +157,7 @@ class SimulationView(QGraphicsView):
         
         # Network items
         self.edge_items = {}
+        self.node_items = {}  # For rendering nodes/junctions
         self.vehicle_items = {}
         
         # Background color
@@ -118,6 +174,15 @@ class SimulationView(QGraphicsView):
             edge_item = NetworkEdgeItem(edge_data)
             self.scene.addItem(edge_item)
             self.edge_items[edge_id] = edge_item
+        
+        # Add nodes/junctions as circles
+        nodes = network_parser.get_nodes()
+        for node_id, node_data in nodes.items():
+            x = node_data.get('x', 0)
+            y = node_data.get('y', 0)
+            node_item = NetworkNodeItem(node_id, x, y)
+            self.scene.addItem(node_item)
+            self.node_items[node_id] = node_item
         
         # Fit view to network bounds
         bounds = network_parser.get_bounds()
@@ -136,7 +201,20 @@ class SimulationView(QGraphicsView):
         for item in list(self.edge_items.values()):
             self.scene.removeItem(item)
         self.edge_items.clear()
+        for item in list(self.node_items.values()):
+            self.scene.removeItem(item)
+        self.node_items.clear()
         self.clear_vehicles()
+    
+    def set_selected_edges(self, edge_ids: set):
+        """Set which edges are selected/highlighted."""
+        for edge_id, edge_item in self.edge_items.items():
+            edge_item.set_selected(edge_id in edge_ids)
+    
+    def set_selected_nodes(self, node_ids: set):
+        """Set which nodes are selected/highlighted."""
+        for node_id, node_item in self.node_items.items():
+            node_item.set_selected(node_id in node_ids)
     
     def update_vehicle(self, vehicle_id: str, x: float, y: float, angle: float = 0):
         """Update or create a vehicle."""
