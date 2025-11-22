@@ -469,13 +469,21 @@ class MainWindow(QMainWindow):
             )
             return
         
+        # Always check if we need to recreate the dataset page for the current project
+        # Check if dataset_page exists and belongs to a different project
+        dataset_page_project = None
+        if self.dataset_page is not None:
+            # Get the project name from the dataset page
+            dataset_page_project = getattr(self.dataset_page, 'project_name', None)
+        
         # Create or reuse dataset generation page
         if (self.dataset_page is None or 
-            self.current_project_name != project_name):
+            dataset_page_project != project_name):
             # Remove old page if exists
             if self.dataset_page is not None:
                 self.central_widget.removeWidget(self.dataset_page)
                 self.dataset_page.deleteLater()
+                self.dataset_page = None
             
             # Create new page
             self.dataset_page = DatasetGenerationPage(project_name, project_path)
@@ -486,7 +494,7 @@ class MainWindow(QMainWindow):
             self.current_project_name = project_name
             self.current_project_path = project_path
         
-        # Show dataset generation page
+        # Always show dataset generation page (not route generation)
         self.central_widget.setCurrentWidget(self.dataset_page)
     
     def open_route_generation(self):
@@ -502,16 +510,24 @@ class MainWindow(QMainWindow):
         project_name = self.current_project_name
         project_path = self.current_project_path
         
+        # Always check if we need to recreate the route page for the current project
+        # Check if route_page exists and belongs to a different project
+        route_page_project = None
+        if hasattr(self, 'route_page') and self.route_page is not None:
+            # Get the project name from the route page
+            route_page_project = getattr(self.route_page, 'project_name', None)
+        
         # Create or reuse route generation page
         if (not hasattr(self, 'route_page') or 
             self.route_page is None or
-            self.current_project_name != project_name):
+            route_page_project != project_name):
             # Remove old page if exists
             if hasattr(self, 'route_page') and self.route_page is not None:
                 self.central_widget.removeWidget(self.route_page)
                 self.route_page.deleteLater()
+                self.route_page = None
             
-            # Create new page
+            # Create new page for the current project
             self.route_page = RouteGenerationPage(project_name, project_path)
             self.route_page.back_clicked.connect(self.show_dataset_generation)
             self.central_widget.addWidget(self.route_page)

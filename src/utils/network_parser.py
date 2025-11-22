@@ -82,7 +82,20 @@ class NetworkParser:
                 edge_id = edge.get('id')
                 from_node = edge.get('from')
                 to_node = edge.get('to')
-                priority = int(edge.get('priority', '0'))
+                priority_str = edge.get('priority')
+                
+                # Skip internal edges (edges with ':' in ID are internal junction connections)
+                if ':' in edge_id:
+                    continue
+                
+                # Skip edges without required attributes (from, to, priority)
+                if not from_node or not to_node or priority_str is None:
+                    continue
+                
+                try:
+                    priority = int(priority_str)
+                except (ValueError, TypeError):
+                    continue
                 
                 # Parse lane shapes
                 lanes = []

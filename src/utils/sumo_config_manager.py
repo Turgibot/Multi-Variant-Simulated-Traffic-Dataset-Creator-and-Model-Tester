@@ -315,4 +315,170 @@ class SUMOConfigManager:
         """Get list of file types that are missing or don't exist."""
         validation = self.validate_files()
         return [file_type for file_type, exists in validation.items() if not exists]
+    
+    def get_use_porto_dataset(self) -> bool:
+        """
+        Get whether Porto dataset mode is enabled.
+        
+        Returns:
+            True if Porto dataset mode is enabled, False otherwise
+        """
+        config = self._load_config()
+        return config.get('use_porto_dataset', False)
+    
+    def set_use_porto_dataset(self, enabled: bool):
+        """
+        Set whether Porto dataset mode is enabled.
+        
+        Args:
+            enabled: True to enable Porto dataset mode, False to disable
+        """
+        config = self._load_config()
+        config['use_porto_dataset'] = enabled
+        self._save_config(config)
+    
+    def get_porto_dataset_path(self) -> Optional[str]:
+        """
+        Get the Porto dataset file path.
+        
+        Returns:
+            Path to Porto dataset file or None if not set
+        """
+        config = self._load_config()
+        return config.get('porto_dataset_path')
+    
+    def set_porto_dataset_path(self, dataset_path: str):
+        """
+        Set the Porto dataset file path.
+        
+        Args:
+            dataset_path: Path to the Porto dataset CSV file
+        """
+        if dataset_path is None:
+            # Allow clearing the path
+            config = self._load_config()
+            if 'porto_dataset_path' in config:
+                del config['porto_dataset_path']
+            self._save_config(config)
+            return
+        
+        # Validate path exists and is a file
+        path = Path(dataset_path)
+        if not path.exists():
+            raise ValueError(f"File does not exist: {dataset_path}")
+        if not path.is_file():
+            raise ValueError(f"Path is not a file: {dataset_path}")
+        
+        # Store absolute path
+        config = self._load_config()
+        config['porto_dataset_path'] = str(path.absolute())
+        self._save_config(config)
+    
+    def get_porto_config_folder(self) -> Optional[str]:
+        """
+        Get the Porto config folder path.
+        
+        Returns:
+            Path to Porto config folder or None if not set
+        """
+        config = self._load_config()
+        return config.get('porto_config_folder')
+    
+    def set_porto_config_folder(self, folder_path: str):
+        """
+        Set the Porto config folder path.
+        
+        Args:
+            folder_path: Path to the Porto config folder
+        """
+        # Validate path exists and is a directory
+        path = Path(folder_path)
+        if not path.exists():
+            raise ValueError(f"Folder does not exist: {folder_path}")
+        if not path.is_dir():
+            raise ValueError(f"Path is not a directory: {folder_path}")
+        
+        # Store absolute path
+        config = self._load_config()
+        config['porto_config_folder'] = str(path.absolute())
+        self._save_config(config)
+    
+    def save_zones(self, zones: Dict):
+        """
+        Save zones configuration.
+        
+        Args:
+            zones: Dictionary of zone data with structure:
+                {zone_id: {'name': str, 'color': (r, g, b), 'areas': [(x, y, w, h), ...]}}
+        """
+        config = self._load_config()
+        # Convert zones to serializable format
+        serializable_zones = {}
+        for zone_id, zone_data in zones.items():
+            serializable_zones[zone_id] = {
+                'name': zone_data.get('name', ''),
+                'color': (
+                    zone_data.get('color', {}).red() if hasattr(zone_data.get('color', {}), 'red') 
+                    else zone_data.get('color', (200, 200, 200))[0] if isinstance(zone_data.get('color'), tuple)
+                    else zone_data.get('color', {}).get('r', 200),
+                    zone_data.get('color', {}).green() if hasattr(zone_data.get('color', {}), 'green')
+                    else zone_data.get('color', (200, 200, 200))[1] if isinstance(zone_data.get('color'), tuple)
+                    else zone_data.get('color', {}).get('g', 200),
+                    zone_data.get('color', {}).blue() if hasattr(zone_data.get('color', {}), 'blue')
+                    else zone_data.get('color', (200, 200, 200))[2] if isinstance(zone_data.get('color'), tuple)
+                    else zone_data.get('color', {}).get('b', 200)
+                ),
+                'areas': [
+                    {
+                        'x': float(area.x()),
+                        'y': float(area.y()),
+                        'width': float(area.width()),
+                        'height': float(area.height())
+                    } if hasattr(area, 'x') else area
+                    for area in zone_data.get('areas', [])
+                ]
+            }
+        config['zones'] = serializable_zones
+        self._save_config(config)
+    
+    def load_zones(self) -> Dict:
+        """
+        Load zones configuration.
+        
+        Returns:
+            Dictionary of zone data with structure:
+                {zone_id: {'name': str, 'color': QColor, 'areas': [QRectF, ...]}}
+        """
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor
+        
+        config = self._load_config()
+        zones_data = config.get('zones', {})
+        
+        # Convert back to QColor and QRectF
+        zones = {}
+        for zone_id, zone_data in zones_data.items():
+            color_data = zone_data.get('color', (200, 200, 200))
+            if isinstance(color_data, (list, tuple)) and len(color_data) >= 3:
+                color = QColor(int(color_data[0]), int(color_data[1]), int(color_data[2]))
+            else:
+                color = QColor(200, 200, 200)
+            
+            areas = []
+            for area_data in zone_data.get('areas', []):
+                if isinstance(area_data, dict):
+                    areas.append(QRectF(
+                        area_data.get('x', 0),
+                        area_data.get('y', 0),
+                        area_data.get('width', 0),
+                        area_data.get('height', 0)
+                    ))
+            
+            zones[zone_id] = {
+                'name': zone_data.get('name', ''),
+                'color': color,
+                'areas': areas
+            }
+        
+        return zones
 
