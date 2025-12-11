@@ -1,5 +1,8 @@
 {
   "ZZXZXZ": "/home/guy/Projects/Traffic/Develop/Projects/ZZXZXZ",
   "OSM": "/home/guy/Projects/Traffic/Develop/Projects/OSM",
-  "Porto": "/home/guy/Projects/Traffic/Develop/Projects/Porto"
+  "PortoForSumo": {
+    "path": "/home/guy/Projects/Traffic/Develop/Projects/PortoForSumo",
+    "type": "porto"
+  }
 }

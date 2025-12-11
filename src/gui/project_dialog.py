@@ -13,9 +13,20 @@ from pathlib import Path
 class NewProjectDialog(QDialog):
     """Dialog for creating a new project."""
     
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, project_type: str = "simulation"):
         super().__init__(parent)
-        self.setWindowTitle("Create New Project")
+        self.project_type = project_type
+        
+        # Set title based on project type
+        if project_type == "porto":
+            self.setWindowTitle("Create Porto Conversion Project")
+            self.title_text = "Create Porto Conversion Project"
+            self.description_hint = "Project for converting Porto taxi GPS data to traffic simulation..."
+        else:
+            self.setWindowTitle("Create Simulation Project")
+            self.title_text = "Create Simulation Project"
+            self.description_hint = "Project for SUMO-based traffic simulation..."
+        
         self.setModal(True)
         self.setMinimumWidth(500)
         self.project_name = None
@@ -30,9 +41,18 @@ class NewProjectDialog(QDialog):
         layout.setContentsMargins(20, 20, 20, 20)
         
         # Title
-        title = QLabel("Create New Project")
+        title = QLabel(self.title_text)
         title.setStyleSheet("font-size: 18px; font-weight: bold;")
         layout.addWidget(title)
+        
+        # Project type indicator
+        if self.project_type == "porto":
+            type_label = QLabel("🚕 Porto Taxi Dataset Conversion")
+            type_label.setStyleSheet("color: #FF9800; font-size: 12px; font-weight: bold; padding: 5px; background-color: #FFF3E0; border-radius: 3px;")
+        else:
+            type_label = QLabel("🚗 SUMO Traffic Simulation")
+            type_label.setStyleSheet("color: #4CAF50; font-size: 12px; font-weight: bold; padding: 5px; background-color: #E8F5E9; border-radius: 3px;")
+        layout.addWidget(type_label)
         
         # Project name
         name_label = QLabel("Project Name:")
@@ -47,7 +67,7 @@ class NewProjectDialog(QDialog):
         layout.addWidget(desc_label)
         
         self.desc_input = QTextEdit()
-        self.desc_input.setPlaceholderText("Enter project description...")
+        self.desc_input.setPlaceholderText(self.description_hint)
         self.desc_input.setMaximumHeight(100)
         layout.addWidget(self.desc_input)
         

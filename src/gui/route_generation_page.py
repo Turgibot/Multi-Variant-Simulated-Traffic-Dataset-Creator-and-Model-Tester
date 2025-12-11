@@ -2,16 +2,21 @@
 Route Generation page for creating SUMO route files manually.
 """
 
+import ast
+import csv
 import string
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+from xml.dom import minidom
 
 from PySide6.QtCore import QPointF, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import (QBrush, QColor, QFont, QGuiApplication, QPainter,
                            QPen)
 from PySide6.QtWidgets import (QFrame, QGraphicsView, QGroupBox, QHBoxLayout,
-                               QLabel, QLineEdit, QMessageBox, QPushButton,
-                               QScrollArea, QVBoxLayout, QWidget)
+                               QLabel, QLineEdit, QMessageBox,
+                               QPushButton, QScrollArea, QSizePolicy,
+                               QVBoxLayout, QWidget)
 
 from src.gui.simulation_view import SimulationView
 from src.utils.network_parser import NetworkParser
@@ -259,26 +264,6 @@ class RouteGenerationPage(QWidget):
         self.junction_assignments = {}  # Dict of {junction_id: zone_id}
         self.road_assignments = {}  # Dict of {edge_id: zone_id}
         
-        # Check if Porto mode is enabled
-        self.porto_mode_enabled = self.config_manager.get_use_porto_dataset()
-        
-        # Porto-specific paths (only if Porto mode enabled)
-        if self.porto_mode_enabled:
-            porto_dataset_path = self.config_manager.get_porto_dataset_path()
-            if porto_dataset_path:
-                self.porto_dataset_path = Path(porto_dataset_path)
-            else:
-                # Fallback to default path
-                project_path_obj = Path(project_path).resolve()
-                workspace_root = project_path_obj
-                while workspace_root != workspace_root.parent:
-                    if (workspace_root / 'Porto').exists():
-                        break
-                    workspace_root = workspace_root.parent
-                if not (workspace_root / 'Porto').exists():
-                    workspace_root = Path('/home/guy/Projects/Traffic/Multi-Variant-Simulated-Traffic-Dataset-Creator-and-Model-Tester')
-                self.porto_dataset_path = workspace_root / 'Porto' / 'dataset' / 'train.csv'
-        
         self.init_ui()
         self.load_network()
         # Load saved zones after network is loaded (but before Porto neighborhoods)
@@ -343,7 +328,7 @@ class RouteGenerationPage(QWidget):
         config_scroll.setWidgetResizable(True)
         config_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         config_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        config_scroll.setSizePolicy(QWidget.Expanding, QWidget.Expanding)
+        config_scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         config_scroll.setStyleSheet("""
             QScrollArea {
                 border: none;
@@ -366,14 +351,10 @@ class RouteGenerationPage(QWidget):
             }
         """)
         # Prevent horizontal overflow - ensure it respects available width
-        config_group.setSizePolicy(QWidget.Expanding, QWidget.Preferred)
+        config_group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         config_layout = QVBoxLayout()
         config_layout.setSpacing(15)
         config_layout.setContentsMargins(10, 10, 10, 10)
-        
-        # Porto Dataset Conversion Section (only if Porto mode enabled)
-        if self.porto_mode_enabled:
-            self.add_porto_conversion_section(config_layout)
         
         # Zones section
         zones_header = QHBoxLayout()
@@ -410,7 +391,7 @@ class RouteGenerationPage(QWidget):
         self.stats_label.setFont(QFont("Arial", 10))
         self.stats_label.setStyleSheet("color: #666; padding: 5px;")
         self.stats_label.setWordWrap(True)
-        self.stats_label.setSizePolicy(QWidget.Expanding, QWidget.Preferred)
+        self.stats_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         zones_header.addWidget(self.stats_label)
         
         zones_header.addStretch()
@@ -473,9 +454,8 @@ class RouteGenerationPage(QWidget):
         config_group.setLayout(config_layout)
         config_scroll.setWidget(config_group)
         
-        # Set maximum width to prevent overflow - use stretch but respect available space
-        config_scroll.setSizePolicy(QWidget.Expanding, QWidget.Expanding)
-        config_scroll.setMaximumWidth(500)  # Limit max width to prevent overflow
+        # Ensure config scroll respects available width and doesn't overflow
+        config_scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         content_layout.addWidget(config_scroll, stretch=1)
         
         main_layout.addLayout(content_layout)
@@ -513,10 +493,6 @@ class RouteGenerationPage(QWidget):
                         self.route_generator = RouteXMLGenerator(self.network_parser)
                         # Update statistics when network is loaded
                         self.update_statistics()
-                        
-                        # Load Porto neighborhoods if Porto mode is enabled
-                        if self.porto_mode_enabled:
-                            self.load_porto_neighborhoods()
         except Exception as e:
             QMessageBox.warning(self, "Error", f"Failed to load network: {str(e)}")
     
@@ -1348,78 +1324,6 @@ class RouteGenerationPage(QWidget):
         # Update map view to show unlocked state (zone names at corners)
         self.map_view.viewport().update()
     
-    def load_porto_neighborhoods(self):
-        """Load Porto quadrants (4x4 grid) as zones when Porto mode is enabled."""
-        if not self.porto_mode_enabled or not self.network_parser:
-            return
-        
-        from src.utils.porto_neighborhoods import get_porto_quadrants
-        
-        network_bounds = self.network_parser.bounds
-        
-        if not network_bounds:
-            return
-        
-        # Generate 16 quadrants (4x4 grid)
-        quadrants = get_porto_quadrants(network_bounds)
-        
-        for quadrant_name, rect, zone_color in quadrants:
-            # Create zone ID
-            zone_id = f"porto_quadrant_{quadrant_name}"
-            
-            # Check if zone already exists (from saved zones)
-            if zone_id not in self.zones:
-                # Create zone widget
-                zone_widget = self.create_zone_widget(zone_id, quadrant_name, zone_color)
-                
-                # Store zone data
-                self.zones[zone_id] = {
-                    'name': quadrant_name,
-                    'color': zone_color,
-                    'widget': zone_widget,
-                    'areas': [rect]
-                }
-                
-                # Add zone to map view
-                self.map_view.zones[zone_id] = {
-                    'areas': [rect],
-                    'name': quadrant_name,
-                    'color': zone_color
-                }
-                
-                # Add widget to container
-                if hasattr(self, 'zones_container'):
-                    self.zones_container.addWidget(zone_widget)
-                
-                # Update zone counter
-                self.zone_counter += 1
-        
-        # Assign junctions and roads to quadrants based on their areas
-        for quadrant_name, rect, _ in quadrants:
-            zone_id = f"porto_quadrant_{quadrant_name}"
-            if zone_id in self.zones:
-                # Ensure the zone has areas in map_view
-                if zone_id not in self.map_view.zones:
-                    self.map_view.zones[zone_id] = {
-                        'areas': [rect],
-                        'name': quadrant_name,
-                        'color': self.zones[zone_id].get('color')
-                    }
-                elif not self.map_view.zones[zone_id].get('areas'):
-                    # If map_view zone exists but has no areas, update it
-                    self.map_view.zones[zone_id]['areas'] = [rect]
-                
-                # Assign junctions and roads for this quadrant
-                self._assign_junctions_and_roads_for_area(zone_id, rect)
-                
-                # Update counts
-                self.update_zone_counts(zone_id)
-        
-        # Save zones after loading
-        self.save_zones()
-        self.update_statistics()
-    
-    
     def load_saved_zones(self):
         """Load saved zones from project configuration."""
         if not hasattr(self, 'zones_container'):
@@ -1500,125 +1404,3 @@ class RouteGenerationPage(QWidget):
             }
         
         self.config_manager.save_zones(zones_to_save)
-    
-    def add_porto_conversion_section(self, parent_layout):
-        """Add Porto dataset conversion UI section (only called if Porto mode enabled)."""
-        porto_group = QGroupBox("Porto Dataset Conversion")
-        porto_group.setStyleSheet("""
-            QGroupBox {
-                font-weight: bold;
-                border: 2px solid #4CAF50;
-                border-radius: 5px;
-                margin-top: 10px;
-                padding-top: 10px;
-                background-color: #f1f8f4;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 5px;
-                color: #2e7d32;
-            }
-        """)
-        porto_layout = QVBoxLayout()
-        porto_layout.setSpacing(10)
-        porto_layout.setContentsMargins(10, 10, 10, 10)
-        
-        # Porto dataset file path
-        dataset_path_layout = QHBoxLayout()
-        dataset_path_label = QLabel("Dataset File:")
-        dataset_path_label.setFont(QFont("Arial", 10))
-        dataset_path_layout.addWidget(dataset_path_label)
-        
-        self.porto_dataset_path_label = QLabel(str(self.porto_dataset_path) if hasattr(self, 'porto_dataset_path') else "Not set")
-        self.porto_dataset_path_label.setFont(QFont("Arial", 9))
-        self.porto_dataset_path_label.setStyleSheet("color: #666; padding: 5px;")
-        self.porto_dataset_path_label.setWordWrap(True)
-        self.porto_dataset_path_label.setSizePolicy(QWidget.Expanding, QWidget.Preferred)
-        dataset_path_layout.addWidget(self.porto_dataset_path_label, stretch=1)
-        porto_layout.addLayout(dataset_path_layout)
-        
-        # Conversion status
-        self.porto_status_label = QLabel("Ready to convert")
-        self.porto_status_label.setFont(QFont("Arial", 9))
-        self.porto_status_label.setStyleSheet("color: #666; padding: 5px;")
-        porto_layout.addWidget(self.porto_status_label)
-        
-        # Convert button
-        convert_btn = QPushButton("Convert Trajectories to Routes")
-        convert_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #4CAF50;
-                color: white;
-                border: none;
-                padding: 10px 20px;
-                border-radius: 5px;
-                font-size: 12px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #45a049;
-            }
-            QPushButton:disabled {
-                background-color: #cccccc;
-                color: #666666;
-            }
-        """)
-        convert_btn.clicked.connect(self.convert_porto_trajectories)
-        porto_layout.addWidget(convert_btn)
-        
-        # Output route file location
-        output_layout = QHBoxLayout()
-        output_label = QLabel("Output Route File:")
-        output_label.setFont(QFont("Arial", 10))
-        output_layout.addWidget(output_label)
-        
-        # Get Porto config folder for output
-        porto_config_folder = self.config_manager.get_porto_config_folder()
-        if porto_config_folder:
-            output_path = Path(porto_config_folder) / 'porto.rou.xml'
-        else:
-            # Fallback
-            project_path_obj = Path(self.project_path).resolve()
-            workspace_root = project_path_obj
-            while workspace_root != workspace_root.parent:
-                if (workspace_root / 'Porto').exists():
-                    break
-                workspace_root = workspace_root.parent
-            if not (workspace_root / 'Porto').exists():
-                workspace_root = Path('/home/guy/Projects/Traffic/Multi-Variant-Simulated-Traffic-Dataset-Creator-and-Model-Tester')
-            output_path = workspace_root / 'Porto' / 'config' / 'porto.rou.xml'
-        
-        self.porto_output_path_label = QLabel(str(output_path))
-        self.porto_output_path_label.setFont(QFont("Arial", 9))
-        self.porto_output_path_label.setStyleSheet("color: #666; padding: 5px;")
-        self.porto_output_path_label.setWordWrap(True)
-        self.porto_output_path_label.setSizePolicy(QWidget.Expanding, QWidget.Preferred)
-        output_layout.addWidget(self.porto_output_path_label, stretch=1)
-        porto_layout.addLayout(output_layout)
-        
-        porto_group.setLayout(porto_layout)
-        parent_layout.addWidget(porto_group)
-    
-    def convert_porto_trajectories(self):
-        """Convert Porto CSV trajectories to SUMO routes."""
-        if not hasattr(self, 'porto_dataset_path') or not self.porto_dataset_path.exists():
-            QMessageBox.warning(self, "Error", "Porto dataset file not found.")
-            return
-        
-        if not self.network_parser:
-            QMessageBox.warning(self, "Error", "Network not loaded. Please load a SUMO network first.")
-            return
-        
-        self.porto_status_label.setText("Converting trajectories...")
-        self.porto_status_label.setStyleSheet("color: #2196F3; padding: 5px;")
-        
-        try:
-            # TODO: Implement Porto trajectory conversion logic
-            QMessageBox.information(self, "Info", "Porto trajectory conversion will be implemented here.")
-            self.porto_status_label.setText("Conversion completed")
-            self.porto_status_label.setStyleSheet("color: #4CAF50; padding: 5px;")
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to convert trajectories:\n{str(e)}")
-            self.porto_status_label.setText(f"Error: {str(e)}")
-            self.porto_status_label.setStyleSheet("color: #f44336; padding: 5px;")

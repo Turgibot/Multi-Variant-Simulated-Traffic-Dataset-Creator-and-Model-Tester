@@ -8,11 +8,12 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont
-from PySide6.QtWidgets import (QDialog, QFrame, QHBoxLayout, QLabel,
+from PySide6.QtWidgets import (QApplication, QDialog, QFrame, QHBoxLayout, QLabel,
                                QMainWindow, QMessageBox, QPushButton,
                                QScrollArea, QStackedWidget, QVBoxLayout,
                                QWidget)
 
+from src.gui.dataset_conversion_page import DatasetConversionPage
 from src.gui.dataset_generation_page import DatasetGenerationPage
 from src.gui.project_dialog import NewProjectDialog
 from src.gui.route_generation_page import RouteGenerationPage
@@ -26,7 +27,8 @@ class WelcomePage(QWidget):
     # Signals
     dataset_generation_clicked = Signal(str)  # Emits project name
     model_testing_clicked = Signal(str)  # Emits project name
-    new_project_created = Signal(str)  # Emits project name
+    new_project_created = Signal(str, str)  # Emits project name and type
+    porto_conversion_clicked = Signal(str)  # Emits project name for Porto conversion
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -37,8 +39,8 @@ class WelcomePage(QWidget):
     def init_ui(self):
         """Initialize the welcome page UI."""
         main_layout = QVBoxLayout()
-        main_layout.setSpacing(20)
-        main_layout.setContentsMargins(30, 30, 30, 30)
+        main_layout.setSpacing(15)
+        main_layout.setContentsMargins(30, 20, 30, 20)
         
         # Title section
         title = QLabel("Traffic Simulation Tool")
@@ -58,69 +60,123 @@ class WelcomePage(QWidget):
         subtitle.setStyleSheet("color: #666;")
         main_layout.addWidget(subtitle)
         
-        # Tool description
-        description = QLabel(
-            "This tool provides an integrated environment for:\n"
-            "• Creating diverse traffic simulation datasets with SUMO\n"
-            "• Testing and evaluating traffic prediction models\n"
-            "• Generating datasets in multiple formats (trajectory, sensor-based, GNN)\n"
-            "• Analyzing model performance with statistical visualizations"
-        )
-        description.setAlignment(Qt.AlignCenter)
-        description.setWordWrap(True)
-        description.setStyleSheet("""
-            color: #555;
-            background-color: #f9f9f9;
-            padding: 15px;
-            border-radius: 5px;
-            margin: 10px 0;
+        # Two-column layout for project sections
+        projects_columns = QHBoxLayout()
+        projects_columns.setSpacing(20)
+        
+        # ========== LEFT COLUMN: Simulation Projects ==========
+        sim_section = QVBoxLayout()
+        sim_section.setSpacing(10)
+        
+        # Simulation projects header
+        sim_header = QHBoxLayout()
+        sim_label = QLabel("🚗 Simulation Projects")
+        sim_label_font = QFont()
+        sim_label_font.setPointSize(14)
+        sim_label_font.setBold(True)
+        sim_label.setFont(sim_label_font)
+        sim_label.setStyleSheet("color: #4CAF50;")
+        sim_header.addWidget(sim_label)
+        sim_header.addStretch()
+        
+        # Create simulation project button
+        new_sim_btn = QPushButton("+ Create")
+        new_sim_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #4CAF50;
+                color: white;
+                border: none;
+                padding: 6px 15px;
+                border-radius: 4px;
+                font-weight: bold;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background-color: #45a049;
+            }
         """)
-        main_layout.addWidget(description)
+        new_sim_btn.clicked.connect(self.show_new_simulation_project_dialog)
+        sim_header.addWidget(new_sim_btn)
+        sim_section.addLayout(sim_header)
         
-        # Projects section
-        projects_label = QLabel("Projects")
-        projects_label_font = QFont()
-        projects_label_font.setPointSize(16)
-        projects_label_font.setBold(True)
-        projects_label.setFont(projects_label_font)
-        main_layout.addWidget(projects_label)
-        
-        # Projects scroll area
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setStyleSheet("""
+        # Simulation projects scroll area
+        sim_scroll = QScrollArea()
+        sim_scroll.setWidgetResizable(True)
+        sim_scroll.setStyleSheet("""
             QScrollArea {
-                border: 1px solid #ddd;
+                border: 2px solid #4CAF50;
                 border-radius: 5px;
                 background-color: white;
             }
         """)
         
-        self.projects_widget = QWidget()
-        self.projects_layout = QVBoxLayout()
-        self.projects_layout.setSpacing(10)
-        self.projects_widget.setLayout(self.projects_layout)
-        scroll.setWidget(self.projects_widget)
-        main_layout.addWidget(scroll)
+        self.sim_projects_widget = QWidget()
+        self.sim_projects_layout = QVBoxLayout()
+        self.sim_projects_layout.setSpacing(8)
+        self.sim_projects_layout.setContentsMargins(5, 5, 5, 5)
+        self.sim_projects_widget.setLayout(self.sim_projects_layout)
+        sim_scroll.setWidget(self.sim_projects_widget)
+        sim_section.addWidget(sim_scroll)
         
-        # New project button
-        new_project_btn = QPushButton("+ Create New Project")
-        new_project_btn.setStyleSheet("""
+        projects_columns.addLayout(sim_section)
+        
+        # ========== RIGHT COLUMN: Porto Conversion Projects ==========
+        porto_section = QVBoxLayout()
+        porto_section.setSpacing(10)
+        
+        # Porto projects header
+        porto_header = QHBoxLayout()
+        porto_label = QLabel("🚕 Porto Conversion Projects")
+        porto_label_font = QFont()
+        porto_label_font.setPointSize(14)
+        porto_label_font.setBold(True)
+        porto_label.setFont(porto_label_font)
+        porto_label.setStyleSheet("color: #FF9800;")
+        porto_header.addWidget(porto_label)
+        porto_header.addStretch()
+        
+        # Create Porto project button
+        new_porto_btn = QPushButton("+ Create")
+        new_porto_btn.setStyleSheet("""
             QPushButton {
-                background-color: #2196F3;
+                background-color: #FF9800;
                 color: white;
                 border: none;
-                padding: 12px;
-                border-radius: 5px;
+                padding: 6px 15px;
+                border-radius: 4px;
                 font-weight: bold;
-                font-size: 14px;
+                font-size: 12px;
             }
             QPushButton:hover {
-                background-color: #1976D2;
+                background-color: #F57C00;
             }
         """)
-        new_project_btn.clicked.connect(self.show_new_project_dialog)
-        main_layout.addWidget(new_project_btn)
+        new_porto_btn.clicked.connect(self.show_new_porto_project_dialog)
+        porto_header.addWidget(new_porto_btn)
+        porto_section.addLayout(porto_header)
+        
+        # Porto projects scroll area
+        porto_scroll = QScrollArea()
+        porto_scroll.setWidgetResizable(True)
+        porto_scroll.setStyleSheet("""
+            QScrollArea {
+                border: 2px solid #FF9800;
+                border-radius: 5px;
+                background-color: white;
+            }
+        """)
+        
+        self.porto_projects_widget = QWidget()
+        self.porto_projects_layout = QVBoxLayout()
+        self.porto_projects_layout.setSpacing(8)
+        self.porto_projects_layout.setContentsMargins(5, 5, 5, 5)
+        self.porto_projects_widget.setLayout(self.porto_projects_layout)
+        porto_scroll.setWidget(self.porto_projects_widget)
+        porto_section.addWidget(porto_scroll)
+        
+        projects_columns.addLayout(porto_section)
+        
+        main_layout.addLayout(projects_columns)
         
         # Version info
         try:
@@ -136,48 +192,92 @@ class WelcomePage(QWidget):
         self.setLayout(main_layout)
     
     def refresh_projects(self):
-        """Refresh the projects list."""
-        # Clear existing projects
-        while self.projects_layout.count():
-            item = self.projects_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-        
-        # Get all projects
-        projects = self.project_manager.get_all_projects()
-        
-        if not projects:
-            # Show empty state
-            empty_label = QLabel("No projects yet. Create a new project to get started!")
-            empty_label.setAlignment(Qt.AlignCenter)
-            empty_label.setStyleSheet("color: #999; padding: 20px;")
-            self.projects_layout.addWidget(empty_label)
-        else:
-            # Add project cards
-            for project in projects:
-                card = self.create_project_card(project)
-                self.projects_layout.addWidget(card)
-        
-        self.projects_layout.addStretch()
+        """Refresh both project lists."""
+        self.refresh_simulation_projects()
+        self.refresh_porto_projects()
     
-    def create_project_card(self, project: dict) -> QWidget:
-        """Create a project card widget."""
+    def refresh_simulation_projects(self):
+        """Refresh the simulation projects list."""
+        try:
+            if not hasattr(self, 'sim_projects_layout'):
+                return
+            
+            # Clear existing projects
+            while self.sim_projects_layout.count():
+                item = self.sim_projects_layout.takeAt(0)
+                if item.widget():
+                    item.widget().deleteLater()
+            
+            # Get simulation projects
+            projects = self.project_manager.get_all_projects(project_type='simulation')
+            
+            if not projects:
+                empty_label = QLabel("No simulation projects yet.\nClick '+ Create' to get started!")
+                empty_label.setAlignment(Qt.AlignCenter)
+                empty_label.setStyleSheet("color: #999; padding: 20px;")
+                self.sim_projects_layout.addWidget(empty_label)
+            else:
+                for project in projects:
+                    try:
+                        card = self.create_simulation_project_card(project)
+                        self.sim_projects_layout.addWidget(card)
+                    except Exception as e:
+                        print(f"ERROR: Failed to create sim card for {project.get('name', 'unknown')}: {e}")
+            
+            self.sim_projects_layout.addStretch()
+        except Exception as e:
+            print(f"ERROR in refresh_simulation_projects: {e}")
+    
+    def refresh_porto_projects(self):
+        """Refresh the Porto projects list."""
+        try:
+            if not hasattr(self, 'porto_projects_layout'):
+                return
+            
+            # Clear existing projects
+            while self.porto_projects_layout.count():
+                item = self.porto_projects_layout.takeAt(0)
+                if item.widget():
+                    item.widget().deleteLater()
+            
+            # Get Porto projects
+            projects = self.project_manager.get_all_projects(project_type='porto')
+            
+            if not projects:
+                empty_label = QLabel("No Porto conversion projects yet.\nClick '+ Create' to get started!")
+                empty_label.setAlignment(Qt.AlignCenter)
+                empty_label.setStyleSheet("color: #999; padding: 20px;")
+                self.porto_projects_layout.addWidget(empty_label)
+            else:
+                for project in projects:
+                    try:
+                        card = self.create_porto_project_card(project)
+                        self.porto_projects_layout.addWidget(card)
+                    except Exception as e:
+                        print(f"ERROR: Failed to create porto card for {project.get('name', 'unknown')}: {e}")
+            
+            self.porto_projects_layout.addStretch()
+        except Exception as e:
+            print(f"ERROR in refresh_porto_projects: {e}")
+    
+    def create_simulation_project_card(self, project: dict) -> QWidget:
+        """Create a simulation project card widget."""
         card = QFrame()
         card.setStyleSheet("""
             QFrame {
                 background-color: #f9f9f9;
                 border: 1px solid #ddd;
                 border-radius: 5px;
-                padding: 10px;
+                padding: 8px;
             }
             QFrame:hover {
-                background-color: #f0f0f0;
+                background-color: #E8F5E9;
                 border: 1px solid #4CAF50;
             }
         """)
         
         layout = QHBoxLayout()
-        layout.setContentsMargins(15, 10, 15, 10)
+        layout.setContentsMargins(10, 8, 10, 8)
         
         # Delete button (left side)
         delete_btn = QPushButton("×")
@@ -187,59 +287,47 @@ class WelcomePage(QWidget):
                 background-color: transparent;
                 color: #999;
                 border: none;
-                padding: 5px;
+                padding: 3px;
                 border-radius: 3px;
-                font-size: 18px;
+                font-size: 16px;
                 font-weight: bold;
-                min-width: 25px;
-                max-width: 25px;
-                min-height: 25px;
-                max-height: 25px;
+                min-width: 20px;
+                max-width: 20px;
+                min-height: 20px;
+                max-height: 20px;
             }
             QPushButton:hover {
                 background-color: #ffebee;
                 color: #f44336;
             }
-            QPushButton:pressed {
-                background-color: #ffcdd2;
-                color: #d32f2f;
-            }
         """)
         delete_btn.clicked.connect(
-            lambda: self.delete_project(project['name'])
+            lambda: self.delete_project(project['name'], 'simulation')
         )
         layout.addWidget(delete_btn)
         
         # Project info
         info_layout = QVBoxLayout()
-        info_layout.setSpacing(5)
+        info_layout.setSpacing(2)
         
         name_label = QLabel(project['name'])
         name_font = QFont()
-        name_font.setPointSize(14)
+        name_font.setPointSize(12)
         name_font.setBold(True)
         name_label.setFont(name_font)
         info_layout.addWidget(name_label)
         
-        path_label = QLabel(f"Path: {project['path']}")
-        path_label.setStyleSheet("color: #666; font-size: 10px;")
-        info_layout.addWidget(path_label)
-        
         if not project.get('exists', True):
-            status_label = QLabel("⚠ Project folder not found")
-            status_label.setStyleSheet("color: #f44336; font-size: 10px;")
+            status_label = QLabel("⚠ Folder not found")
+            status_label.setStyleSheet("color: #f44336; font-size: 9px;")
             info_layout.addWidget(status_label)
         
         layout.addLayout(info_layout)
         layout.addStretch()
         
-        # Buttons container
-        buttons_layout = QVBoxLayout()
-        buttons_layout.setSpacing(8)
-        
-        # Action buttons container
-        action_buttons_layout = QHBoxLayout()
-        action_buttons_layout.setSpacing(8)
+        # Action buttons
+        action_layout = QHBoxLayout()
+        action_layout.setSpacing(5)
         
         # Dataset Generation button
         dataset_btn = QPushButton("Dataset Generation")
@@ -248,21 +336,19 @@ class WelcomePage(QWidget):
                 background-color: #4CAF50;
                 color: white;
                 border: none;
-                padding: 8px 15px;
-                border-radius: 5px;
+                padding: 6px 12px;
+                border-radius: 4px;
                 font-weight: bold;
+                font-size: 11px;
             }
             QPushButton:hover {
                 background-color: #45a049;
-            }
-            QPushButton:pressed {
-                background-color: #3d8b40;
             }
         """)
         dataset_btn.clicked.connect(
             lambda: self.dataset_generation_clicked.emit(project['name'])
         )
-        action_buttons_layout.addWidget(dataset_btn)
+        action_layout.addWidget(dataset_btn)
         
         # Model Testing button
         model_btn = QPushButton("Model Testing")
@@ -271,48 +357,161 @@ class WelcomePage(QWidget):
                 background-color: #2196F3;
                 color: white;
                 border: none;
-                padding: 8px 15px;
-                border-radius: 5px;
+                padding: 6px 12px;
+                border-radius: 4px;
                 font-weight: bold;
+                font-size: 11px;
             }
             QPushButton:hover {
                 background-color: #1976D2;
-            }
-            QPushButton:pressed {
-                background-color: #1565C0;
             }
         """)
         model_btn.clicked.connect(
             lambda: self.model_testing_clicked.emit(project['name'])
         )
-        action_buttons_layout.addWidget(model_btn)
+        action_layout.addWidget(model_btn)
         
-        buttons_layout.addLayout(action_buttons_layout)
-        
-        layout.addLayout(buttons_layout)
+        layout.addLayout(action_layout)
         
         card.setLayout(layout)
         return card
     
-    def show_new_project_dialog(self):
-        """Show dialog to create a new project."""
-        dialog = NewProjectDialog(self)
+    def create_porto_project_card(self, project: dict) -> QWidget:
+        """Create a Porto conversion project card widget."""
+        card = QFrame()
+        card.setStyleSheet("""
+            QFrame {
+                background-color: #f9f9f9;
+                border: 1px solid #ddd;
+                border-radius: 5px;
+                padding: 8px;
+            }
+            QFrame:hover {
+                background-color: #FFF3E0;
+                border: 1px solid #FF9800;
+            }
+        """)
+        
+        layout = QHBoxLayout()
+        layout.setContentsMargins(10, 8, 10, 8)
+        
+        # Delete button (left side)
+        delete_btn = QPushButton("×")
+        delete_btn.setToolTip("Delete project")
+        delete_btn.setStyleSheet("""
+            QPushButton {
+                background-color: transparent;
+                color: #999;
+                border: none;
+                padding: 3px;
+                border-radius: 3px;
+                font-size: 16px;
+                font-weight: bold;
+                min-width: 20px;
+                max-width: 20px;
+                min-height: 20px;
+                max-height: 20px;
+            }
+            QPushButton:hover {
+                background-color: #ffebee;
+                color: #f44336;
+            }
+        """)
+        delete_btn.clicked.connect(
+            lambda: self.delete_project(project['name'], 'porto')
+        )
+        layout.addWidget(delete_btn)
+        
+        # Project info
+        info_layout = QVBoxLayout()
+        info_layout.setSpacing(2)
+        
+        name_label = QLabel(project['name'])
+        name_font = QFont()
+        name_font.setPointSize(12)
+        name_font.setBold(True)
+        name_label.setFont(name_font)
+        info_layout.addWidget(name_label)
+        
+        if not project.get('exists', True):
+            status_label = QLabel("⚠ Folder not found")
+            status_label.setStyleSheet("color: #f44336; font-size: 9px;")
+            info_layout.addWidget(status_label)
+        
+        layout.addLayout(info_layout)
+        layout.addStretch()
+        
+        # Action buttons
+        action_layout = QHBoxLayout()
+        action_layout.setSpacing(5)
+        
+        # Dataset Conversion button
+        convert_btn = QPushButton("Dataset Conversion")
+        convert_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #FF9800;
+                color: white;
+                border: none;
+                padding: 6px 12px;
+                border-radius: 4px;
+                font-weight: bold;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: #F57C00;
+            }
+        """)
+        convert_btn.clicked.connect(
+            lambda: self.porto_conversion_clicked.emit(project['name'])
+        )
+        action_layout.addWidget(convert_btn)
+        
+        # Model Testing button
+        model_btn = QPushButton("Model Testing")
+        model_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2196F3;
+                color: white;
+                border: none;
+                padding: 6px 12px;
+                border-radius: 4px;
+                font-weight: bold;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: #1976D2;
+            }
+        """)
+        model_btn.clicked.connect(
+            lambda: self.model_testing_clicked.emit(project['name'])
+        )
+        action_layout.addWidget(model_btn)
+        
+        layout.addLayout(action_layout)
+        
+        card.setLayout(layout)
+        return card
+    
+    def show_new_simulation_project_dialog(self):
+        """Show dialog to create a new simulation project."""
+        dialog = NewProjectDialog(self, project_type="simulation")
         if dialog.exec() == QDialog.Accepted:
             try:
                 project_path = self.project_manager.create_project(
                     dialog.project_name,
                     dialog.project_description,
-                    dialog.project_path
+                    dialog.project_path,
+                    project_type="simulation"
                 )
                 if project_path:
                     QMessageBox.information(
                         self,
                         "Success",
-                        f"Project '{dialog.project_name}' created successfully!\n"
+                        f"Simulation project '{dialog.project_name}' created successfully!\n"
                         f"Location: {project_path}"
                     )
                     self.refresh_projects()
-                    self.new_project_created.emit(dialog.project_name)
+                    self.new_project_created.emit(dialog.project_name, "simulation")
                 else:
                     QMessageBox.warning(
                         self,
@@ -322,12 +521,42 @@ class WelcomePage(QWidget):
             except ValueError as e:
                 QMessageBox.warning(self, "Error", str(e))
     
-    def delete_project(self, project_name: str):
+    def show_new_porto_project_dialog(self):
+        """Show dialog to create a new Porto conversion project."""
+        dialog = NewProjectDialog(self, project_type="porto")
+        if dialog.exec() == QDialog.Accepted:
+            try:
+                project_path = self.project_manager.create_project(
+                    dialog.project_name,
+                    dialog.project_description,
+                    dialog.project_path,
+                    project_type="porto"
+                )
+                if project_path:
+                    QMessageBox.information(
+                        self,
+                        "Success",
+                        f"Porto conversion project '{dialog.project_name}' created successfully!\n"
+                        f"Location: {project_path}"
+                    )
+                    self.refresh_projects()
+                    self.new_project_created.emit(dialog.project_name, "porto")
+                else:
+                    QMessageBox.warning(
+                        self,
+                        "Error",
+                        f"Project '{dialog.project_name}' already exists!"
+                    )
+            except ValueError as e:
+                QMessageBox.warning(self, "Error", str(e))
+    
+    def delete_project(self, project_name: str, project_type: str = "simulation"):
         """Delete a project."""
+        type_label = "simulation" if project_type == "simulation" else "Porto conversion"
         reply = QMessageBox.question(
             self,
             "Delete Project",
-            f"Are you sure you want to delete project '{project_name}'?\n\n"
+            f"Are you sure you want to delete {type_label} project '{project_name}'?\n\n"
             "This will permanently delete the project folder and all its contents.\n"
             "This action cannot be undone.",
             QMessageBox.Yes | QMessageBox.No,
@@ -369,6 +598,13 @@ class MainWindow(QMainWindow):
         """Initialize the main window UI."""
         self.setWindowTitle("Traffic Simulation Tool - Multi-Variant Dataset Creator and Model Tester")
         self.setGeometry(100, 100, 1200, 800)
+        
+        # Set maximum size to screen size to prevent overflow
+        screen = QApplication.primaryScreen()
+        if screen:
+            screen_size = screen.availableGeometry()
+            self.setMaximumSize(screen_size.width(), screen_size.height())
+        
         self.showMaximized()
         
         # Central widget with stacked pages
@@ -380,7 +616,11 @@ class MainWindow(QMainWindow):
         self.welcome_page.dataset_generation_clicked.connect(self.open_dataset_generation)
         self.welcome_page.model_testing_clicked.connect(self.open_model_testing)
         self.welcome_page.new_project_created.connect(self.on_new_project_created)
+        self.welcome_page.porto_conversion_clicked.connect(self.open_porto_conversion)
         self.central_widget.addWidget(self.welcome_page)
+        
+        # Porto conversion page (will be created when needed)
+        self.porto_page = None
         
         # Dataset generation page (will be created when needed)
         self.dataset_page = None
@@ -608,8 +848,55 @@ class MainWindow(QMainWindow):
         )
         # self.central_widget.setCurrentWidget(self.model_page)
     
-    def on_new_project_created(self, project_name: str):
+    def on_new_project_created(self, project_name: str, project_type: str):
         """Handle new project creation."""
-        # Optionally open the new project
-        pass
+        # Optionally auto-open the new project
+        if project_type == "simulation":
+            self.open_dataset_generation(project_name)
+        elif project_type == "porto":
+            self.open_porto_conversion(project_name)
+    
+    def open_porto_conversion(self, project_name: str):
+        """Open Porto taxi dataset conversion page for a project."""
+        # Get project info
+        project_info = self.welcome_page.project_manager.get_project_info(project_name)
+        if not project_info:
+            QMessageBox.warning(
+                self,
+                "Error",
+                f"Project '{project_name}' not found."
+            )
+            return
+        
+        project_path = project_info['path']
+        
+        # Check if project folder exists
+        if not Path(project_path).exists():
+            QMessageBox.warning(
+                self,
+                "Error",
+                f"Project folder does not exist: {project_path}"
+            )
+            return
+        
+        # Check if we need to recreate the porto page for the current project
+        porto_page_project = None
+        if self.porto_page is not None:
+            porto_page_project = getattr(self.porto_page, 'project_name', None)
+        
+        # Create or reuse Porto conversion page
+        if (self.porto_page is None or porto_page_project != project_name):
+            # Remove old page if exists
+            if self.porto_page is not None:
+                self.central_widget.removeWidget(self.porto_page)
+                self.porto_page.deleteLater()
+                self.porto_page = None
+            
+            # Create new page
+            self.porto_page = DatasetConversionPage(project_name, project_path)
+            self.porto_page.back_clicked.connect(self.show_welcome)
+            self.central_widget.addWidget(self.porto_page)
+        
+        # Show Porto conversion page
+        self.central_widget.setCurrentWidget(self.porto_page)
 

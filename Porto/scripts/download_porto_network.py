@@ -4,23 +4,25 @@ Script to download and convert Porto OSM data to SUMO network format.
 """
 
 import os
-import sys
 import subprocess
-from pathlib import Path
+import sys
 import urllib.request
 import xml.etree.ElementTree as ET
+from pathlib import Path
 
 # Get project root (assuming script is in Porto/scripts/)
 SCRIPT_DIR = Path(__file__).parent
 PORTO_DIR = SCRIPT_DIR.parent
 CONFIG_DIR = PORTO_DIR / 'config'
 
-# Porto bounding box coordinates (approximate city center)
+# Porto bounding box coordinates (expanded to cover all taxi trajectories)
+# Based on GPS points analysis: need to cover -8.613531 to -8.508024 longitude
+# and 41.077557 to 41.201217 latitude, with padding
 PORTO_BBOX = {
-    'north': 41.2000,
-    'south': 41.1400,
-    'east': -8.5800,
-    'west': -8.6500
+    'north': 41.2600,  # Extended north to cover all trajectories + padding
+    'south': 41.0200,  # Extended south to cover all trajectories + padding
+    'east': -8.4500,   # Extended east to cover all trajectories + padding
+    'west': -8.6700    # Extended west to cover all trajectories + padding
 }
 
 
@@ -106,7 +108,7 @@ def convert_osm_to_sumo(osm_file, net_file, sumo_home=None):
         '--tls.join',
         '--no-turnarounds',
         '--no-internal-links',
-        '--remove-edges.by-vclass', 'pedestrian,bicycle',
+        '--remove-edges.by-vclass', 'pedestrian,bicycle,bus,tram,rail_urban,rail,rail_fast,motorcycle,delivery,taxi,hov,evehicle,ship,emergency',
     ]
     
     try:

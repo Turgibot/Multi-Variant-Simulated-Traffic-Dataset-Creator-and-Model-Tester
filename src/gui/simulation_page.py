@@ -370,12 +370,11 @@ class SimulationPage(QWidget):
             traci.start(sumo_cmd)
             self.traci_connection = traci
             
-            # Start update timer with current step interval
-            # If step_interval is 0, use 1ms (minimum for Qt timer, runs as fast as possible)
+            self.log_text.append("Simulation started successfully!")
+            
+            # Start update timer
             timer_interval = 1 if self.step_interval == 0 else self.step_interval
             self.update_timer.start(timer_interval)
-            
-            self.log_text.append("Simulation started successfully!")
             
             self.status_label.setText("Status: Running")
             self.status_label.setStyleSheet("color: #4CAF50; padding: 5px 15px; font-size: 14px; font-weight: bold;")

@@ -3,13 +3,12 @@ Dataset Generation page for creating traffic simulation datasets.
 """
 
 from pathlib import Path
-from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QPushButton, QFileDialog, QMessageBox, QFrame,
-    QScrollArea, QGroupBox, QTextEdit, QLineEdit, QCheckBox
-)
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont
+from PySide6.QtWidgets import (QFileDialog, QFrame, QGroupBox, QHBoxLayout,
+                               QLabel, QLineEdit, QMessageBox, QPushButton,
+                               QScrollArea, QTextEdit, QVBoxLayout, QWidget)
 
 from src.utils.sumo_config_manager import SUMOConfigManager
 from src.utils.sumo_detector import auto_detect_sumo_home
@@ -27,23 +26,6 @@ class DatasetGenerationPage(QWidget):
         self.project_name = project_name
         self.project_path = project_path
         self.config_manager = SUMOConfigManager(project_path)
-        
-        # Porto dataset paths - calculate workspace root
-        # Workspace root is the directory containing both projects and Porto folders
-        project_path_obj = Path(project_path).resolve()
-        workspace_root = project_path_obj
-        # Go up until we find a directory containing 'Porto' folder or reach filesystem root
-        while workspace_root != workspace_root.parent:
-            if (workspace_root / 'Porto').exists():
-                break
-            workspace_root = workspace_root.parent
-        
-        # If Porto folder not found, use hardcoded path from user's request
-        if not (workspace_root / 'Porto').exists():
-            workspace_root = Path('/home/guy/Projects/Traffic/Multi-Variant-Simulated-Traffic-Dataset-Creator-and-Model-Tester')
-        
-        self.porto_config_folder = workspace_root / 'Porto' / 'config'
-        self.porto_dataset_path = workspace_root / 'Porto' / 'dataset' / 'train.csv'
         
         # Initialize validation state variables
         self.sumocfg_valid = False
@@ -88,68 +70,31 @@ class DatasetGenerationPage(QWidget):
         
         header_layout.addStretch()
         
-        main_layout.addLayout(header_layout)
-        
-        # Porto Dataset checkbox (above route generation)
-        porto_checkbox_layout = QHBoxLayout()
-        porto_checkbox_layout.setSpacing(10)
-        porto_checkbox_layout.setContentsMargins(0, 0, 0, 20)
-        
-        self.porto_checkbox = QCheckBox("Use Porto Taxi Dataset")
-        self.porto_checkbox.setStyleSheet("""
-            QCheckBox {
-                font-size: 14px;
-                font-weight: bold;
-                padding: 5px;
-            }
-        """)
-        self.porto_checkbox.stateChanged.connect(self.on_porto_checkbox_changed)
-        porto_checkbox_layout.addWidget(self.porto_checkbox)
-        porto_checkbox_layout.addStretch()
-        main_layout.addLayout(porto_checkbox_layout)
-        
-        # Porto dataset input path (shown only when checkbox is checked)
-        self.porto_dataset_widget = QWidget()
-        self.porto_dataset_widget.setVisible(False)  # Hidden by default
-        porto_dataset_layout = QHBoxLayout()
-        porto_dataset_layout.setSpacing(10)
-        porto_dataset_layout.setContentsMargins(0, 0, 0, 20)
-        
-        porto_dataset_label = QLabel("Porto Dataset Input File:")
-        porto_dataset_label.setStyleSheet("color: #666; font-size: 14px;")
-        porto_dataset_layout.addWidget(porto_dataset_label)
-        
-        self.porto_dataset_input = QLineEdit()
-        self.porto_dataset_input.setPlaceholderText(str(self.porto_dataset_path))
-        self.porto_dataset_input.textChanged.connect(self.validate_porto_dataset)
-        # Auto-save will be connected in load_all_settings
-        porto_dataset_layout.addWidget(self.porto_dataset_input)
-        
-        # Validation check mark
-        self.porto_dataset_check = QLabel("✓")
-        self.porto_dataset_check.setStyleSheet("color: #4CAF50; font-size: 18px; font-weight: bold;")
-        self.porto_dataset_check.setVisible(False)
-        porto_dataset_layout.addWidget(self.porto_dataset_check)
-        
-        # Browse button
-        self.browse_porto_dataset_btn = QPushButton("Browse...")
-        self.browse_porto_dataset_btn.setStyleSheet("""
+        # Run Simulation button (top right corner)
+        self.run_simulation_btn = QPushButton("▶ Run SUMO Simulation")
+        self.run_simulation_btn.setStyleSheet("""
             QPushButton {
-                background-color: #2196F3;
+                background-color: #4CAF50;
                 color: white;
                 border: none;
-                padding: 8px 15px;
+                padding: 10px 20px;
                 border-radius: 5px;
+                font-size: 14px;
+                font-weight: bold;
             }
             QPushButton:hover {
-                background-color: #1976D2;
+                background-color: #45a049;
+            }
+            QPushButton:disabled {
+                background-color: #cccccc;
+                color: #666666;
             }
         """)
-        self.browse_porto_dataset_btn.clicked.connect(self.browse_porto_dataset)
-        porto_dataset_layout.addWidget(self.browse_porto_dataset_btn)
+        self.run_simulation_btn.setEnabled(False)
+        self.run_simulation_btn.clicked.connect(self.run_simulation)
+        header_layout.addWidget(self.run_simulation_btn)
         
-        self.porto_dataset_widget.setLayout(porto_dataset_layout)
-        main_layout.addWidget(self.porto_dataset_widget)
+        main_layout.addLayout(header_layout)
         
         # Route Generation Link
         route_gen_layout = QHBoxLayout()
@@ -448,75 +393,11 @@ class DatasetGenerationPage(QWidget):
         sumo_config_group.setLayout(sumo_config_layout)
         main_layout.addWidget(sumo_config_group)
         
-        # Run Simulation button (only enabled when all paths are valid)
-        self.run_simulation_btn = QPushButton("▶ Run SUMO Simulation")
-        self.run_simulation_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #4CAF50;
-                color: white;
-                border: none;
-                padding: 15px 30px;
-                border-radius: 5px;
-                font-weight: bold;
-                font-size: 16px;
-            }
-            QPushButton:hover {
-                background-color: #45a049;
-            }
-            QPushButton:pressed {
-                background-color: #3d8b40;
-            }
-            QPushButton:disabled {
-                background-color: #cccccc;
-                color: #666666;
-            }
-        """)
-        self.run_simulation_btn.setEnabled(False)
-        self.run_simulation_btn.clicked.connect(self.run_simulation)
-        main_layout.addWidget(self.run_simulation_btn)
-        
         main_layout.addStretch()
         self.setLayout(main_layout)
         
         # Load all saved settings after UI is fully initialized
         self.load_all_settings()
-    
-    def refresh_config_files(self):
-        """Refresh the list of configuration files."""
-        # Clear existing widgets
-        while self.config_files_layout.count():
-            item = self.config_files_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-        
-        # Get all config files
-        files = self.config_manager.get_config_files()
-        
-        if not files:
-            # Show empty state
-            empty_label = QLabel(
-                "No SUMO configuration file loaded.\n"
-                "Click 'Load SUMO Configuration File' above to load a .sumocfg file."
-            )
-            empty_label.setAlignment(Qt.AlignCenter)
-            empty_label.setStyleSheet("color: #999; padding: 20px;")
-            self.config_files_layout.addWidget(empty_label)
-        else:
-            # Add file widgets
-            for file_type, file_path in files.items():
-                if isinstance(file_path, list):
-                    # Multiple files of same type
-                    for i, path in enumerate(file_path):
-                        widget = SUMOConfigWidget(
-                            f"{file_type} ({i+1})" if len(file_path) > 1 else file_type,
-                            path
-                        )
-                        self.config_files_layout.addWidget(widget)
-                else:
-                    widget = SUMOConfigWidget(file_type, file_path)
-                    self.config_files_layout.addWidget(widget)
-        
-        self.config_files_layout.addStretch()
     
     def load_all_settings(self):
         """Load all saved project settings."""
@@ -535,18 +416,13 @@ class DatasetGenerationPage(QWidget):
             if existing_sumocfg:
                 self.sumocfg_input.setText(existing_sumocfg)
                 self.validate_sumocfg_path()
-                # Only display contents if not in Porto mode (Porto mode handles it separately)
-                if not self.config_manager.get_use_porto_dataset():
-                    self.display_sumocfg_contents(existing_sumocfg)
+                self.display_sumocfg_contents(existing_sumocfg)
             
             # Load output folder
             self.load_output_folder()
             
             # Load SUMO_HOME
             self.load_sumo_home()
-            
-            # Load Porto settings (this will trigger checkbox handler if enabled)
-            self.load_porto_settings()
         finally:
             # Re-enable signals and connect auto-save handlers
             self.sumocfg_input.blockSignals(False)
@@ -557,7 +433,6 @@ class DatasetGenerationPage(QWidget):
             self.sumocfg_input.textChanged.connect(self.on_sumocfg_text_changed)
             self.output_folder_input.textChanged.connect(self.on_output_folder_text_changed)
             self.sumo_home_input.textChanged.connect(self.on_sumo_home_text_changed)
-            self.porto_dataset_input.textChanged.connect(self.on_porto_dataset_text_changed)
     
     def load_output_folder(self):
         """Load the saved output folder path."""
@@ -616,20 +491,6 @@ class DatasetGenerationPage(QWidget):
         self.validate_sumo_home()
         if self.sumo_home_valid:
             self.save_sumo_home_path(self.sumo_home_input.text())
-    
-    def on_porto_dataset_text_changed(self):
-        """Auto-save Porto dataset path when text changes."""
-        # Only save if Porto mode is enabled and path is valid
-        if self.porto_checkbox.isChecked():
-            self.validate_porto_dataset()
-            path_text = self.porto_dataset_input.text().strip()
-            if path_text:
-                try:
-                    path = Path(path_text)
-                    if path.exists() and path.is_file() and path.suffix == '.csv':
-                        self.config_manager.set_porto_dataset_path(path_text)
-                except Exception:
-                    pass  # Silently fail if path is invalid
     
     def validate_sumocfg_path(self):
         """Validate the SUMO config file path."""
@@ -971,135 +832,6 @@ class DatasetGenerationPage(QWidget):
             )
         except ValueError as e:
             QMessageBox.warning(self, "Error", str(e))
-    
-    def load_porto_settings(self):
-        """Load Porto dataset settings from config."""
-        # Check if Porto mode is enabled
-        use_porto = self.config_manager.get_use_porto_dataset()
-        if use_porto:
-            # Temporarily block signals to avoid triggering handler during load
-            self.porto_checkbox.blockSignals(True)
-            try:
-                # Load saved Porto dataset path if exists
-                porto_dataset_path = self.config_manager.get_porto_dataset_path()
-                if porto_dataset_path and Path(porto_dataset_path).exists():
-                    self.porto_dataset_input.setText(porto_dataset_path)
-                else:
-                    # Use default path
-                    self.porto_dataset_input.setText(str(self.porto_dataset_path))
-                
-                # Show the Porto dataset widget
-                self.porto_dataset_widget.setVisible(True)
-                
-                # Set checkbox checked (this will trigger handler)
-                self.porto_checkbox.setChecked(True)
-            finally:
-                self.porto_checkbox.blockSignals(False)
-            
-            # Now trigger the handler to set up everything
-            self.on_porto_checkbox_changed(Qt.Checked)
-    
-    def on_porto_checkbox_changed(self, state):
-        """Handle Porto checkbox state change."""
-        # Use isChecked() to get the actual state
-        is_checked = self.porto_checkbox.isChecked()
-        
-        # Show/hide Porto dataset input widget
-        self.porto_dataset_widget.setVisible(is_checked)
-        
-        if is_checked:
-            # Set Porto dataset path to default train.csv path
-            porto_dataset_str = str(self.porto_dataset_path)
-            self.porto_dataset_input.setText(porto_dataset_str)
-            try:
-                if self.porto_dataset_path.exists():
-                    self.config_manager.set_porto_dataset_path(porto_dataset_str)
-            except Exception as e:
-                QMessageBox.warning(
-                    self,
-                    "Warning",
-                    f"Failed to set Porto dataset path:\n{str(e)}"
-                )
-            
-            # Set SUMO config path to Porto/config/porto.sumocfg
-            porto_sumocfg_path = self.porto_config_folder / 'porto.sumocfg'
-            porto_sumocfg_str = str(porto_sumocfg_path)
-            self.sumocfg_input.setText(porto_sumocfg_str)
-            
-            if porto_sumocfg_path.exists():
-                try:
-                    self.config_manager.set_sumocfg(porto_sumocfg_str)
-                    self.display_sumocfg_contents(porto_sumocfg_str)
-                    self.validate_sumocfg_path()
-                except Exception as e:
-                    QMessageBox.warning(
-                        self,
-                        "Warning",
-                        f"Failed to load porto.sumocfg:\n{str(e)}"
-                    )
-            
-            # Set Porto config folder
-            try:
-                if self.porto_config_folder.exists():
-                    self.config_manager.set_porto_config_folder(str(self.porto_config_folder))
-            except Exception as e:
-                QMessageBox.warning(
-                    self,
-                    "Warning",
-                    f"Failed to set Porto config folder:\n{str(e)}"
-                )
-            
-            # Disable manual editing of SUMO config when Porto mode is active
-            self.sumocfg_input.setEnabled(False)
-        else:
-            # Re-enable manual editing
-            self.sumocfg_input.setEnabled(True)
-        
-        # Save Porto mode state
-        try:
-            self.config_manager.set_use_porto_dataset(is_checked)
-        except Exception as e:
-            QMessageBox.warning(
-                self,
-                "Warning",
-                f"Failed to save Porto mode state:\n{str(e)}"
-            )
-        
-        self.validate_porto_dataset()
-        
-        # Force update of the layout
-        self.update()
-        self.updateGeometry()
-    
-    def browse_porto_dataset(self):
-        """Open file dialog to browse for Porto dataset file."""
-        file_path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Select Porto Dataset File",
-            str(self.porto_dataset_path.parent) if self.porto_dataset_path.exists() else str(Path.home()),
-            "CSV Files (*.csv);;All Files (*)"
-        )
-        
-        if file_path:
-            self.porto_dataset_input.setText(file_path)
-            self.config_manager.set_porto_dataset_path(file_path)
-            self.validate_porto_dataset()
-    
-    def validate_porto_dataset(self):
-        """Validate the Porto dataset file path."""
-        if not self.porto_checkbox.isChecked():
-            self.porto_dataset_check.setVisible(False)
-            return
-        
-        path_text = self.porto_dataset_input.text().strip()
-        if not path_text:
-            self.porto_dataset_check.setVisible(False)
-            return
-        
-        path = Path(path_text)
-        is_valid = path.exists() and path.is_file() and path.suffix == '.csv'
-        
-        self.porto_dataset_check.setVisible(is_valid)
     
     def run_simulation(self):
         """Run SUMO simulation - navigate to simulation page."""
