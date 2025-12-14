@@ -8,19 +8,20 @@ import os
 import subprocess
 import urllib.request
 from pathlib import Path
+from typing import Tuple
 
-from PySide6.QtCore import QThread, Signal, Qt, QRectF
+from PySide6.QtCore import QRectF, Qt, QThread, Signal
 from PySide6.QtGui import QFont
-from PySide6.QtWidgets import (
-    QCheckBox, QFileDialog, QFrame, QGraphicsDropShadowEffect, QGroupBox, QHBoxLayout, 
-    QLabel, QLineEdit, QMessageBox, QProgressBar, QPushButton, QScrollArea,
-    QStackedWidget, QTextEdit, QVBoxLayout, QWidget
-)
+from PySide6.QtWidgets import (QCheckBox, QFileDialog, QFrame,
+                               QGraphicsDropShadowEffect, QGroupBox,
+                               QHBoxLayout, QLabel, QLineEdit, QMessageBox,
+                               QProgressBar, QPushButton, QScrollArea,
+                               QStackedWidget, QTextEdit, QVBoxLayout, QWidget)
 
 from src.gui.simulation_view import SimulationView
 from src.utils.network_parser import NetworkParser
-from src.utils.trip_validator import validate_trip_segments, TripValidationResult
-
+from src.utils.trip_validator import (TripValidationResult,
+                                      validate_trip_segments)
 
 # Default SUMO_HOME path
 DEFAULT_SUMO_HOME = "/usr/share/sumo"
@@ -431,6 +432,86 @@ class DatasetConversionPage(QWidget):
         map_title.setStyleSheet("color: #333;")
         map_header_layout.addWidget(map_title)
         
+        map_header_layout.addSpacing(20)
+        
+        # Roads and junctions only checkbox
+        self.roads_junctions_only_checkbox = QCheckBox("Roads and junctions only")
+        self.roads_junctions_only_checkbox.setToolTip(
+            "When checked, only show road edges and junction nodes\n"
+            "(hides pedestrian paths, rail tracks, and other non-road elements)"
+        )
+        self.roads_junctions_only_checkbox.setStyleSheet("""
+            QCheckBox {
+                color: #333;
+                font-size: 11px;
+            }
+            QCheckBox::indicator {
+                width: 16px;
+                height: 16px;
+                border: 2px solid #999;
+                border-radius: 3px;
+                background-color: white;
+            }
+            QCheckBox::indicator:checked {
+                border: 2px solid #4CAF50;
+                background-color: white;
+            }
+            QCheckBox::indicator:unchecked {
+                border: 2px solid #999;
+                background-color: white;
+            }
+        """)
+        self.roads_junctions_only_checkbox.stateChanged.connect(self.on_roads_junctions_filter_changed)
+        self.roads_junctions_only_checkbox.setVisible(False)  # Hidden until map is loaded
+        map_header_layout.addWidget(self.roads_junctions_only_checkbox)
+        
+        # Loading indicator for filter
+        self.filter_loading_label = QLabel("")
+        self.filter_loading_label.setStyleSheet("font-size: 14px;")
+        self.filter_loading_label.setFixedWidth(20)
+        self.filter_loading_label.setVisible(False)
+        map_header_layout.addWidget(self.filter_loading_label)
+        
+        map_header_layout.addSpacing(10)
+        
+        # Satellite imagery checkbox
+        self.satellite_checkbox = QCheckBox("Show satellite imagery")
+        self.satellite_checkbox.setToolTip(
+            "When checked, display satellite imagery as map background\n"
+            "(downloads tiles from ESRI World Imagery service)"
+        )
+        self.satellite_checkbox.setStyleSheet("""
+            QCheckBox {
+                color: #333;
+                font-size: 11px;
+            }
+            QCheckBox::indicator {
+                width: 16px;
+                height: 16px;
+                border: 2px solid #999;
+                border-radius: 3px;
+                background-color: white;
+            }
+            QCheckBox::indicator:checked {
+                border: 2px solid #2196F3;
+                background-color: white;
+            }
+            QCheckBox::indicator:unchecked {
+                border: 2px solid #999;
+                background-color: white;
+            }
+        """)
+        self.satellite_checkbox.stateChanged.connect(self.on_satellite_changed)
+        self.satellite_checkbox.setVisible(False)  # Hidden until map is loaded
+        map_header_layout.addWidget(self.satellite_checkbox)
+        
+        # Loading indicator for satellite
+        self.satellite_loading_label = QLabel("")
+        self.satellite_loading_label.setStyleSheet("font-size: 14px;")
+        self.satellite_loading_label.setFixedWidth(20)
+        self.satellite_loading_label.setVisible(False)
+        map_header_layout.addWidget(self.satellite_loading_label)
+        
         map_header_layout.addStretch()
         
         # Zoom controls in header
@@ -824,101 +905,6 @@ class DatasetConversionPage(QWidget):
         self.download_map_btn.clicked.connect(self.download_map)
         map_group_layout.addWidget(self.download_map_btn)
         
-        # Checkbox for filtering network to roads and junctions only (with loading indicator)
-        filter_checkbox_layout = QHBoxLayout()
-        filter_checkbox_layout.setContentsMargins(0, 0, 0, 0)
-        filter_checkbox_layout.setSpacing(8)
-        
-        self.roads_junctions_only_checkbox = QCheckBox("Roads and junctions only")
-        self.roads_junctions_only_checkbox.setToolTip(
-            "When checked, only show road edges and junction nodes\n"
-            "(hides pedestrian paths, rail tracks, and other non-road elements)"
-        )
-        self.roads_junctions_only_checkbox.setStyleSheet("""
-            QCheckBox {
-                color: #333;
-                font-size: 11px;
-                padding: 5px 0;
-            }
-            QCheckBox::indicator {
-                width: 16px;
-                height: 16px;
-            }
-            QCheckBox::indicator:unchecked {
-                border: 2px solid #999;
-                border-radius: 3px;
-                background-color: white;
-            }
-            QCheckBox::indicator:checked {
-                border: 2px solid #4CAF50;
-                border-radius: 3px;
-                background-color: #4CAF50;
-            }
-        """)
-        self.roads_junctions_only_checkbox.stateChanged.connect(self.on_roads_junctions_filter_changed)
-        filter_checkbox_layout.addWidget(self.roads_junctions_only_checkbox)
-        
-        # Loading indicator next to checkbox
-        self.filter_loading_label = QLabel("")
-        self.filter_loading_label.setStyleSheet("font-size: 14px;")
-        self.filter_loading_label.setFixedWidth(20)
-        filter_checkbox_layout.addWidget(self.filter_loading_label)
-        
-        filter_checkbox_layout.addStretch()
-        
-        # Container widget for the checkbox row
-        self.filter_checkbox_container = QWidget()
-        self.filter_checkbox_container.setLayout(filter_checkbox_layout)
-        self.filter_checkbox_container.setVisible(False)  # Hidden until map is loaded
-        map_group_layout.addWidget(self.filter_checkbox_container)
-        
-        # Satellite imagery checkbox (with loading indicator)
-        satellite_checkbox_layout = QHBoxLayout()
-        satellite_checkbox_layout.setContentsMargins(0, 0, 0, 0)
-        satellite_checkbox_layout.setSpacing(8)
-        
-        self.satellite_checkbox = QCheckBox("Show satellite imagery")
-        self.satellite_checkbox.setToolTip(
-            "When checked, display satellite imagery as map background\n"
-            "(downloads tiles from ESRI World Imagery service)"
-        )
-        self.satellite_checkbox.setStyleSheet("""
-            QCheckBox {
-                color: #333;
-                font-size: 11px;
-                padding: 5px 0;
-            }
-            QCheckBox::indicator {
-                width: 16px;
-                height: 16px;
-            }
-            QCheckBox::indicator:unchecked {
-                border: 2px solid #999;
-                border-radius: 3px;
-                background-color: white;
-            }
-            QCheckBox::indicator:checked {
-                border: 2px solid #2196F3;
-                border-radius: 3px;
-                background-color: #2196F3;
-            }
-        """)
-        self.satellite_checkbox.stateChanged.connect(self.on_satellite_changed)
-        satellite_checkbox_layout.addWidget(self.satellite_checkbox)
-        
-        # Loading indicator next to satellite checkbox
-        self.satellite_loading_label = QLabel("")
-        self.satellite_loading_label.setStyleSheet("font-size: 14px;")
-        self.satellite_loading_label.setFixedWidth(20)
-        satellite_checkbox_layout.addWidget(self.satellite_loading_label)
-        
-        satellite_checkbox_layout.addStretch()
-        
-        # Container widget for satellite checkbox row
-        self.satellite_checkbox_container = QWidget()
-        self.satellite_checkbox_container.setLayout(satellite_checkbox_layout)
-        self.satellite_checkbox_container.setVisible(False)  # Hidden until map is loaded
-        map_group_layout.addWidget(self.satellite_checkbox_container)
         
         map_group.setLayout(map_group_layout)
         controls_layout.addWidget(map_group)
@@ -1282,6 +1268,56 @@ class DatasetConversionPage(QWidget):
         self.route_info_label.setStyleSheet("color: #666; font-size: 9px;")
         self.route_info_label.setWordWrap(True)
         route_group_layout.addWidget(self.route_info_label)
+        
+        # ---- Route Repair Subsection ----
+        repair_layout = QHBoxLayout()
+        repair_layout.setSpacing(8)
+        
+        # Trim Start/End checkbox (on the left)
+        self.fix_route_checkbox = QCheckBox("Trim Start/End")
+        self.fix_route_checkbox.setToolTip("Use real start and destination points instead of original pickup/dropoff points")
+        self.fix_route_checkbox.setStyleSheet("""
+            QCheckBox {
+                color: #333;
+                font-size: 10px;
+            }
+            QCheckBox::indicator {
+                width: 16px;
+                height: 16px;
+            }
+        """)
+        self.fix_route_checkbox.stateChanged.connect(self._on_fix_route_changed)
+        repair_layout.addWidget(self.fix_route_checkbox)
+        
+        # Fix Invalid Segments checkbox
+        self.fix_invalid_segments_checkbox = QCheckBox("Fix Invalid Segments")
+        self.fix_invalid_segments_checkbox.setToolTip("Split route at invalid segments (>1000m) and treat each part as a separate trip")
+        self.fix_invalid_segments_checkbox.setStyleSheet("""
+            QCheckBox {
+                color: #333;
+                font-size: 10px;
+            }
+            QCheckBox::indicator {
+                width: 16px;
+                height: 16px;
+            }
+        """)
+        self.fix_invalid_segments_checkbox.stateChanged.connect(self._on_fix_route_changed)
+        repair_layout.addWidget(self.fix_invalid_segments_checkbox)
+        
+        # Real start point label
+        self.real_start_label = QLabel("Real Start: N/A")
+        self.real_start_label.setStyleSheet("color: #333; font-size: 10px;")
+        repair_layout.addWidget(self.real_start_label)
+        
+        # Real destination point label
+        self.real_destination_label = QLabel("Real Destination: N/A")
+        self.real_destination_label.setStyleSheet("color: #333; font-size: 10px;")
+        repair_layout.addWidget(self.real_destination_label)
+        
+        repair_layout.addStretch()
+        
+        route_group_layout.addLayout(repair_layout)
         
         self.route_group.setLayout(route_group_layout)
         self.route_group.setVisible(False)  # Hidden until map and dataset ready
@@ -1651,23 +1687,29 @@ class DatasetConversionPage(QWidget):
             self.map_status.setText("✅ Network map available")
             self.map_status.setStyleSheet("color: #4CAF50; font-size: 11px; font-weight: bold;")
             self.download_map_btn.setVisible(False)  # Hide the button when map is available
-            self.filter_checkbox_container.setVisible(True)  # Show the filter checkbox
-            self.satellite_checkbox_container.setVisible(True)  # Show the satellite checkbox
+            self.roads_junctions_only_checkbox.setVisible(True)  # Show the filter checkbox
+            self.filter_loading_label.setVisible(False)
+            self.satellite_checkbox.setVisible(True)  # Show the satellite checkbox
+            self.satellite_loading_label.setVisible(False)
             self.load_network_async(net_file)
         elif porto_net_file.exists():
             self.map_status.setText("✅ Network map available (Porto folder)")
             self.map_status.setStyleSheet("color: #4CAF50; font-size: 11px; font-weight: bold;")
             self.download_map_btn.setVisible(False)  # Hide the button when map is available
-            self.filter_checkbox_container.setVisible(True)  # Show the filter checkbox
-            self.satellite_checkbox_container.setVisible(True)  # Show the satellite checkbox
+            self.roads_junctions_only_checkbox.setVisible(True)  # Show the filter checkbox
+            self.filter_loading_label.setVisible(False)
+            self.satellite_checkbox.setVisible(True)  # Show the satellite checkbox
+            self.satellite_loading_label.setVisible(False)
             self.load_network_async(porto_net_file)
         else:
             self.map_status.setText("❌ Network map not found\nClick to download from OpenStreetMap")
             self.map_status.setStyleSheet("color: #f44336; font-size: 11px;")
             self.download_map_btn.setVisible(True)
             self.download_map_btn.setEnabled(True)
-            self.filter_checkbox_container.setVisible(False)
-            self.satellite_checkbox_container.setVisible(False)
+            self.roads_junctions_only_checkbox.setVisible(False)
+            self.filter_loading_label.setVisible(False)
+            self.satellite_checkbox.setVisible(False)
+            self.satellite_loading_label.setVisible(False)
             self.map_status_label.setText("Map not loaded - click 'Download & Render Map'")
         
         # Check dataset status
@@ -2140,8 +2182,10 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
             QMessageBox.warning(self, "Download Failed", message)
             self.download_map_btn.setVisible(True)
             self.download_map_btn.setEnabled(True)
-            self.filter_checkbox_container.setVisible(False)
-            self.satellite_checkbox_container.setVisible(False)
+            self.roads_junctions_only_checkbox.setVisible(False)
+            self.filter_loading_label.setVisible(False)
+            self.satellite_checkbox.setVisible(False)
+            self.satellite_loading_label.setVisible(False)
         
         # Hide progress section after a short delay
         from PySide6.QtCore import QTimer
@@ -2179,6 +2223,8 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
             'train_trip_count': getattr(self, '_train_trip_count', None),
             'roads_junctions_only': self.roads_junctions_only_checkbox.isChecked(),
             'show_satellite': self.satellite_checkbox.isChecked(),
+            'fix_route': self.fix_route_checkbox.isChecked(),
+            'fix_invalid_segments': self.fix_invalid_segments_checkbox.isChecked(),
         }
         
         try:
@@ -2222,6 +2268,12 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
                 
                 if 'show_satellite' in settings:
                     self.satellite_checkbox.setChecked(settings['show_satellite'])
+                
+                if 'fix_route' in settings:
+                    self.fix_route_checkbox.setChecked(settings['fix_route'])
+                
+                if 'fix_invalid_segments' in settings:
+                    self.fix_invalid_segments_checkbox.setChecked(settings['fix_invalid_segments'])
                 
                 self.log("Settings loaded from config")
         except Exception as e:
@@ -2285,6 +2337,13 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
         self.route_spinbox.setMaximum(count if count > 0 else 1)
         self.route_info_label.setText(f"Select a route from 1 to {count:,}")
     
+    def _on_fix_route_changed(self):
+        """Handle fix route checkbox change."""
+        self.save_settings()
+        # Refresh the route display if a route is currently shown
+        if hasattr(self, '_route_items') and self._route_items:
+            self.show_selected_route()
+    
     def show_selected_route(self):
         """Display the selected route on the map."""
         route_num = self.route_spinbox.value()
@@ -2306,26 +2365,79 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
             polyline = self._load_trip_polyline(train_path, route_num)
             
             if polyline and len(polyline) >= 2:
+                # Detect real start and end points
+                real_start_idx, real_end_idx = self._detect_real_start_and_end(polyline)
+                
+                # Update labels (without coordinates)
+                if real_start_idx < len(polyline):
+                    self.real_start_label.setText(f"Real Start: Point {real_start_idx + 1}")
+                else:
+                    self.real_start_label.setText("Real Start: N/A")
+                
+                if real_end_idx < len(polyline):
+                    self.real_destination_label.setText(f"Real Destination: Point {real_end_idx + 1}")
+                else:
+                    self.real_destination_label.setText("Real Destination: N/A")
+                
+                # Store original length
+                original_length = len(polyline)
+                
+                # Apply route repair if checkbox is checked
+                if self.fix_route_checkbox.isChecked():
+                    polyline = polyline[real_start_idx:real_end_idx + 1]
+                
+                # Split at invalid segments if checkbox is checked
+                segments = [polyline]  # Default: single segment
+                if self.fix_invalid_segments_checkbox.isChecked():
+                    segments = self._split_at_invalid_segments(polyline)
+                    # Apply trim start/end to each segment
+                    trimmed_segments = []
+                    for segment in segments:
+                        if len(segment) >= 2:
+                            seg_start, seg_end = self._detect_real_start_and_end(segment)
+                            trimmed_seg = segment[seg_start:seg_end + 1]
+                            if len(trimmed_seg) >= 2:  # Only add if has at least 2 points
+                                trimmed_segments.append(trimmed_seg)
+                    segments = trimmed_segments if trimmed_segments else segments
+                
                 # Clear previous route
                 self.clear_route_display()
                 
                 # Draw route on map (returns validation result)
-                validation_result = self._draw_route_on_map(polyline, route_num)
+                validation_result = self._draw_route_on_map(segments, route_num)
                 
                 # Build info text with validation status
-                if validation_result and not validation_result.is_valid:
+                repair_info = ""
+                if self.fix_route_checkbox.isChecked() and original_length != len(polyline):
+                    repair_info = f" (Trimmed: {original_length} → {len(polyline)} points)"
+                
+                segment_info = ""
+                if self.fix_invalid_segments_checkbox.isChecked() and len(segments) > 1:
+                    total_points = sum(len(seg) for seg in segments)
+                    segment_info = f" | Split into {len(segments)} segments ({total_points} total points)"
+                
+                if validation_result and not validation_result.is_valid and not self.fix_invalid_segments_checkbox.isChecked():
                     self.route_info_label.setText(
-                        f"Route #{route_num}: {len(polyline)} points | "
+                        f"Route #{route_num}: {len(polyline)} points{repair_info}{segment_info} | "
                         f"⚠️ {validation_result.invalid_segment_count} invalid segment(s)"
                     )
                     self.route_info_label.setStyleSheet("color: #f44336; font-size: 9px; font-weight: bold;")
                 else:
-                    self.route_info_label.setText(
-                        f"Route #{route_num}: {len(polyline)} GPS points ✅"
-                    )
+                    if self.fix_invalid_segments_checkbox.isChecked():
+                        status_text = f"Route #{route_num}: {len(segments)} segment(s){segment_info} ✅"
+                    else:
+                        status_text = f"Route #{route_num}: {len(polyline)} GPS points{repair_info} ✅"
+                    self.route_info_label.setText(status_text)
                     self.route_info_label.setStyleSheet("color: #4CAF50; font-size: 9px; font-weight: bold;")
                 
-                self.log(f"Route #{route_num} displayed with {len(polyline)} GPS points")
+                log_msg = f"Route #{route_num} displayed"
+                if self.fix_invalid_segments_checkbox.isChecked():
+                    log_msg += f" as {len(segments)} segment(s)"
+                else:
+                    log_msg += f" with {len(polyline)} GPS points"
+                if repair_info:
+                    log_msg += f" (trimmed from {original_length})"
+                self.log(log_msg)
             else:
                 self.route_info_label.setText(f"Route #{route_num}: No valid GPS data")
                 self.route_info_label.setStyleSheet("color: #666; font-size: 9px;")
@@ -2334,6 +2446,111 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
             self.route_info_label.setText(f"Error loading route: {str(e)[:30]}")
             self.route_info_label.setStyleSheet("color: #f44336; font-size: 9px;")
             self.log(f"Error loading route #{route_num}: {e}")
+    
+    def _detect_real_start_and_end(self, polyline: list) -> Tuple[int, int]:
+        """
+        Detect real start and end points by finding where static points end.
+        
+        For taxi datasets:
+        - Real start: The last point before movement begins (after static pickup points)
+        - Real end: The first point at destination (before static dropoff points)
+        
+        Returns: (real_start_index, real_end_index)
+        """
+        if not polyline or len(polyline) < 3:
+            return 0, len(polyline) - 1 if polyline else 0
+        
+        import math
+        
+        def haversine_distance(coord1: tuple, coord2: tuple) -> float:
+            """Calculate distance between two GPS coordinates in meters."""
+            lat1, lon1 = coord1
+            lat2, lon2 = coord2
+            
+            # Earth radius in meters
+            R = 6371000
+            
+            dlat = math.radians(lat2 - lat1)
+            dlon = math.radians(lon2 - lon1)
+            
+            a = (math.sin(dlat / 2) ** 2 +
+                 math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) *
+                 math.sin(dlon / 2) ** 2)
+            c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+            
+            return R * c
+        
+        # Threshold for considering points as "static" (in meters)
+        STATIC_THRESHOLD = 15.0  # Points within 15 meters are considered static
+        
+        # Find real start: look for the first significant movement
+        # The real start is the last point before movement begins
+        # Example: points 0,1,2,3 are static, point 4 is distant -> real start is point 3 (index 3)
+        real_start = 0
+        for i in range(len(polyline) - 1):
+            distance = haversine_distance(polyline[i], polyline[i + 1])
+            if distance > STATIC_THRESHOLD:
+                # Found first significant movement between i and i+1
+                # Real start is the last static point, which is i (the point before the jump)
+                real_start = i
+                break
+        
+        # Find real end: look backwards for the last significant movement
+        # The real end is the first point at the destination (after movement ends)
+        # Example: movement ends between points i-1 and i, real end is point i
+        real_end = len(polyline) - 1
+        for i in range(len(polyline) - 1, 0, -1):
+            distance = haversine_distance(polyline[i - 1], polyline[i])
+            if distance > STATIC_THRESHOLD:
+                # Found last significant movement between i-1 and i
+                # Real end is the first point at destination, which is i
+                real_end = i
+                break
+        
+        return real_start, real_end
+    
+    def _split_at_invalid_segments(self, polyline: list) -> list:
+        """
+        Split polyline at invalid segments (>1000m).
+        
+        Args:
+            polyline: List of GPS coordinates
+            
+        Returns:
+            List of polyline segments (each segment is a list of points)
+        """
+        if not polyline or len(polyline) < 2:
+            return [polyline] if polyline else []
+        
+        # Validate to find invalid segments
+        validation_result = validate_trip_segments(polyline)
+        invalid_indices = set(validation_result.invalid_segment_indices)
+        
+        if not invalid_indices:
+            # No invalid segments, return original as single segment
+            return [polyline]
+        
+        # Split at invalid segments
+        segments = []
+        current_segment = [polyline[0]]  # Start with first point
+        
+        for i in range(1, len(polyline)):
+            # If previous segment (i-1 to i) is invalid, start a new segment
+            if (i - 1) in invalid_indices:
+                # End current segment (don't include the point after invalid segment)
+                if len(current_segment) > 0:
+                    segments.append(current_segment)
+                # Start new segment with current point
+                current_segment = [polyline[i]]
+            else:
+                # Continue current segment
+                current_segment.append(polyline[i])
+        
+        # Add the last segment
+        if len(current_segment) > 0:
+            segments.append(current_segment)
+        
+        return segments
     
     def _load_trip_polyline(self, csv_path: str, trip_num: int) -> list:
         """Load a specific trip's polyline from the CSV file."""
@@ -2362,27 +2579,32 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
                         return []
         return []
     
-    def _draw_route_on_map(self, polyline: list, route_num: int):
-        """Draw the route on the map with colored points and validated segments."""
-        from PySide6.QtWidgets import QGraphicsEllipseItem, QGraphicsTextItem
-        from PySide6.QtGui import QBrush, QPen, QColor, QFont
+    def _draw_route_on_map(self, segments_or_polyline, route_num: int):
+        """Draw the route on the map with colored points and validated segments.
         
+        Args:
+            segments_or_polyline: Either a single polyline (list) or list of segments (list of lists)
+            route_num: Route number for display
+        """
+        from PySide6.QtGui import QBrush, QColor, QFont, QPen
+        from PySide6.QtWidgets import QGraphicsEllipseItem, QGraphicsTextItem
+
         # Store route items for later clearing
         self._route_items = []
         
-        # Validate the trip segments
-        validation_result = validate_trip_segments(polyline)
-        invalid_segment_set = set(validation_result.invalid_segment_indices)
-        
-        # Log validation results
-        if not validation_result.is_valid:
-            self.log(f"⚠️ Route #{route_num} has {validation_result.invalid_segment_count} invalid segment(s) (>500m)")
-            for idx in validation_result.invalid_segment_indices:
-                seg = validation_result.segment_validations[idx]
-                self.log(f"   → Segment {idx+1}-{idx+2}: {seg.distance_meters:.1f}m")
-        
-        # Convert GPS coordinates to SUMO coordinates (with Y-flip to match network display)
-        sumo_points = []
+        # Handle both single polyline and multiple segments
+        # Check if first element is a list of lists (multiple segments) or a single coordinate pair
+        if (segments_or_polyline and 
+            len(segments_or_polyline) > 0 and 
+            isinstance(segments_or_polyline[0], list) and 
+            len(segments_or_polyline[0]) > 0 and
+            isinstance(segments_or_polyline[0][0], (list, tuple)) and
+            len(segments_or_polyline[0][0]) == 2):
+            # Multiple segments (list of polylines)
+            segments = segments_or_polyline
+        else:
+            # Single polyline
+            segments = [segments_or_polyline]
         
         # Get Y bounds for flipping (to match the flipped network map)
         y_min = getattr(self.map_view, '_network_y_min', 0)
@@ -2392,82 +2614,108 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
             """Flip Y coordinate to match network display orientation."""
             return y_max + y_min - y
         
-        for lon, lat in polyline:
-            result = self.network_parser.gps_to_sumo_coords(lon, lat)
-            if result is not None:
-                sumo_x, sumo_y = result
-                # Flip Y to match the flipped network map
-                sumo_points.append((sumo_x, flip_y(sumo_y)))
+        # Different colors for each segment
+        segment_colors = [
+            QColor(33, 150, 243),   # Blue
+            QColor(76, 175, 80),    # Green
+            QColor(255, 152, 0),    # Orange
+            QColor(156, 39, 176),   # Purple
+            QColor(244, 67, 54),    # Red
+            QColor(0, 188, 212),    # Cyan
+            QColor(255, 235, 59),   # Yellow
+            QColor(121, 85, 72),    # Brown
+        ]
         
-        if not sumo_points:
-            self.log("Could not convert GPS points to map coordinates")
-            return
+        all_sumo_points = []  # For zoom calculation
+        point_counter = 1  # Global point counter across all segments
         
-        # Draw lines connecting points (red for invalid segments)
-        for i in range(len(sumo_points) - 1):
-            x1, y1 = sumo_points[i]
-            x2, y2 = sumo_points[i + 1]
+        # Process each segment
+        for seg_idx, polyline in enumerate(segments):
+            if not polyline or len(polyline) < 2:
+                continue
             
-            # Use red color for invalid segments, blue for valid
-            if i in invalid_segment_set:
-                line_color = QColor(244, 67, 54, 220)  # Red for invalid
-                line_width = 8  # Slightly thicker for emphasis
-            else:
-                line_color = QColor(100, 100, 255, 200)  # Blue for valid
-                line_width = 6
+            # Validate the trip segments
+            validation_result = validate_trip_segments(polyline)
             
-            line = self.map_view.scene.addLine(
-                x1, y1, x2, y2,
-                QPen(line_color, line_width)
-            )
-            line.setZValue(5)  # Above network, below points
-            self._route_items.append(line)
+            # Log validation results
+            if not validation_result.is_valid:
+                self.log(f"⚠️ Route #{route_num} Segment {seg_idx + 1} has {validation_result.invalid_segment_count} invalid segment(s) (>1000m)")
+            
+            # Convert GPS coordinates to SUMO coordinates
+            sumo_points = []
+            for lon, lat in polyline:
+                result = self.network_parser.gps_to_sumo_coords(lon, lat)
+                if result is not None:
+                    sumo_x, sumo_y = result
+                    # Flip Y to match the flipped network map
+                    sumo_points.append((sumo_x, flip_y(sumo_y)))
+            
+            if not sumo_points:
+                continue
+            
+            all_sumo_points.extend(sumo_points)
+            
+            # Get color for this segment
+            segment_color = segment_colors[seg_idx % len(segment_colors)]
+            line_color = QColor(segment_color.red(), segment_color.green(), segment_color.blue(), 200)
+            
+            # Draw lines connecting points
+            for i in range(len(sumo_points) - 1):
+                x1, y1 = sumo_points[i]
+                x2, y2 = sumo_points[i + 1]
+                
+                line = self.map_view.scene.addLine(
+                    x1, y1, x2, y2,
+                    QPen(line_color, 6)
+                )
+                line.setZValue(5)  # Above network, below points
+                self._route_items.append(line)
+            
+            # Point size and font settings
+            point_size = 60
+            font = QFont("Arial", 20, QFont.Bold)
+            
+            # Draw points with numbers
+            for i, (x, y) in enumerate(sumo_points):
+                # Determine color based on position within segment
+                if i == 0:
+                    # First point of segment - Green
+                    color = QColor(76, 175, 80)  # Green
+                elif i == len(sumo_points) - 1:
+                    # Last point of segment - Red
+                    color = QColor(244, 67, 54)  # Red
+                else:
+                    # Middle points - Use segment color
+                    color = segment_color
+                
+                # Create point circle
+                ellipse = QGraphicsEllipseItem(
+                    x - point_size/2, y - point_size/2,
+                    point_size, point_size
+                )
+                ellipse.setBrush(QBrush(color))
+                ellipse.setPen(QPen(QColor(255, 255, 255), 3))  # White border
+                ellipse.setZValue(10)  # On top
+                self.map_view.scene.addItem(ellipse)
+                self._route_items.append(ellipse)
+                
+                # Create point number text
+                text = QGraphicsTextItem(str(point_counter))
+                text.setFont(font)
+                text.setDefaultTextColor(QColor(255, 255, 255))
+                # Center text on point
+                text_rect = text.boundingRect()
+                text.setPos(x - text_rect.width()/2, y - text_rect.height()/2)
+                text.setZValue(11)  # Above points
+                self.map_view.scene.addItem(text)
+                self._route_items.append(text)
+                
+                point_counter += 1
         
-        # Point size and font settings (5x larger points)
-        point_size = 60
-        font = QFont("Arial", 20, QFont.Bold)
-        
-        # Draw points with numbers
-        for i, (x, y) in enumerate(sumo_points):
-            point_num = i + 1
-            
-            # Determine color based on position
-            if i == 0:
-                # First point - Green
-                color = QColor(76, 175, 80)  # Green
-            elif i == len(sumo_points) - 1:
-                # Last point - Red (end point)
-                color = QColor(244, 67, 54)  # Red
-            else:
-                # Middle points - Blue
-                color = QColor(33, 150, 243)  # Blue
-            
-            # Create point circle
-            ellipse = QGraphicsEllipseItem(
-                x - point_size/2, y - point_size/2,
-                point_size, point_size
-            )
-            ellipse.setBrush(QBrush(color))
-            ellipse.setPen(QPen(QColor(255, 255, 255), 3))  # Thicker white border
-            ellipse.setZValue(10)  # On top
-            self.map_view.scene.addItem(ellipse)
-            self._route_items.append(ellipse)
-            
-            # Create point number text
-            text = QGraphicsTextItem(str(point_num))
-            text.setFont(font)
-            text.setDefaultTextColor(QColor(255, 255, 255))
-            # Center text on point
-            text_rect = text.boundingRect()
-            text.setPos(x - text_rect.width()/2, y - text_rect.height()/2)
-            text.setZValue(11)  # Above points
-            self.map_view.scene.addItem(text)
-            self._route_items.append(text)
-        
-        # Zoom to fit the route
-        if sumo_points:
-            xs = [p[0] for p in sumo_points]
-            ys = [p[1] for p in sumo_points]
+        # Zoom to fit all segments
+        if all_sumo_points:
+            xs = [p[0] for p in all_sumo_points]
+            ys = [p[1] for p in all_sumo_points]
             margin = 100  # Add margin around route
             from PySide6.QtCore import QRectF
             rect = QRectF(
@@ -2476,8 +2724,10 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
             )
             self.map_view.fitInView(rect, Qt.KeepAspectRatio)
         
-        # Return validation result for UI updates
-        return validation_result
+        # Return validation result for UI updates (from first segment or combined)
+        if segments:
+            return validate_trip_segments(segments[0])
+        return None
     
     def clear_route_display(self):
         """Clear the displayed route from the map."""

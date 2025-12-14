@@ -6,7 +6,7 @@ where the distance between consecutive GPS points exceeds reasonable thresholds.
 """
 
 import math
-from typing import List, Tuple, Dict, Optional, NamedTuple
+from typing import Dict, List, NamedTuple, Optional, Tuple
 
 
 class SegmentValidation(NamedTuple):
@@ -27,7 +27,7 @@ class TripValidationResult(NamedTuple):
 
 
 # Default maximum distance between consecutive GPS points (in meters)
-DEFAULT_MAX_SEGMENT_DISTANCE = 500.0
+DEFAULT_MAX_SEGMENT_DISTANCE = 1000.0
 
 
 def haversine_distance(lon1: float, lat1: float, lon2: float, lat2: float) -> float:
@@ -190,6 +190,8 @@ def get_trip_statistics(polyline: List[List[float]]) -> Dict:
         'min_segment_distance': min(distances),
         'max_segment_distance': max(distances),
     }
+
+
 
 
 
