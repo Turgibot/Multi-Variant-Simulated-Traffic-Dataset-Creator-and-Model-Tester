@@ -2681,19 +2681,15 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
             line_color = QColor(segment_color.red(), segment_color.green(), segment_color.blue(), 200)
             
             # Draw lines connecting points
-            # For single polyline with invalid segments, need to map indices correctly
-            segment_start_idx = sum(len(segments[j]) for j in range(seg_idx)) if is_multiple_segments else 0
-            
             for i in range(len(sumo_points) - 1):
                 x1, y1 = sumo_points[i]
                 x2, y2 = sumo_points[i + 1]
                 
                 # Determine if this segment is invalid (only for single polyline mode)
                 is_invalid = False
-                if show_invalid_in_red and not is_multiple_segments:
-                    # Check if segment i is invalid in original polyline
-                    original_idx = segment_start_idx + i
-                    is_invalid = original_idx in invalid_segment_set
+                if show_invalid_in_red and not is_multiple_segments and seg_idx == 0:
+                    # For single polyline, check if segment i is invalid
+                    is_invalid = i in invalid_segment_set
                 
                 # Use red for invalid segments, segment color for valid
                 if is_invalid:
@@ -2716,27 +2712,41 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
             
             # Draw points with numbers
             for i, (x, y) in enumerate(sumo_points):
-                # Determine color based on position within segment
-                if i == 0:
-                    # First point of segment - Green
-                    color = QColor(76, 175, 80)  # Green
-                elif i == len(sumo_points) - 1:
-                    # Last point of segment - Red
-                    color = QColor(244, 67, 54)  # Red
-                else:
-                    # Middle points - Use segment color
-                    color = segment_color
+                is_start = (i == 0)
+                is_end = (i == len(sumo_points) - 1)
                 
-                # Create point circle
-                ellipse = QGraphicsEllipseItem(
-                    x - point_size/2, y - point_size/2,
-                    point_size, point_size
+                # Outer circle: segment color for start/end, segment color for middle
+                outer_color = segment_color
+                outer_size = point_size
+                
+                # Create outer point circle
+                outer_ellipse = QGraphicsEllipseItem(
+                    x - outer_size/2, y - outer_size/2,
+                    outer_size, outer_size
                 )
-                ellipse.setBrush(QBrush(color))
-                ellipse.setPen(QPen(QColor(255, 255, 255), 3))  # White border
-                ellipse.setZValue(10)  # On top
-                self.map_view.scene.addItem(ellipse)
-                self._route_items.append(ellipse)
+                outer_ellipse.setBrush(QBrush(outer_color))
+                outer_ellipse.setPen(QPen(QColor(255, 255, 255), 3))  # White border
+                outer_ellipse.setZValue(10)  # On top
+                self.map_view.scene.addItem(outer_ellipse)
+                self._route_items.append(outer_ellipse)
+                
+                # Inner circle for start (green) and end (red) points
+                if is_start or is_end:
+                    inner_size = point_size * 0.5  # Half the size of outer circle
+                    if is_start:
+                        inner_color = QColor(76, 175, 80)  # Green for start
+                    else:
+                        inner_color = QColor(244, 67, 54)  # Red for end
+                    
+                    inner_ellipse = QGraphicsEllipseItem(
+                        x - inner_size/2, y - inner_size/2,
+                        inner_size, inner_size
+                    )
+                    inner_ellipse.setBrush(QBrush(inner_color))
+                    inner_ellipse.setPen(QPen(QColor(255, 255, 255), 2))  # White border
+                    inner_ellipse.setZValue(11)  # Above outer circle
+                    self.map_view.scene.addItem(inner_ellipse)
+                    self._route_items.append(inner_ellipse)
                 
                 # Create point number text
                 text = QGraphicsTextItem(str(point_counter))
@@ -2745,7 +2755,7 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
                 # Center text on point
                 text_rect = text.boundingRect()
                 text.setPos(x - text_rect.width()/2, y - text_rect.height()/2)
-                text.setZValue(11)  # Above points
+                text.setZValue(12)  # Above everything
                 self.map_view.scene.addItem(text)
                 self._route_items.append(text)
                 

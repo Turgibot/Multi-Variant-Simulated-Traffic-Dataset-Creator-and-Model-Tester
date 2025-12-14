@@ -131,3 +131,5 @@ site/
 *.lprof
 *.pstats
 Porto/dataset/train.csv
+
+Porto/dataset/invalid_trips.csv
