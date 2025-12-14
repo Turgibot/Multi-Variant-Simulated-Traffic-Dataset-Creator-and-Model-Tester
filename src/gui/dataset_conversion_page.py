@@ -2403,31 +2403,42 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
                 # Clear previous route
                 self.clear_route_display()
                 
+                # Get validation result before splitting (for invalid segments info)
+                original_validation = validate_trip_segments(polyline) if polyline else None
+                
                 # Draw route on map (returns validation result)
-                validation_result = self._draw_route_on_map(segments, route_num)
+                validation_result = self._draw_route_on_map(
+                    segments, 
+                    route_num, 
+                    show_invalid_in_red=not self.fix_invalid_segments_checkbox.isChecked(),
+                    original_polyline=polyline if not self.fix_invalid_segments_checkbox.isChecked() else None
+                )
                 
                 # Build info text with validation status
                 repair_info = ""
                 if self.fix_route_checkbox.isChecked() and original_length != len(polyline):
                     repair_info = f" (Trimmed: {original_length} → {len(polyline)} points)"
                 
-                segment_info = ""
+                # Build route info text
                 if self.fix_invalid_segments_checkbox.isChecked() and len(segments) > 1:
                     total_points = sum(len(seg) for seg in segments)
-                    segment_info = f" | Split into {len(segments)} segments ({total_points} total points)"
-                
-                if validation_result and not validation_result.is_valid and not self.fix_invalid_segments_checkbox.isChecked():
+                    route_info_lines = [
+                        f"Route #{route_num}: {len(polyline)} points{repair_info}",
+                        f"Invalid segments: {original_validation.invalid_segment_count if original_validation else 0}",
+                        f"New routes: {len(segments)} segments ({total_points} total points)"
+                    ]
+                    self.route_info_label.setText("\n".join(route_info_lines))
+                    self.route_info_label.setStyleSheet("color: #4CAF50; font-size: 9px; font-weight: bold;")
+                elif validation_result and not validation_result.is_valid:
                     self.route_info_label.setText(
-                        f"Route #{route_num}: {len(polyline)} points{repair_info}{segment_info} | "
+                        f"Route #{route_num}: {len(polyline)} points{repair_info} | "
                         f"⚠️ {validation_result.invalid_segment_count} invalid segment(s)"
                     )
                     self.route_info_label.setStyleSheet("color: #f44336; font-size: 9px; font-weight: bold;")
                 else:
-                    if self.fix_invalid_segments_checkbox.isChecked():
-                        status_text = f"Route #{route_num}: {len(segments)} segment(s){segment_info} ✅"
-                    else:
-                        status_text = f"Route #{route_num}: {len(polyline)} GPS points{repair_info} ✅"
-                    self.route_info_label.setText(status_text)
+                    self.route_info_label.setText(
+                        f"Route #{route_num}: {len(polyline)} GPS points{repair_info} ✅"
+                    )
                     self.route_info_label.setStyleSheet("color: #4CAF50; font-size: 9px; font-weight: bold;")
                 
                 log_msg = f"Route #{route_num} displayed"
@@ -2579,12 +2590,14 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
                         return []
         return []
     
-    def _draw_route_on_map(self, segments_or_polyline, route_num: int):
+    def _draw_route_on_map(self, segments_or_polyline, route_num: int, show_invalid_in_red: bool = False, original_polyline: list = None):
         """Draw the route on the map with colored points and validated segments.
         
         Args:
             segments_or_polyline: Either a single polyline (list) or list of segments (list of lists)
             route_num: Route number for display
+            show_invalid_in_red: If True, show invalid segments in red (when not fixing)
+            original_polyline: Original polyline before splitting (for invalid segment detection)
         """
         from PySide6.QtGui import QBrush, QColor, QFont, QPen
         from PySide6.QtWidgets import QGraphicsEllipseItem, QGraphicsTextItem
@@ -2602,9 +2615,17 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
             len(segments_or_polyline[0][0]) == 2):
             # Multiple segments (list of polylines)
             segments = segments_or_polyline
+            is_multiple_segments = True
         else:
             # Single polyline
             segments = [segments_or_polyline]
+            is_multiple_segments = False
+        
+        # Get invalid segment indices if showing invalid in red
+        invalid_segment_set = set()
+        if show_invalid_in_red and original_polyline:
+            validation_result = validate_trip_segments(original_polyline)
+            invalid_segment_set = set(validation_result.invalid_segment_indices)
         
         # Get Y bounds for flipping (to match the flipped network map)
         y_min = getattr(self.map_view, '_network_y_min', 0)
@@ -2660,13 +2681,31 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
             line_color = QColor(segment_color.red(), segment_color.green(), segment_color.blue(), 200)
             
             # Draw lines connecting points
+            # For single polyline with invalid segments, need to map indices correctly
+            segment_start_idx = sum(len(segments[j]) for j in range(seg_idx)) if is_multiple_segments else 0
+            
             for i in range(len(sumo_points) - 1):
                 x1, y1 = sumo_points[i]
                 x2, y2 = sumo_points[i + 1]
                 
+                # Determine if this segment is invalid (only for single polyline mode)
+                is_invalid = False
+                if show_invalid_in_red and not is_multiple_segments:
+                    # Check if segment i is invalid in original polyline
+                    original_idx = segment_start_idx + i
+                    is_invalid = original_idx in invalid_segment_set
+                
+                # Use red for invalid segments, segment color for valid
+                if is_invalid:
+                    line_color_use = QColor(244, 67, 54, 220)  # Red for invalid
+                    line_width = 8
+                else:
+                    line_color_use = line_color
+                    line_width = 6
+                
                 line = self.map_view.scene.addLine(
                     x1, y1, x2, y2,
-                    QPen(line_color, 6)
+                    QPen(line_color_use, line_width)
                 )
                 line.setZValue(5)  # Above network, below points
                 self._route_items.append(line)
