@@ -192,6 +192,117 @@ def get_trip_statistics(polyline: List[List[float]]) -> Dict:
     }
 
 
+# Default threshold for considering points as "static" (in meters)
+DEFAULT_STATIC_THRESHOLD = 15.0
 
 
+def detect_real_start_and_end(
+    polyline: List[List[float]], 
+    static_threshold: float = DEFAULT_STATIC_THRESHOLD
+) -> Tuple[int, int]:
+    """
+    Detect real start and end points by finding where static points end.
+    
+    For taxi datasets:
+    - Real start: The last point before movement begins (after static pickup points)
+    - Real end: The first point at destination (before static dropoff points)
+    
+    Args:
+        polyline: List of [longitude, latitude] points
+        static_threshold: Distance threshold in meters for considering points as static
+    
+    Returns:
+        Tuple of (real_start_index, real_end_index)
+    
+    Example:
+        >>> polyline = [[-8.585676, 41.148522], [-8.585712, 41.148639], ...]
+        >>> start_idx, end_idx = detect_real_start_and_end(polyline)
+        >>> trimmed = polyline[start_idx:end_idx + 1]
+    """
+    if not polyline or len(polyline) < 3:
+        return 0, len(polyline) - 1 if polyline else 0
+    
+    # Find real start: look for the first significant movement
+    # The real start is the last point before movement begins
+    # Example: points 0,1,2,3 are static, point 4 is distant -> real start is point 3 (index 3)
+    real_start = 0
+    for i in range(len(polyline) - 1):
+        lon1, lat1 = polyline[i]
+        lon2, lat2 = polyline[i + 1]
+        distance = haversine_distance(lon1, lat1, lon2, lat2)
+        if distance > static_threshold:
+            # Found first significant movement between i and i+1
+            # Real start is the last static point, which is i (the point before the jump)
+            real_start = i
+            break
+    
+    # Find real end: look backwards for the last significant movement
+    # The real end is the first point at the destination (after movement ends)
+    # Example: movement ends between points i-1 and i, real end is point i
+    real_end = len(polyline) - 1
+    for i in range(len(polyline) - 1, 0, -1):
+        lon1, lat1 = polyline[i - 1]
+        lon2, lat2 = polyline[i]
+        distance = haversine_distance(lon1, lat1, lon2, lat2)
+        if distance > static_threshold:
+            # Found last significant movement between i-1 and i
+            # Real end is the first point at destination, which is i
+            real_end = i
+            break
+    
+    return real_start, real_end
+
+
+def split_at_invalid_segments(
+    polyline: List[List[float]],
+    max_segment_distance: float = DEFAULT_MAX_SEGMENT_DISTANCE
+) -> List[List[List[float]]]:
+    """
+    Split polyline at invalid segments (where distance > max_segment_distance).
+    
+    Args:
+        polyline: List of [longitude, latitude] points
+        max_segment_distance: Maximum allowed distance between consecutive points (meters)
+    
+    Returns:
+        List of polyline segments (each segment is a list of [lon, lat] points)
+    
+    Example:
+        >>> polyline = [[-8.585676, 41.148522], [-8.585712, 41.148639], ...]
+        >>> segments = split_at_invalid_segments(polyline)
+        >>> for seg in segments:
+        ...     print(f"Segment has {len(seg)} points")
+    """
+    if not polyline or len(polyline) < 2:
+        return [polyline] if polyline else []
+    
+    # Validate to find invalid segments
+    validation_result = validate_trip_segments(polyline, max_segment_distance)
+    invalid_indices = set(validation_result.invalid_segment_indices)
+    
+    if not invalid_indices:
+        # No invalid segments, return original as single segment
+        return [polyline]
+    
+    # Split at invalid segments
+    segments = []
+    current_segment = [polyline[0]]  # Start with first point
+    
+    for i in range(1, len(polyline)):
+        # If previous segment (i-1 to i) is invalid, start a new segment
+        if (i - 1) in invalid_indices:
+            # End current segment (don't include the point after invalid segment)
+            if len(current_segment) > 0:
+                segments.append(current_segment)
+            # Start new segment with current point
+            current_segment = [polyline[i]]
+        else:
+            # Continue current segment
+            current_segment.append(polyline[i])
+    
+    # Add the last segment
+    if len(current_segment) > 0:
+        segments.append(current_segment)
+    
+    return segments
 

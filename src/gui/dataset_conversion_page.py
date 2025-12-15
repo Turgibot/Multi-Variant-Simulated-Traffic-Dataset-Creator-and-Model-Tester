@@ -1270,24 +1270,9 @@ class DatasetConversionPage(QWidget):
         route_group_layout.addWidget(self.route_info_label)
         
         # ---- Route Repair Subsection ----
-        repair_layout = QHBoxLayout()
-        repair_layout.setSpacing(8)
-        
-        # Trim Start/End checkbox (on the left)
-        self.fix_route_checkbox = QCheckBox("Trim Start/End")
-        self.fix_route_checkbox.setToolTip("Use real start and destination points instead of original pickup/dropoff points")
-        self.fix_route_checkbox.setStyleSheet("""
-            QCheckBox {
-                color: #333;
-                font-size: 10px;
-            }
-            QCheckBox::indicator {
-                width: 16px;
-                height: 16px;
-            }
-        """)
-        self.fix_route_checkbox.stateChanged.connect(self._on_fix_route_changed)
-        repair_layout.addWidget(self.fix_route_checkbox)
+        # Line 1: Fix Invalid Segments checkbox + fix information
+        repair_line1_layout = QHBoxLayout()
+        repair_line1_layout.setSpacing(8)
         
         # Fix Invalid Segments checkbox
         self.fix_invalid_segments_checkbox = QCheckBox("Fix Invalid Segments")
@@ -1303,21 +1288,48 @@ class DatasetConversionPage(QWidget):
             }
         """)
         self.fix_invalid_segments_checkbox.stateChanged.connect(self._on_fix_route_changed)
-        repair_layout.addWidget(self.fix_invalid_segments_checkbox)
+        repair_line1_layout.addWidget(self.fix_invalid_segments_checkbox)
+        
+        # Invalid segments fix info label
+        self.invalid_segments_info_label = QLabel("")
+        self.invalid_segments_info_label.setStyleSheet("color: #333; font-size: 10px;")
+        repair_line1_layout.addWidget(self.invalid_segments_info_label)
+        
+        repair_line1_layout.addStretch()
+        route_group_layout.addLayout(repair_line1_layout)
+        
+        # Line 2: Trim Start/End checkbox + Real Start/Destination labels
+        repair_line2_layout = QHBoxLayout()
+        repair_line2_layout.setSpacing(8)
+        
+        # Trim Start/End checkbox (on the left)
+        self.fix_route_checkbox = QCheckBox("Trim Start/End")
+        self.fix_route_checkbox.setToolTip("Use real start and destination points instead of original pickup/dropoff points")
+        self.fix_route_checkbox.setStyleSheet("""
+            QCheckBox {
+                color: #333;
+                font-size: 10px;
+            }
+            QCheckBox::indicator {
+                width: 16px;
+                height: 16px;
+            }
+        """)
+        self.fix_route_checkbox.stateChanged.connect(self._on_fix_route_changed)
+        repair_line2_layout.addWidget(self.fix_route_checkbox)
         
         # Real start point label
         self.real_start_label = QLabel("Real Start: N/A")
         self.real_start_label.setStyleSheet("color: #333; font-size: 10px;")
-        repair_layout.addWidget(self.real_start_label)
+        repair_line2_layout.addWidget(self.real_start_label)
         
         # Real destination point label
         self.real_destination_label = QLabel("Real Destination: N/A")
         self.real_destination_label.setStyleSheet("color: #333; font-size: 10px;")
-        repair_layout.addWidget(self.real_destination_label)
+        repair_line2_layout.addWidget(self.real_destination_label)
         
-        repair_layout.addStretch()
-        
-        route_group_layout.addLayout(repair_layout)
+        repair_line2_layout.addStretch()
+        route_group_layout.addLayout(repair_line2_layout)
         
         self.route_group.setLayout(route_group_layout)
         self.route_group.setVisible(False)  # Hidden until map and dataset ready
@@ -2365,71 +2377,82 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
             polyline = self._load_trip_polyline(train_path, route_num)
             
             if polyline and len(polyline) >= 2:
-                # Detect real start and end points
-                real_start_idx, real_end_idx = self._detect_real_start_and_end(polyline)
+                # Store original polyline before any modifications
+                original_polyline = polyline.copy()
+                original_length = len(original_polyline)
+                
+                # Detect real start and end points (always detect, for display purposes)
+                real_start_idx, real_end_idx = self._detect_real_start_and_end(original_polyline)
                 
                 # Update labels (without coordinates)
-                if real_start_idx < len(polyline):
+                if real_start_idx < len(original_polyline):
                     self.real_start_label.setText(f"Real Start: Point {real_start_idx + 1}")
                 else:
                     self.real_start_label.setText("Real Start: N/A")
                 
-                if real_end_idx < len(polyline):
+                if real_end_idx < len(original_polyline):
                     self.real_destination_label.setText(f"Real Destination: Point {real_end_idx + 1}")
                 else:
                     self.real_destination_label.setText("Real Destination: N/A")
                 
-                # Store original length
-                original_length = len(polyline)
-                
-                # Apply route repair if checkbox is checked
+                # Apply route repair if checkbox is checked, otherwise use original
                 if self.fix_route_checkbox.isChecked():
-                    polyline = polyline[real_start_idx:real_end_idx + 1]
+                    polyline = original_polyline[real_start_idx:real_end_idx + 1]
+                else:
+                    polyline = original_polyline  # Use untrimmed route
                 
                 # Split at invalid segments if checkbox is checked
                 segments = [polyline]  # Default: single segment
                 if self.fix_invalid_segments_checkbox.isChecked():
                     segments = self._split_at_invalid_segments(polyline)
-                    # Apply trim start/end to each segment
-                    trimmed_segments = []
-                    for segment in segments:
-                        if len(segment) >= 2:
-                            seg_start, seg_end = self._detect_real_start_and_end(segment)
-                            trimmed_seg = segment[seg_start:seg_end + 1]
-                            if len(trimmed_seg) >= 2:  # Only add if has at least 2 points
-                                trimmed_segments.append(trimmed_seg)
-                    segments = trimmed_segments if trimmed_segments else segments
+                    # Apply trim start/end to each segment if trim checkbox is also checked
+                    if self.fix_route_checkbox.isChecked():
+                        trimmed_segments = []
+                        for segment in segments:
+                            if len(segment) >= 2:
+                                seg_start, seg_end = self._detect_real_start_and_end(segment)
+                                trimmed_seg = segment[seg_start:seg_end + 1]
+                                if len(trimmed_seg) >= 2:  # Only add if has at least 2 points
+                                    trimmed_segments.append(trimmed_seg)
+                        segments = trimmed_segments if trimmed_segments else segments
                 
                 # Clear previous route
                 self.clear_route_display()
                 
-                # Get validation result before splitting (for invalid segments info)
-                original_validation = validate_trip_segments(polyline) if polyline else None
+                # Get validation result from original polyline (for invalid segments info)
+                original_validation = validate_trip_segments(original_polyline) if original_polyline else None
+                
+                # Update invalid segments info label
+                if self.fix_invalid_segments_checkbox.isChecked() and original_validation:
+                    invalid_count = original_validation.invalid_segment_count
+                    if len(segments) > 1:
+                        total_points = sum(len(seg) for seg in segments)
+                        self.invalid_segments_info_label.setText(
+                            f"Invalid segments: {invalid_count} | New routes: {len(segments)} segments ({total_points} total points)"
+                        )
+                    else:
+                        self.invalid_segments_info_label.setText(f"Invalid segments: {invalid_count} | No split needed")
+                else:
+                    self.invalid_segments_info_label.setText("")
                 
                 # Draw route on map (returns validation result)
+                # Use original_polyline for invalid segment detection when not fixing
+                display_polyline = original_polyline if not self.fix_invalid_segments_checkbox.isChecked() else None
                 validation_result = self._draw_route_on_map(
                     segments, 
                     route_num, 
                     show_invalid_in_red=not self.fix_invalid_segments_checkbox.isChecked(),
-                    original_polyline=polyline if not self.fix_invalid_segments_checkbox.isChecked() else None
+                    original_polyline=display_polyline
                 )
                 
-                # Build info text with validation status
-                repair_info = ""
-                if self.fix_route_checkbox.isChecked() and original_length != len(polyline):
-                    repair_info = f" (Trimmed: {original_length} → {len(polyline)} points)"
-                
                 # Build route info text
-                if self.fix_invalid_segments_checkbox.isChecked() and len(segments) > 1:
-                    total_points = sum(len(seg) for seg in segments)
-                    route_info_lines = [
-                        f"Route #{route_num}: {len(polyline)} points{repair_info}",
-                        f"Invalid segments: {original_validation.invalid_segment_count if original_validation else 0}",
-                        f"New routes: {len(segments)} segments ({total_points} total points)"
-                    ]
-                    self.route_info_label.setText("\n".join(route_info_lines))
-                    self.route_info_label.setStyleSheet("color: #4CAF50; font-size: 9px; font-weight: bold;")
-                elif validation_result and not validation_result.is_valid:
+                repair_info = ""
+                if self.fix_route_checkbox.isChecked():
+                    repair_info = f" (Trimmed: {original_length} → {len(polyline)} points)"
+                else:
+                    repair_info = f" (Original: {original_length} points)"
+                
+                if validation_result and not validation_result.is_valid and not self.fix_invalid_segments_checkbox.isChecked():
                     self.route_info_label.setText(
                         f"Route #{route_num}: {len(polyline)} points{repair_info} | "
                         f"⚠️ {validation_result.invalid_segment_count} invalid segment(s)"
@@ -2680,16 +2703,22 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
             segment_color = segment_colors[seg_idx % len(segment_colors)]
             line_color = QColor(segment_color.red(), segment_color.green(), segment_color.blue(), 200)
             
+            # Validate this segment to find invalid segments within it
+            segment_validation = validate_trip_segments(polyline)
+            segment_invalid_indices = set(segment_validation.invalid_segment_indices)
+            
             # Draw lines connecting points
             for i in range(len(sumo_points) - 1):
                 x1, y1 = sumo_points[i]
                 x2, y2 = sumo_points[i + 1]
                 
-                # Determine if this segment is invalid (only for single polyline mode)
-                is_invalid = False
+                # Check if this segment is invalid
+                is_invalid = i in segment_invalid_indices
+                
+                # Also check original polyline invalid segments if showing single polyline
                 if show_invalid_in_red and not is_multiple_segments and seg_idx == 0:
-                    # For single polyline, check if segment i is invalid
-                    is_invalid = i in invalid_segment_set
+                    # For single polyline, also check original invalid segments
+                    is_invalid = is_invalid or (i in invalid_segment_set)
                 
                 # Use red for invalid segments, segment color for valid
                 if is_invalid:
@@ -2732,7 +2761,7 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
                 
                 # Inner circle for start (green) and end (red) points
                 if is_start or is_end:
-                    inner_size = point_size * 0.5  # Half the size of outer circle
+                    inner_size = point_size * 0.75  # 75% of outer circle size for better visibility
                     if is_start:
                         inner_color = QColor(76, 175, 80)  # Green for start
                     else:
@@ -2785,5 +2814,7 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
                 self.map_view.scene.removeItem(item)
             self._route_items = []
             self.route_info_label.setText("Route cleared")
+            if hasattr(self, 'invalid_segments_info_label'):
+                self.invalid_segments_info_label.setText("")
             self.log("Route display cleared")
 
