@@ -39,6 +39,12 @@ class NetworkParser:
         self.proj_parameter = None  # Projection parameters from network file
         self.transformer = None  # PyProj transformer if available
         
+        # Adjustment factors for fine-tuning coordinate conversion
+        self.conv_adjust_x = 0.0  # Adjustment to normalized X position (-1 to 1)
+        self.conv_adjust_y = 0.0  # Adjustment to normalized Y position (-1 to 1)
+        self.conv_scale_x = 1.0   # Scale factor for X dimension
+        self.conv_scale_y = 1.0   # Scale factor for Y dimension
+        
         self._parse()
     
     def _parse(self):
@@ -85,19 +91,39 @@ class NetworkParser:
                     pass
                 
                 # Initialize coordinate transformer if pyproj is available
+                # Now using improved method: pyproj for accurate projection, then map to convBoundary
                 if PYPROJ_AVAILABLE and self.proj_parameter:
                     try:
                         # Create transformer from WGS84 (GPS) to network projection
                         wgs84 = pyproj.CRS('EPSG:4326')  # WGS84 (GPS coordinates)
                         network_proj = pyproj.CRS.from_string(self.proj_parameter)
                         self.transformer = pyproj.Transformer.from_crs(wgs84, network_proj, always_xy=True)
-                    except Exception:
+                        print(f"✓ Pyproj transformer initialized: {self.proj_parameter}")
+                        print(f"  Using projection-aware conversion (handles distortion at edges)")
+                    except Exception as e:
+                        print(f"⚠️ Failed to initialize pyproj transformer: {e}")
+                        print(f"   Proj parameter: {self.proj_parameter}")
+                        print(f"   Falling back to linear interpolation")
                         self.transformer = None
+                else:
+                    self.transformer = None
+                    if not PYPROJ_AVAILABLE:
+                        print("⚠️ Pyproj not available, using linear interpolation")
+                    elif not self.proj_parameter:
+                        print("⚠️ Network file missing projParameter, using linear interpolation")
                 
                 # Parse converted boundary (SUMO coordinates)
+                # Store original convBoundary separately - needed for GPS-to-SUMO conversion
                 try:
                     conv_parts = [float(x) for x in conv_boundary.split(',')]
                     if len(conv_parts) >= 4:
+                        self.conv_boundary = {
+                            'x_min': conv_parts[0],
+                            'y_min': conv_parts[1],
+                            'x_max': conv_parts[2],
+                            'y_max': conv_parts[3]
+                        }
+                        # Also set bounds initially (will be recalculated from actual edges later)
                         self.bounds = {
                             'x_min': conv_parts[0],
                             'y_min': conv_parts[1],
@@ -105,7 +131,7 @@ class NetworkParser:
                             'y_max': conv_parts[3]
                         }
                 except (ValueError, IndexError):
-                    pass
+                    self.conv_boundary = None
             
             # Parse nodes
             for node in root.findall('node'):
@@ -128,9 +154,10 @@ class NetworkParser:
                 to_node = edge.get('to')
                 priority_str = edge.get('priority')
                 
-                # Skip internal edges (edges with ':' in ID are internal junction connections)
-                if ':' in edge_id:
-                    continue
+                # DO NOT skip internal edges - load everything from XML
+                # Internal edges (with ':' in ID) are still valid edges in the network
+                # if ':' in edge_id:
+                #     continue
                 
                 # Skip edges without required attributes (from, to, priority)
                 if not from_node or not to_node or priority_str is None:
@@ -213,26 +240,63 @@ class NetworkParser:
                 x = float(junction.get('x', 0))
                 y = float(junction.get('y', 0))
                 junction_type = junction.get('type', '')
+                shape_str = junction.get('shape', '')
+                
+                # Parse junction shape if available
+                shape_points = []
+                if shape_str:
+                    coords = shape_str.split()
+                    for coord in coords:
+                        try:
+                            x_coord, y_coord = map(float, coord.split(','))
+                            shape_points.append((x_coord, y_coord))
+                        except (ValueError, IndexError):
+                            continue
                 
                 self.junctions[junction_id] = {
                     'id': junction_id,
                     'x': x,
                     'y': y,
-                    'type': junction_type
+                    'type': junction_type,
+                    'shape': shape_points  # Store actual junction shape polygon
                 }
             
-            # If bounds not found, calculate from nodes/junctions
-            if self.bounds is None:
-                all_x = [n['x'] for n in self.nodes.values()] + [j['x'] for j in self.junctions.values()]
-                all_y = [n['y'] for n in self.nodes.values()] + [j['y'] for j in self.junctions.values()]
+            # Calculate actual bounds from all network elements (edges, nodes, junctions)
+            # This ensures bounds match what's actually drawn, not just convBoundary
+            all_x = []
+            all_y = []
+            
+            # Add node coordinates
+            for n in self.nodes.values():
+                all_x.append(n['x'])
+                all_y.append(n['y'])
+            
+            # Add junction coordinates
+            for j in self.junctions.values():
+                all_x.append(j['x'])
+                all_y.append(j['y'])
+            
+            # Add edge shape coordinates (most important - this is what's actually drawn)
+            for edge_data in self.edges.values():
+                lanes = edge_data.get('lanes', [])
+                for lane in lanes:
+                    shape = lane.get('shape', [])
+                    for x, y in shape:
+                        all_x.append(x)
+                        all_y.append(y)
+            
+            # Calculate actual bounds from all coordinates
+            if all_x and all_y:
+                actual_bounds = {
+                    'x_min': min(all_x),
+                    'y_min': min(all_y),
+                    'x_max': max(all_x),
+                    'y_max': max(all_y)
+                }
                 
-                if all_x and all_y:
-                    self.bounds = {
-                        'x_min': min(all_x),
-                        'y_min': min(all_y),
-                        'x_max': max(all_x),
-                        'y_max': max(all_y)
-                    }
+                # Use actual bounds instead of convBoundary for better alignment
+                # convBoundary might include padding that the actual network doesn't use
+                self.bounds = actual_bounds
         
         except ET.ParseError as e:
             raise ValueError(f"Failed to parse network file: {e}")
@@ -255,7 +319,7 @@ class NetworkParser:
         """Get all junctions."""
         return self.junctions
     
-    def gps_to_sumo_coords(self, lon: float, lat: float) -> Optional[Tuple[float, float]]:
+    def gps_to_sumo_coords(self, lon: float, lat: float, force_linear: bool = False) -> Optional[Tuple[float, float]]:
         """
         Convert GPS coordinates (longitude, latitude) to SUMO network coordinates (x, y).
         
@@ -273,7 +337,71 @@ class NetworkParser:
         Returns:
             Tuple of (x, y) in SUMO coordinates, or None if conversion not possible
         """
-        if not self.orig_boundary or not self.bounds:
+        # Use improved projection-aware conversion
+        # SUMO's convBoundary is in its internal coordinate system, not raw projected coordinates
+        # So we use pyproj to get accurate relative positions, then map to convBoundary
+        if self.transformer is not None and not force_linear and self.orig_boundary and self.conv_boundary:
+            try:
+                # Transform GPS (WGS84) to network projection coordinates
+                proj_x, proj_y = self.transformer.transform(lon, lat)
+                
+                # Validate transformed coordinates
+                if not (math.isfinite(proj_x) and math.isfinite(proj_y)):
+                    raise ValueError(f"Invalid coordinates from transformer: ({proj_x}, {proj_y})")
+                
+                # Transform the corners of origBoundary to get the projected bounds
+                # This gives us the actual projected coordinate range
+                sw_lon, sw_lat = self.orig_boundary['lon_min'], self.orig_boundary['lat_min']
+                ne_lon, ne_lat = self.orig_boundary['lon_max'], self.orig_boundary['lat_max']
+                
+                sw_proj_x, sw_proj_y = self.transformer.transform(sw_lon, sw_lat)
+                ne_proj_x, ne_proj_y = self.transformer.transform(ne_lon, ne_lat)
+                
+                # Calculate normalized position within projected bounds
+                proj_x_min = min(sw_proj_x, ne_proj_x)
+                proj_x_max = max(sw_proj_x, ne_proj_x)
+                proj_y_min = min(sw_proj_y, ne_proj_y)
+                proj_y_max = max(sw_proj_y, ne_proj_y)
+                
+                if proj_x_max == proj_x_min or proj_y_max == proj_y_min:
+                    raise ValueError("Invalid projected bounds")
+                
+                # Normalize position within projected bounds
+                proj_x_norm = (proj_x - proj_x_min) / (proj_x_max - proj_x_min)
+                proj_y_norm = (proj_y - proj_y_min) / (proj_y_max - proj_y_min)
+                
+                # Apply adjustment factors (scale and offset to normalized position)
+                proj_x_norm = (proj_x_norm * self.conv_scale_x) + self.conv_adjust_x
+                proj_y_norm = (proj_y_norm * self.conv_scale_y) + self.conv_adjust_y
+                
+                # Clamp to valid range [0, 1] after adjustments
+                proj_x_norm = max(0.0, min(1.0, proj_x_norm))
+                proj_y_norm = max(0.0, min(1.0, proj_y_norm))
+                
+                # Map normalized position to convBoundary (SUMO's internal coordinate system)
+                x = self.conv_boundary['x_min'] + proj_x_norm * (self.conv_boundary['x_max'] - self.conv_boundary['x_min'])
+                y = self.conv_boundary['y_min'] + proj_y_norm * (self.conv_boundary['y_max'] - self.conv_boundary['y_min'])
+                
+                # Validate final coordinates
+                if not (math.isfinite(x) and math.isfinite(y)):
+                    raise ValueError(f"Invalid coordinates after mapping: ({x}, {y})")
+                
+                return (x, y)
+            except Exception as e:
+                # If transformation fails, fall back to linear interpolation
+                # #region agent log
+                try:
+                    with open('/home/guy/Projects/Traffic/Multi-Variant-Simulated-Traffic-Dataset-Creator-and-Model-Tester/.cursor/debug.log', 'a') as f:
+                        import json
+                        f.write(json.dumps({"sessionId":"debug-session","runId":"proj-fix-v2","hypothesisId":"D","location":"network_parser.py:gps_to_sumo_coords","message":"Pyproj transformation failed, using fallback","data":{"error":str(e),"gps":(lon,lat)},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+                except:
+                    pass
+                # #endregion
+                pass
+        
+        # Fallback: Use linear interpolation (less accurate, especially at edges)
+        # Use conv_boundary (original convBoundary) for conversion, not bounds (which are from actual edges)
+        if not self.orig_boundary or not self.conv_boundary:
             return None
         
         # Use linear interpolation: map GPS coordinates (origBoundary) directly to network coordinates (convBoundary)
@@ -283,11 +411,11 @@ class NetworkParser:
         lat_min = self.orig_boundary['lat_min']
         lat_max = self.orig_boundary['lat_max']
         
-        # convBoundary represents network coordinates directly
-        net_x_min = self.bounds['x_min']
-        net_x_max = self.bounds['x_max']
-        net_y_min = self.bounds['y_min']
-        net_y_max = self.bounds['y_max']
+        # convBoundary represents network coordinates directly - use original convBoundary, not recalculated bounds
+        net_x_min = self.conv_boundary['x_min']
+        net_x_max = self.conv_boundary['x_max']
+        net_y_min = self.conv_boundary['y_min']
+        net_y_max = self.conv_boundary['y_max']
         
         # Check for valid boundaries
         if lon_max == lon_min or lat_max == lat_min:
@@ -297,9 +425,23 @@ class NetworkParser:
         lon_norm = (lon - lon_min) / (lon_max - lon_min)
         lat_norm = (lat - lat_min) / (lat_max - lat_min)
         
+        # Apply adjustment factors (scale and offset to normalized position)
+        lon_norm = (lon_norm * self.conv_scale_x) + self.conv_adjust_x
+        lat_norm = (lat_norm * self.conv_scale_y) + self.conv_adjust_y
+        
+        # Clamp to valid range [0, 1] after adjustments
+        lon_norm = max(0.0, min(1.0, lon_norm))
+        lat_norm = max(0.0, min(1.0, lat_norm))
+        
         # Map normalized position directly to network coordinates (convBoundary)
         x = net_x_min + lon_norm * (net_x_max - net_x_min)
         y = net_y_min + lat_norm * (net_y_max - net_y_min)
+        
+        # #region agent log
+        with open('/home/guy/Projects/Traffic/Multi-Variant-Simulated-Traffic-Dataset-Creator-and-Model-Tester/.cursor/debug.log', 'a') as f:
+            import json
+            f.write(json.dumps({"sessionId":"debug-session","runId":"proj-fix","hypothesisId":"C","location":"network_parser.py:gps_to_sumo_coords","message":"Using linear interpolation fallback","data":{"gps":(lon,lat),"sumo":(x,y),"orig_boundary":self.orig_boundary,"conv_boundary":self.conv_boundary,"bounds":self.bounds,"lon_norm":lon_norm,"lat_norm":lat_norm,"method":"linear","transformer_available":self.transformer is not None,"proj_parameter":self.proj_parameter},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+        # #endregion
         
         return (x, y)
     

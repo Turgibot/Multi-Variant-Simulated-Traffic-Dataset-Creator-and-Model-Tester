@@ -76,9 +76,25 @@ def main():
     check_qt_platform()
     
     # Import Qt after platform is set
+    from PySide6.QtCore import qInstallMessageHandler
     from PySide6.QtWidgets import QApplication
 
     from src.gui.main_window import MainWindow
+
+    # Suppress QPainter warnings (harmless but annoying)
+    # These warnings come from Qt's internal rendering with cached graphics items
+    original_handler = qInstallMessageHandler(None)  # Get default handler
+    
+    def message_handler(msg_type, context, message):
+        """Filter out QPainter warnings."""
+        # Suppress QPainter warnings about saved states
+        if "QPainter::end" in message and "saved states" in message:
+            return  # Suppress these warnings
+        # Use original handler for other messages
+        if original_handler:
+            original_handler(msg_type, context, message)
+    
+    qInstallMessageHandler(message_handler)
 
     # Create application
     app = QApplication.instance()

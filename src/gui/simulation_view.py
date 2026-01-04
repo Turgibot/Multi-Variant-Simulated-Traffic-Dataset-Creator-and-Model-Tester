@@ -6,22 +6,24 @@ import math
 import os
 import urllib.request
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Optional, Tuple
 
-from PySide6.QtWidgets import QGraphicsView, QGraphicsScene, QGraphicsItem, QGraphicsEllipseItem, QGraphicsPixmapItem
-from PySide6.QtCore import Qt, QPointF, QRectF, QThread, Signal
-from PySide6.QtGui import QPainter, QPen, QBrush, QColor, QWheelEvent, QPixmap, QImage
+from PySide6.QtCore import QPointF, QRectF, Qt, QThread, Signal
+from PySide6.QtGui import (QBrush, QColor, QImage, QPainter, QPen, QPixmap,
+                           QPolygonF, QWheelEvent)
+from PySide6.QtWidgets import (QGraphicsEllipseItem, QGraphicsItem,
+                               QGraphicsPixmapItem, QGraphicsPolygonItem,
+                               QGraphicsScene, QGraphicsView)
 
-
-# ESRI World Imagery tile URL
-ESRI_TILE_URL = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+# OpenStreetMap tile URL
+OSM_TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
 
 # Tile cache directory
-TILE_CACHE_DIR = Path.home() / ".cache" / "sumo_satellite_tiles"
+TILE_CACHE_DIR = Path.home() / ".cache" / "sumo_osm_tiles"
 
 
 class TileDownloadWorker(QThread):
-    """Worker thread for downloading satellite tiles."""
+    """Worker thread for downloading OSM map tiles."""
     
     tile_ready = Signal(int, int, int, QPixmap)  # z, x, y, pixmap
     all_done = Signal()
@@ -52,7 +54,7 @@ class TileDownloadWorker(QThread):
                     continue
             
             # Download tile
-            url = ESRI_TILE_URL.format(z=z, y=y, x=x)
+            url = OSM_TILE_URL.format(z=z, x=x, y=y)
             try:
                 req = urllib.request.Request(url, headers={
                     'User-Agent': 'SUMO-Traffic-Simulator/1.0'
@@ -87,29 +89,41 @@ class NetworkEdgeItem(QGraphicsItem):
         self.is_selected = False  # Whether this edge is selected/highlighted
         
         # Performance: Enable caching for static items
-        self.setCacheMode(QGraphicsItem.DeviceCoordinateCache)
+        # Use ItemCoordinateCache instead of DeviceCoordinateCache to avoid painter state warnings
+        self.setCacheMode(QGraphicsItem.ItemCoordinateCache)
         
         # Pre-compute line segments for faster drawing
+        # Use the first lane's shape to represent the edge (all lanes typically follow same path)
         self.line_segments = []
         all_points = []
+        num_lanes = len(edge_data.get('lanes', []))
         
         if edge_data['lanes']:
-            for lane in edge_data['lanes']:
-                shape_points = lane.get('shape', [])
-                all_points.extend(shape_points)
-                if len(shape_points) >= 2:
-                    for i in range(len(shape_points) - 1):
-                        self.line_segments.append((
-                            QPointF(shape_points[i][0], shape_points[i][1]),
-                            QPointF(shape_points[i+1][0], shape_points[i+1][1])
-                        ))
+            # Use first lane's shape (representative of the road)
+            first_lane = edge_data['lanes'][0]
+            shape_points = first_lane.get('shape', [])
+            all_points.extend(shape_points)
+            if len(shape_points) >= 2:
+                for i in range(len(shape_points) - 1):
+                    self.line_segments.append((
+                        QPointF(shape_points[i][0], shape_points[i][1]),
+                        QPointF(shape_points[i+1][0], shape_points[i+1][1])
+                    ))
+        
+        # Calculate line thickness based on number of lanes
+        # Base thickness: 1.5, add 0.5 per lane (min 1.5, scales with lanes)
+        base_thickness = 1.5
+        lane_thickness = 0.5
+        line_thickness = base_thickness + (num_lanes - 1) * lane_thickness
+        # Cap at reasonable maximum (e.g., 8 for very wide roads)
+        line_thickness = min(line_thickness, 8.0)
         
         # Calculate bounding rect
         if all_points:
             xs = [p[0] for p in all_points]
             ys = [p[1] for p in all_points]
-            # Add small margin for pen width
-            margin = 3
+            # Add margin based on line thickness
+            margin = max(3, int(line_thickness) + 1)
             self.bounding_rect = QRectF(
                 min(xs) - margin, min(ys) - margin,
                 max(xs) - min(xs) + 2*margin, max(ys) - min(ys) + 2*margin
@@ -117,9 +131,13 @@ class NetworkEdgeItem(QGraphicsItem):
         else:
             self.bounding_rect = QRectF(0, 0, 0, 0)
         
-        # Pre-create pens
-        self.normal_pen = QPen(QColor(100, 100, 100), 2)
-        self.selected_pen = QPen(QColor(50, 50, 50), 4)
+        # Store number of lanes for pen thickness
+        self.num_lanes = num_lanes
+        self.line_thickness = line_thickness
+        
+        # Pre-create pens with variable thickness
+        self.normal_pen = QPen(QColor(100, 100, 100), line_thickness)
+        self.selected_pen = QPen(QColor(50, 50, 50), line_thickness + 2)
     
     def set_selected(self, selected: bool):
         """Set whether this edge is selected/highlighted."""
@@ -132,37 +150,57 @@ class NetworkEdgeItem(QGraphicsItem):
     
     def paint(self, painter: QPainter, option, widget=None):
         """Paint the edge."""
-        painter.setPen(self.selected_pen if self.is_selected else self.normal_pen)
-        
-        # Draw pre-computed line segments
-        for p1, p2 in self.line_segments:
-            painter.drawLine(p1, p2)
+        # Save painter state to avoid warnings
+        painter.save()
+        try:
+            painter.setPen(self.selected_pen if self.is_selected else self.normal_pen)
+            
+            # Draw pre-computed line segments
+            for p1, p2 in self.line_segments:
+                painter.drawLine(p1, p2)
+        finally:
+            painter.restore()
 
 
-class NetworkNodeItem(QGraphicsEllipseItem):
-    """Graphics item for rendering a network node/junction."""
+class NetworkNodeItem(QGraphicsPolygonItem):
+    """Graphics item for rendering a network node/junction with its actual shape."""
     
-    def __init__(self, node_id: str, x: float, y: float, parent=None):
+    def __init__(self, node_id: str, x: float, y: float, shape_points: List[Tuple[float, float]] = None, parent=None):
         super().__init__(parent)
         self.node_id = node_id
         self.is_selected = False
-        self.setPos(x, y)
         self.setZValue(1)  # Above edges, below vehicles
         
         # Performance: Enable caching for static items
-        self.setCacheMode(QGraphicsItem.DeviceCoordinateCache)
-        
-        # Default size (small circle)
-        self.default_size = 3.0
-        self.selected_size = 6.0
-        self.setRect(-self.default_size/2, -self.default_size/2, 
-                    self.default_size, self.default_size)
+        self.setCacheMode(QGraphicsItem.ItemCoordinateCache)
         
         # Pre-create brushes and pens
         self.default_brush = QBrush(QColor(150, 150, 150))
         self.default_pen = QPen(QColor(100, 100, 100), 1)
         self.selected_brush = QBrush(QColor(50, 50, 50))
         self.selected_pen = QPen(QColor(30, 30, 30), 2)
+        
+        # Use actual junction shape if available, otherwise create a small circle
+        if shape_points and len(shape_points) >= 3:
+            # Create polygon from shape points (already in absolute coordinates)
+            polygon_points = [QPointF(px, py) for px, py in shape_points]
+            polygon = QPolygonF(polygon_points)
+            self.setPolygon(polygon)
+            # No need to set position - shape points are already absolute
+        else:
+            # Fallback: create a small circle for nodes without shape
+            default_size = 3.0
+            circle_points = []
+            num_points = 16  # Smooth circle
+            for i in range(num_points):
+                angle = 2 * math.pi * i / num_points
+                px = default_size / 2 * math.cos(angle)
+                py = default_size / 2 * math.sin(angle)
+                circle_points.append(QPointF(px, py))
+            polygon = QPolygonF(circle_points)
+            self.setPolygon(polygon)
+            # Center the circle at the node position
+            self.setPos(x, y)
         
         # Default appearance
         self.setBrush(self.default_brush)
@@ -173,15 +211,9 @@ class NetworkNodeItem(QGraphicsEllipseItem):
         if self.is_selected != selected:
             self.is_selected = selected
             if selected:
-                # Bigger circle for selected nodes
-                self.setRect(-self.selected_size/2, -self.selected_size/2,
-                           self.selected_size, self.selected_size)
                 self.setBrush(self.selected_brush)
                 self.setPen(self.selected_pen)
             else:
-                # Default size
-                self.setRect(-self.default_size/2, -self.default_size/2,
-                           self.default_size, self.default_size)
                 self.setBrush(self.default_brush)
                 self.setPen(self.default_pen)
 
@@ -216,7 +248,7 @@ class SimulationView(QGraphicsView):
     """Custom QGraphicsView for SUMO simulation rendering."""
     
     # Signals
-    satellite_loading_finished = Signal()
+    osm_map_loading_finished = Signal()
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -227,7 +259,9 @@ class SimulationView(QGraphicsView):
         self.setViewportUpdateMode(QGraphicsView.SmartViewportUpdate)
         self.setCacheMode(QGraphicsView.CacheBackground)
         self.setOptimizationFlag(QGraphicsView.DontAdjustForAntialiasing, True)
-        self.setOptimizationFlag(QGraphicsView.DontSavePainterState, True)
+        # Note: DontSavePainterState removed to avoid QPainter warnings
+        # The flag can cause "Painter ended with N saved states" warnings
+        # self.setOptimizationFlag(QGraphicsView.DontSavePainterState, True)
         
         # Disable antialiasing for better performance (can be enabled for smaller networks)
         # self.setRenderHint(QPainter.Antialiasing)
@@ -242,10 +276,10 @@ class SimulationView(QGraphicsView):
         self.scene.setItemIndexMethod(QGraphicsScene.BspTreeIndex)
         self.scene.setBspTreeDepth(16)  # Deeper tree for large networks
         
-        # Zoom settings
+        # Zoom settings - increased max_zoom to allow deeper zooming
         self.zoom_factor = 1.15
-        self.min_zoom = 0.1
-        self.max_zoom = 10.0
+        self.min_zoom = 0.01  # Allow zooming out more
+        self.max_zoom = 100.0  # Allow much deeper zooming (was 10.0)
         self.current_zoom = 1.0
         
         # Network items
@@ -253,11 +287,20 @@ class SimulationView(QGraphicsView):
         self.node_items = {}  # For rendering nodes/junctions
         self.vehicle_items = {}
         
-        # Satellite tile items
+        # OSM map tile items
         self.tile_items = {}  # Dict of (z, x, y) -> QGraphicsPixmapItem
         self.tile_worker = None
-        self.show_satellite = False
-        self.network_parser = None  # Store reference for satellite tiles
+        self.show_osm_map = False
+        self.network_parser = None  # Store reference for OSM tiles
+        
+        # Map offset for manual alignment adjustment
+        self.map_offset_x = 0.0
+        self.map_offset_y = 0.0
+        
+        # Map scaling factors to account for projection aspect ratio differences
+        # Web Mercator (OSM) vs UTM (network) have different scaling
+        self.map_scale_x = 1.0
+        self.map_scale_y = 1.0
         
         # Background color
         self.setBackgroundBrush(QBrush(QColor(240, 240, 240)))
@@ -272,23 +315,38 @@ class SimulationView(QGraphicsView):
         Args:
             network_parser: The NetworkParser instance containing the network data
             roads_junctions_only: If True, only show edges that allow passenger vehicles
-                                  and use junctions instead of all nodes
+                                  and use junctions instead of all nodes (default: False to show complete network)
         """
-        from PySide6.QtWidgets import QApplication
         import copy
-        
-        # Store network parser reference for satellite tiles
+
+        from PySide6.QtWidgets import QApplication
+
+        # Store network parser reference for OSM tiles
         self.network_parser = network_parser
-        
+
         # Clear existing items
         self.clear_network()
         
         # Get bounds for Y-flip calculation
-        # The network map needs to be flipped vertically to match satellite imagery
-        bounds = network_parser.get_bounds()
-        if bounds:
+        # Use conv_boundary for Y-flip to match the coordinate system used by GPS-to-SUMO conversion
+        # This ensures network, tiles, and GPS points all use the same coordinate system
+        conv_boundary = network_parser.conv_boundary
+        bounds = network_parser.get_bounds()  # Keep for fitInView
+        
+        if conv_boundary:
+            # Use convBoundary bounds for Y-flip (matches GPS-to-SUMO conversion coordinate system)
+            self._network_y_min = conv_boundary['y_min']
+            self._network_y_max = conv_boundary['y_max']
+        elif bounds:
+            # Fallback to recalculated bounds if convBoundary not available
             self._network_y_min = bounds['y_min']
             self._network_y_max = bounds['y_max']
+        
+        # #region agent log
+        with open('/home/guy/Projects/Traffic/Multi-Variant-Simulated-Traffic-Dataset-Creator-and-Model-Tester/.cursor/debug.log', 'a') as f:
+            import json
+            f.write(json.dumps({"sessionId":"debug-session","runId":"post-fix3","hypothesisId":"E","location":"simulation_view.py:load_network","message":"Network Y-flip bounds set","data":{"conv_boundary":conv_boundary,"bounds":bounds,"y_min":self._network_y_min,"y_max":self._network_y_max},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+        # #endregion
         
         def flip_y(y):
             """Flip Y coordinate to correct north/south orientation."""
@@ -296,10 +354,19 @@ class SimulationView(QGraphicsView):
             return self._network_y_max + self._network_y_min - y
         
         # Disable updates during loading for better performance
-        self.setUpdatesEnabled(False)
+        try:
+            self.setUpdatesEnabled(False)
+        except RuntimeError:
+            # View was deleted, abort
+            return
         
         # Temporarily disable indexing for faster batch insertion
-        self.scene.setItemIndexMethod(QGraphicsScene.NoIndex)
+        try:
+            if self.scene is not None:
+                self.scene.setItemIndexMethod(QGraphicsScene.NoIndex)
+        except RuntimeError:
+            # Scene was deleted, abort
+            return
         
         try:
             # Add edges (optionally filtered to roads only)
@@ -307,63 +374,124 @@ class SimulationView(QGraphicsView):
             edge_count = 0
             batch_size = 500  # Process events every N items
             
+            # #region agent log - Sample first edge to compare coordinates
+            first_edge_logged = False
+            # #endregion
+            
             for edge_id, edge_data in edges.items():
-                # Filter by roads_junctions_only: only show edges that allow passenger vehicles
-                if roads_junctions_only:
-                    if not edge_data.get('allows_passenger', True):
-                        continue
+                # Filter to roads only if requested: only show edges that allow passenger vehicles
+                if roads_junctions_only and not edge_data.get('allows_passenger', True):
+                    continue
                 
                 # Create a copy of edge_data with flipped Y coordinates
                 flipped_edge_data = copy.deepcopy(edge_data)
                 if flipped_edge_data.get('lanes'):
                     for lane in flipped_edge_data['lanes']:
                         if lane.get('shape'):
+                            # #region agent log - Log first edge coordinates
+                            if not first_edge_logged and len(lane['shape']) > 0:
+                                orig_x, orig_y = lane['shape'][0]
+                                flipped_y = flip_y(orig_y)
+                                # Convert a GPS point at the same location for comparison
+                                orig_boundary = network_parser.orig_boundary
+                                if orig_boundary:
+                                    # Estimate GPS from SUMO (reverse conversion)
+                                    conv_boundary = network_parser.conv_boundary
+                                    if conv_boundary:
+                                        lon_norm = (orig_x - conv_boundary['x_min']) / (conv_boundary['x_max'] - conv_boundary['x_min']) if conv_boundary['x_max'] != conv_boundary['x_min'] else 0
+                                        lat_norm = (orig_y - conv_boundary['y_min']) / (conv_boundary['y_max'] - conv_boundary['y_min']) if conv_boundary['y_max'] != conv_boundary['y_min'] else 0
+                                        test_lon = orig_boundary['lon_min'] + lon_norm * (orig_boundary['lon_max'] - orig_boundary['lon_min'])
+                                        test_lat = orig_boundary['lat_min'] + lat_norm * (orig_boundary['lat_max'] - orig_boundary['lat_min'])
+                                        gps_to_sumo = network_parser.gps_to_sumo_coords(test_lon, test_lat)
+                                        if gps_to_sumo:
+                                            gps_sumo_x, gps_sumo_y = gps_to_sumo
+                                            gps_sumo_y_flipped = flip_y(gps_sumo_y)
+                                            with open('/home/guy/Projects/Traffic/Multi-Variant-Simulated-Traffic-Dataset-Creator-and-Model-Tester/.cursor/debug.log', 'a') as f:
+                                                import json
+                                                f.write(json.dumps({"sessionId":"debug-session","runId":"post-fix4","hypothesisId":"F","location":"simulation_view.py:load_network","message":"Network edge vs GPS conversion comparison","data":{"edge_orig":(orig_x,orig_y),"edge_flipped_y":flipped_y,"gps_est":(test_lon,test_lat),"gps_to_sumo":gps_to_sumo,"gps_sumo_flipped_y":gps_sumo_y_flipped,"y_flip_bounds":(self._network_y_min,self._network_y_max)},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+                                            first_edge_logged = True
+                            # #endregion
                             lane['shape'] = [(x, flip_y(y)) for x, y in lane['shape']]
                 
                 edge_item = NetworkEdgeItem(flipped_edge_data)
-                self.scene.addItem(edge_item)
-                self.edge_items[edge_id] = edge_item
+                try:
+                    if self.scene is not None:
+                        self.scene.addItem(edge_item)
+                        self.edge_items[edge_id] = edge_item
+                    else:
+                        break  # Scene deleted, stop processing
+                except RuntimeError:
+                    break  # Scene deleted, stop processing
                 
                 # Process events periodically to keep UI responsive
                 edge_count += 1
                 if edge_count % batch_size == 0:
                     QApplication.processEvents()
             
-            # Add nodes or junctions as circles
+            # Show all nodes (not just junctions) for complete network display
             node_count = 0
-            if roads_junctions_only:
-                # Use junctions instead of nodes when filtering
-                junctions = network_parser.get_junctions()
-                for junction_id, junction_data in junctions.items():
-                    x = junction_data.get('x', 0)
-                    y = flip_y(junction_data.get('y', 0))
-                    node_item = NetworkNodeItem(junction_id, x, y)
-                    self.scene.addItem(node_item)
-                    self.node_items[junction_id] = node_item
-                    
-                    node_count += 1
-                    if node_count % batch_size == 0:
-                        QApplication.processEvents()
-            else:
-                # Use all nodes
-                nodes = network_parser.get_nodes()
-                for node_id, node_data in nodes.items():
-                    x = node_data.get('x', 0)
-                    y = flip_y(node_data.get('y', 0))
-                    node_item = NetworkNodeItem(node_id, x, y)
-                    self.scene.addItem(node_item)
-                    self.node_items[node_id] = node_item
-                    
-                    node_count += 1
-                    if node_count % batch_size == 0:
-                        QApplication.processEvents()
+            nodes = network_parser.get_nodes()
+            junctions = network_parser.get_junctions()
+            
+            # Use all nodes if available, otherwise fall back to junctions
+            nodes_to_display = nodes if nodes else junctions
+            
+            for node_id, node_data in nodes_to_display.items():
+                x = node_data.get('x', 0)
+                y = flip_y(node_data.get('y', 0))
+                # Get junction shape if available (flip Y coordinates)
+                shape_points = node_data.get('shape', [])
+                if shape_points:
+                    flipped_shape = [(px, flip_y(py)) for px, py in shape_points]
+                else:
+                    flipped_shape = None
+                node_item = NetworkNodeItem(node_id, x, y, shape_points=flipped_shape)
+                try:
+                    if self.scene is not None:
+                        self.scene.addItem(node_item)
+                        self.node_items[node_id] = node_item
+                    else:
+                        break  # Scene deleted, stop processing
+                except RuntimeError:
+                    break  # Scene deleted, stop processing
+                
+                node_count += 1
+                if node_count % batch_size == 0:
+                    QApplication.processEvents()
         finally:
             # Re-enable BSP indexing after loading
-            self.scene.setItemIndexMethod(QGraphicsScene.BspTreeIndex)
-            self.setUpdatesEnabled(True)
+            # Check if scene still exists (it might have been deleted)
+            try:
+                if self.scene is not None:
+                    self.scene.setItemIndexMethod(QGraphicsScene.BspTreeIndex)
+            except RuntimeError:
+                # Scene was deleted, skip
+                pass
+            try:
+                self.setUpdatesEnabled(True)
+            except RuntimeError:
+                # View was deleted, skip
+                pass
         
-        # Fit view to network bounds (bounds stay the same, just content is flipped)
-        if bounds:
+        # Fit view to network bounds
+        # Use conv_boundary bounds for fitInView to match the coordinate system
+        if conv_boundary:
+            # #region agent log
+            with open('/home/guy/Projects/Traffic/Multi-Variant-Simulated-Traffic-Dataset-Creator-and-Model-Tester/.cursor/debug.log', 'a') as f:
+                import json
+                f.write(json.dumps({"sessionId":"debug-session","runId":"post-fix4","hypothesisId":"G","location":"simulation_view.py:load_network","message":"fitInView bounds","data":{"using_conv_boundary":conv_boundary,"recalculated_bounds":bounds},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+            # #endregion
+            
+            # Use conv_boundary for fitInView to match coordinate system
+            rect = QRectF(
+                conv_boundary['x_min'],
+                conv_boundary['y_min'],
+                conv_boundary['x_max'] - conv_boundary['x_min'],
+                conv_boundary['y_max'] - conv_boundary['y_min']
+            )
+            self.fitInView(rect, Qt.KeepAspectRatio)
+            self.current_zoom = 1.0
+        elif bounds:
             rect = QRectF(
                 bounds['x_min'],
                 bounds['y_min'],
@@ -383,25 +511,58 @@ class SimulationView(QGraphicsView):
         self.node_items.clear()
         self.clear_vehicles()
     
-    def set_satellite_visible(self, visible: bool):
-        """Show or hide satellite imagery.
+    def set_network_visible(self, visible: bool):
+        """Show or hide the SUMO network (edges and nodes).
         
         Args:
-            visible: True to show satellite imagery, False to hide
+            visible: True to show network, False to hide
         """
-        self.show_satellite = visible
+        for edge_item in self.edge_items.values():
+            edge_item.setVisible(visible)
+        for node_item in self.node_items.values():
+            node_item.setVisible(visible)
+    
+    def set_map_offset(self, x_offset: float, y_offset: float):
+        """Set map offset for manual alignment adjustment.
+        
+        Args:
+            x_offset: X offset in meters (positive = move map right)
+            y_offset: Y offset in meters (positive = move map down)
+        """
+        old_x = self.map_offset_x
+        old_y = self.map_offset_y
+        self.map_offset_x = x_offset
+        self.map_offset_y = y_offset
+        
+        # If tiles are already loaded, reposition them with the new offset
+        if self.show_osm_map and self.tile_items:
+            # Calculate offset difference and apply to all tiles
+            delta_x = x_offset - old_x
+            delta_y = y_offset - old_y
+            
+            for item in self.tile_items.values():
+                current_pos = item.pos()
+                item.setPos(current_pos.x() + delta_x, current_pos.y() + delta_y)
+    
+    def set_osm_map_visible(self, visible: bool):
+        """Show or hide OSM map tiles.
+        
+        Args:
+            visible: True to show OSM map, False to hide
+        """
+        self.show_osm_map = visible
         
         if visible:
-            # Load satellite tiles
-            self._load_satellite_tiles()
+            # Load OSM tiles
+            self._load_osm_tiles()
         else:
-            # Clear satellite tiles
-            self._clear_satellite_tiles()
+            # Clear OSM tiles
+            self._clear_osm_tiles()
             # Reset background color
             self.setBackgroundBrush(QBrush(QColor(240, 240, 240)))
     
-    def _clear_satellite_tiles(self):
-        """Clear all satellite tile items."""
+    def _clear_osm_tiles(self):
+        """Clear all OSM tile items."""
         # Cancel any ongoing download
         if self.tile_worker and self.tile_worker.isRunning():
             self.tile_worker.cancel()
@@ -411,17 +572,42 @@ class SimulationView(QGraphicsView):
             self.scene.removeItem(item)
         self.tile_items.clear()
     
-    def _load_satellite_tiles(self):
-        """Load satellite tiles for the current network area."""
+    def _load_osm_tiles(self):
+        """Load OSM map tiles for the current network area."""
         if not self.network_parser:
             return
         
         orig_boundary = self.network_parser.orig_boundary
         bounds = self.network_parser.get_bounds()
+        conv_boundary = self.network_parser.conv_boundary
         
-        if not orig_boundary or not bounds:
-            print("Cannot load satellite tiles: missing boundary information")
+        if not orig_boundary or not bounds or not conv_boundary:
+            print("Cannot load OSM tiles: missing boundary information")
             return
+        
+        # Note: Scaling is now handled in the coordinate conversion (gps_to_sumo_coords)
+        # which uses pyproj to properly account for projection differences
+        # The map_scale_x and map_scale_y are kept for potential manual fine-tuning if needed
+        
+        # Calculate actual network extent in GPS coordinates (not origBoundary which may be larger)
+        # Convert network bounds (recalculated from edges) to GPS coordinates
+        lon_norm_sw = (bounds['x_min'] - conv_boundary['x_min']) / (conv_boundary['x_max'] - conv_boundary['x_min']) if conv_boundary['x_max'] != conv_boundary['x_min'] else 0
+        lat_norm_sw = (bounds['y_min'] - conv_boundary['y_min']) / (conv_boundary['y_max'] - conv_boundary['y_min']) if conv_boundary['y_max'] != conv_boundary['y_min'] else 0
+        network_lon_min = orig_boundary['lon_min'] + lon_norm_sw * (orig_boundary['lon_max'] - orig_boundary['lon_min'])
+        network_lat_min = orig_boundary['lat_min'] + lat_norm_sw * (orig_boundary['lat_max'] - orig_boundary['lat_min'])
+        
+        lon_norm_ne = (bounds['x_max'] - conv_boundary['x_min']) / (conv_boundary['x_max'] - conv_boundary['x_min']) if conv_boundary['x_max'] != conv_boundary['x_min'] else 1
+        lat_norm_ne = (bounds['y_max'] - conv_boundary['y_min']) / (conv_boundary['y_max'] - conv_boundary['y_min']) if conv_boundary['y_max'] != conv_boundary['y_min'] else 1
+        network_lon_max = orig_boundary['lon_min'] + lon_norm_ne * (orig_boundary['lon_max'] - orig_boundary['lon_min'])
+        network_lat_max = orig_boundary['lat_min'] + lat_norm_ne * (orig_boundary['lat_max'] - orig_boundary['lat_min'])
+        
+        # Use actual network GPS bounds for tile requests (not origBoundary)
+        network_gps_bounds = {
+            'lon_min': network_lon_min,
+            'lat_min': network_lat_min,
+            'lon_max': network_lon_max,
+            'lat_max': network_lat_max
+        }
         
         # Cancel any previous download
         if self.tile_worker and self.tile_worker.isRunning():
@@ -429,14 +615,14 @@ class SimulationView(QGraphicsView):
             self.tile_worker.wait()
         
         # Clear existing tiles
-        self._clear_satellite_tiles()
+        self._clear_osm_tiles()
         
-        # Set dark background while loading
-        self.setBackgroundBrush(QBrush(QColor(30, 30, 30)))
+        # Set light background while loading
+        self.setBackgroundBrush(QBrush(QColor(240, 240, 240)))
         
-        # Determine zoom level based on area size
-        lon_range = orig_boundary['lon_max'] - orig_boundary['lon_min']
-        lat_range = orig_boundary['lat_max'] - orig_boundary['lat_min']
+        # Determine zoom level based on actual network area size
+        lon_range = network_gps_bounds['lon_max'] - network_gps_bounds['lon_min']
+        lat_range = network_gps_bounds['lat_max'] - network_gps_bounds['lat_min']
         
         # Choose zoom level (higher = more detail, more tiles)
         # For Porto area (~0.5 degrees), zoom 13-14 works well
@@ -448,21 +634,34 @@ class SimulationView(QGraphicsView):
             zoom = 15
         
         # Get tile coordinates for the boundary
+        # #region agent log - Check what bounds are being used
+        with open('/home/guy/Projects/Traffic/Multi-Variant-Simulated-Traffic-Dataset-Creator-and-Model-Tester/.cursor/debug.log', 'a') as f:
+            import json
+            f.write(json.dumps({"sessionId":"debug-session","runId":"post-fix6","hypothesisId":"H","location":"simulation_view.py:_load_osm_tiles","message":"Tile request bounds comparison","data":{"orig_boundary":orig_boundary,"network_bounds":bounds,"conv_boundary":conv_boundary,"network_gps_bounds":network_gps_bounds,"zoom":zoom},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+        # #endregion
+        
         tiles_to_download = []
         
+        # Request tiles based on actual network GPS bounds (not origBoundary)
         min_tile_x, max_tile_y = self._gps_to_tile(
-            orig_boundary['lon_min'], orig_boundary['lat_min'], zoom
+            network_gps_bounds['lon_min'], network_gps_bounds['lat_min'], zoom
         )
         max_tile_x, min_tile_y = self._gps_to_tile(
-            orig_boundary['lon_max'], orig_boundary['lat_max'], zoom
+            network_gps_bounds['lon_max'], network_gps_bounds['lat_max'], zoom
         )
+        
+        # #region agent log
+        with open('/home/guy/Projects/Traffic/Multi-Variant-Simulated-Traffic-Dataset-Creator-and-Model-Tester/.cursor/debug.log', 'a') as f:
+            import json
+            f.write(json.dumps({"sessionId":"debug-session","runId":"post-fix6","hypothesisId":"H","location":"simulation_view.py:_load_osm_tiles","message":"Tile range","data":{"min_tile_x":min_tile_x,"max_tile_x":max_tile_x,"min_tile_y":min_tile_y,"max_tile_y":max_tile_y,"tile_count":(max_tile_x-min_tile_x+1)*(max_tile_y-min_tile_y+1)},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+        # #endregion
         
         # Collect all tiles in range
         for tx in range(min_tile_x, max_tile_x + 1):
             for ty in range(min_tile_y, max_tile_y + 1):
                 tiles_to_download.append((zoom, tx, ty))
         
-        print(f"Loading {len(tiles_to_download)} satellite tiles at zoom {zoom}")
+        print(f"Loading {len(tiles_to_download)} OSM tiles at zoom {zoom}")
         
         # Start download worker
         self.tile_worker = TileDownloadWorker(tiles_to_download)
@@ -506,14 +705,44 @@ class SimulationView(QGraphicsView):
     
     def _on_tile_ready(self, z: int, x: int, y: int, pixmap: QPixmap):
         """Handle a downloaded tile."""
-        if not self.show_satellite or not self.network_parser:
+        if not self.show_osm_map or not self.network_parser:
             return
         
         # Get the GPS bounds of this tile
         nw_lon, nw_lat = self._tile_to_gps(x, y, z)      # NW corner (top-left of tile)
         se_lon, se_lat = self._tile_to_gps(x + 1, y + 1, z)  # SE corner (bottom-right of tile)
         
-        # Convert GPS corners to SUMO coordinates
+        # Clip tile GPS bounds to actual network GPS bounds (calculated from network bounds)
+        # Calculate network GPS bounds from network bounds
+        network_bounds = self.network_parser.get_bounds()
+        conv_boundary = self.network_parser.conv_boundary
+        orig_boundary = self.network_parser.orig_boundary
+        
+        # Clip tile GPS bounds to network GPS bounds if available
+        # Use the network parser's gps_to_sumo_coords which now uses proper projection
+        # Don't do reverse linear interpolation - let gps_to_sumo_coords handle it properly
+        if network_bounds and conv_boundary and orig_boundary:
+            # Calculate actual network GPS extent using reverse conversion
+            # But use the same method as gps_to_sumo_coords for consistency
+            # For now, use linear interpolation for bounds calculation (this is just for clipping)
+            lon_norm_sw = (network_bounds['x_min'] - conv_boundary['x_min']) / (conv_boundary['x_max'] - conv_boundary['x_min']) if conv_boundary['x_max'] != conv_boundary['x_min'] else 0
+            lat_norm_sw = (network_bounds['y_min'] - conv_boundary['y_min']) / (conv_boundary['y_max'] - conv_boundary['y_min']) if conv_boundary['y_max'] != conv_boundary['y_min'] else 0
+            network_lon_min = orig_boundary['lon_min'] + lon_norm_sw * (orig_boundary['lon_max'] - orig_boundary['lon_min'])
+            network_lat_min = orig_boundary['lat_min'] + lat_norm_sw * (orig_boundary['lat_max'] - orig_boundary['lat_min'])
+            
+            lon_norm_ne = (network_bounds['x_max'] - conv_boundary['x_min']) / (conv_boundary['x_max'] - conv_boundary['x_min']) if conv_boundary['x_max'] != conv_boundary['x_min'] else 1
+            lat_norm_ne = (network_bounds['y_max'] - conv_boundary['y_min']) / (conv_boundary['y_max'] - conv_boundary['y_min']) if conv_boundary['y_max'] != conv_boundary['y_min'] else 1
+            network_lon_max = orig_boundary['lon_min'] + lon_norm_ne * (orig_boundary['lon_max'] - orig_boundary['lon_min'])
+            network_lat_max = orig_boundary['lat_min'] + lat_norm_ne * (orig_boundary['lat_max'] - orig_boundary['lat_min'])
+            
+            # Clip to network GPS bounds
+            nw_lon = max(nw_lon, network_lon_min)
+            nw_lat = min(nw_lat, network_lat_max)  # NW is top (max lat)
+            se_lon = min(se_lon, network_lon_max)
+            se_lat = max(se_lat, network_lat_min)  # SE is bottom (min lat)
+        
+        # Convert GPS corners to SUMO coordinates using proper projection transformation
+        # This now uses pyproj transformer if available, which handles projection distortion correctly
         nw_result = self.network_parser.gps_to_sumo_coords(nw_lon, nw_lat)
         se_result = self.network_parser.gps_to_sumo_coords(se_lon, se_lat)
         
@@ -523,12 +752,20 @@ class SimulationView(QGraphicsView):
         nw_x, nw_y = nw_result
         se_x, se_y = se_result
         
+        # Clip to network bounds (recalculated from actual edges)
+        network_bounds = self.network_parser.get_bounds()
+        if network_bounds:
+            nw_x = max(nw_x, network_bounds['x_min'])
+            se_x = min(se_x, network_bounds['x_max'])
+            nw_y = max(nw_y, network_bounds['y_min'])
+            se_y = min(se_y, network_bounds['y_max'])
+        
         # Apply the same Y-flip used for the network
         # flip_y(y) = y_max + y_min - y
         nw_y_flipped = self._network_y_max + self._network_y_min - nw_y
         se_y_flipped = self._network_y_max + self._network_y_min - se_y
         
-        # Calculate tile dimensions
+        # Calculate tile dimensions in SUMO coordinates
         tile_width = abs(se_x - nw_x)
         tile_height = abs(nw_y_flipped - se_y_flipped)
         
@@ -549,8 +786,9 @@ class SimulationView(QGraphicsView):
         
         # Position at the top-left corner in flipped coordinates
         # After Y-flip: nw_y_flipped < se_y_flipped (north is now at lower Y)
-        pos_x = min(nw_x, se_x)
-        pos_y = min(nw_y_flipped, se_y_flipped)
+        # Apply manual offset for alignment adjustment
+        pos_x = min(nw_x, se_x) + self.map_offset_x
+        pos_y = min(nw_y_flipped, se_y_flipped) + self.map_offset_y
         
         item.setPos(pos_x, pos_y)
         item.setZValue(-10)  # Behind everything else
@@ -560,8 +798,8 @@ class SimulationView(QGraphicsView):
     
     def _on_tiles_done(self):
         """Called when all tiles are downloaded."""
-        print(f"Satellite tiles loaded: {len(self.tile_items)} tiles")
-        self.satellite_loading_finished.emit()
+        print(f"OSM map tiles loaded: {len(self.tile_items)} tiles")
+        self.osm_map_loading_finished.emit()
     
     def set_selected_edges(self, edge_ids: set):
         """Set which edges are selected/highlighted."""
@@ -602,17 +840,17 @@ class SimulationView(QGraphicsView):
         else:
             zoom = 1 / self.zoom_factor
         
-        # Check zoom limits
+        # Check zoom limits (only min_zoom, no max_zoom limit for unlimited zoom in)
         new_zoom = self.current_zoom * zoom
-        if self.min_zoom <= new_zoom <= self.max_zoom:
+        if new_zoom >= self.min_zoom:
             self.scale(zoom, zoom)
             self.current_zoom = new_zoom
     
     def zoom_in(self):
-        """Zoom in programmatically."""
-        if self.current_zoom * self.zoom_factor <= self.max_zoom:
-            self.scale(self.zoom_factor, self.zoom_factor)
-            self.current_zoom *= self.zoom_factor
+        """Zoom in programmatically - unlimited zoom in."""
+        # No max_zoom limit - allow unlimited zooming in
+        self.scale(self.zoom_factor, self.zoom_factor)
+        self.current_zoom *= self.zoom_factor
     
     def zoom_out(self):
         """Zoom out programmatically."""

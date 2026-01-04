@@ -11,6 +11,8 @@ pandas>=2.0.0
 # Visualization
 matplotlib>=3.7.0
 plotly>=5.14.0
+seaborn>=0.13.0
+tqdm>=4.65.0
 
 # Machine Learning Model Support
 torch>=2.0.0

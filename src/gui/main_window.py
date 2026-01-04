@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (QApplication, QDialog, QFrame, QHBoxLayout, QLabe
 
 from src.gui.dataset_conversion_page import DatasetConversionPage
 from src.gui.dataset_generation_page import DatasetGenerationPage
+from src.gui.debug_trajectory_page import DebugTrajectoryPage
 from src.gui.project_dialog import NewProjectDialog
 from src.gui.route_generation_page import RouteGenerationPage
 from src.gui.simulation_page import SimulationPage
@@ -29,6 +30,7 @@ class WelcomePage(QWidget):
     model_testing_clicked = Signal(str)  # Emits project name
     new_project_created = Signal(str, str)  # Emits project name and type
     porto_conversion_clicked = Signal(str)  # Emits project name for Porto conversion
+    debug_trajectory_clicked = Signal(str)  # Emits project name for debug trajectory page
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -466,6 +468,27 @@ class WelcomePage(QWidget):
         )
         action_layout.addWidget(convert_btn)
         
+        # Debug Trajectory button (next to Dataset Conversion)
+        debug_btn = QPushButton("🔧 Debug Trajectory")
+        debug_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #9C27B0;
+                color: white;
+                border: none;
+                padding: 6px 12px;
+                border-radius: 4px;
+                font-weight: bold;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: #7B1FA2;
+            }
+        """)
+        debug_btn.clicked.connect(
+            lambda: self.debug_trajectory_clicked.emit(project['name'])
+        )
+        action_layout.addWidget(debug_btn)
+        
         # Model Testing button
         model_btn = QPushButton("Model Testing")
         model_btn.setStyleSheet("""
@@ -617,10 +640,14 @@ class MainWindow(QMainWindow):
         self.welcome_page.model_testing_clicked.connect(self.open_model_testing)
         self.welcome_page.new_project_created.connect(self.on_new_project_created)
         self.welcome_page.porto_conversion_clicked.connect(self.open_porto_conversion)
+        self.welcome_page.debug_trajectory_clicked.connect(self.open_debug_trajectory)
         self.central_widget.addWidget(self.welcome_page)
         
         # Porto conversion page (will be created when needed)
         self.porto_page = None
+        
+        # Debug trajectory page (will be created when needed)
+        self.debug_trajectory_page = None
         
         # Dataset generation page (will be created when needed)
         self.dataset_page = None
@@ -899,4 +926,48 @@ class MainWindow(QMainWindow):
         
         # Show Porto conversion page
         self.central_widget.setCurrentWidget(self.porto_page)
+    
+    def open_debug_trajectory(self, project_name: str):
+        """Open debug trajectory page for a project."""
+        # Get project info
+        project_info = self.welcome_page.project_manager.get_project_info(project_name)
+        if not project_info:
+            QMessageBox.warning(
+                self,
+                "Error",
+                f"Project '{project_name}' not found."
+            )
+            return
+        
+        project_path = project_info['path']
+        
+        # Check if project folder exists
+        if not Path(project_path).exists():
+            QMessageBox.warning(
+                self,
+                "Error",
+                f"Project folder does not exist: {project_path}"
+            )
+            return
+        
+        # Check if we need to recreate the debug page for the current project
+        debug_page_project = None
+        if self.debug_trajectory_page is not None:
+            debug_page_project = getattr(self.debug_trajectory_page, 'project_name', None)
+        
+        # Create or reuse debug trajectory page
+        if (self.debug_trajectory_page is None or debug_page_project != project_name):
+            # Remove old page if exists
+            if self.debug_trajectory_page is not None:
+                self.central_widget.removeWidget(self.debug_trajectory_page)
+                self.debug_trajectory_page.deleteLater()
+                self.debug_trajectory_page = None
+            
+            # Create new debug page
+            self.debug_trajectory_page = DebugTrajectoryPage(project_name, project_path)
+            self.debug_trajectory_page.back_clicked.connect(self.show_welcome)
+            self.central_widget.addWidget(self.debug_trajectory_page)
+        
+        # Show debug trajectory page
+        self.central_widget.setCurrentWidget(self.debug_trajectory_page)
 

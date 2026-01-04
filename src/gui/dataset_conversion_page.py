@@ -4,14 +4,16 @@ Provides map visualization and dataset conversion controls.
 """
 
 import json
+import math
 import os
 import subprocess
 import urllib.request
+from collections import defaultdict
 from pathlib import Path
-from typing import Tuple
+from typing import List, Optional, Tuple
 
 from PySide6.QtCore import QRectF, Qt, QThread, Signal
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (QCheckBox, QFileDialog, QFrame,
                                QGraphicsDropShadowEffect, QGroupBox,
                                QHBoxLayout, QLabel, QLineEdit, QMessageBox,
@@ -29,13 +31,104 @@ DEFAULT_SUMO_HOME = "/usr/share/sumo"
 # Settings file name
 SETTINGS_FILE = "porto_settings.json"
 
-# Porto bounding box coordinates (wider area to cover taxi routes)
+# Porto bounding box coordinates (updated to match the new centered network file)
+# Extracted from porto.net.xml origBoundary: lon_min,lat_min,lon_max,lat_max
 PORTO_BBOX = {
-    'north': 41.22,
-    'south': 41.10,
-    'east': -8.30,
-    'west': -8.80
+    'north': 41.271161,   # max_lat
+    'south': 41.071545,   # min_lat
+    'east': -8.295034,    # max_lon
+    'west': -8.716066     # min_lon
 }
+
+
+class EdgeSpatialIndex:
+    """
+    Grid-based spatial index for fast edge lookups.
+    Divides the network into a grid and indexes edges by their bounding boxes.
+    Lane # is always ignored - edges are indexed by base edge ID only.
+    """
+    
+    def __init__(self, edges_dict: dict, cell_size: float = 500.0):
+        """
+        Initialize spatial index.
+        
+        Args:
+            edges_dict: Dictionary of edge_id -> edge_data
+            cell_size: Size of each grid cell in meters (default 500m)
+        """
+        self.cell_size = cell_size
+        self.grid = defaultdict(set)  # (grid_x, grid_y) -> set of edge_ids
+        self.edge_bounds = {}  # edge_id -> (min_x, min_y, max_x, max_y)
+        
+        # Build index
+        # Important: Deduplicate by base edge ID (ignore lane #)
+        base_edge_map = {}  # base_id -> (edge_id, edge_data) - keep first variant
+        
+        for edge_id, edge_data in edges_dict.items():
+            # Get base edge ID (strip # suffix)
+            base_id = edge_id.split('#')[0] if '#' in edge_id else edge_id
+            
+            # Keep first variant for each base edge
+            if base_id not in base_edge_map:
+                base_edge_map[base_id] = (edge_id, edge_data)
+        
+        # Index only base edges (one variant per base edge)
+        for base_id, (edge_id, edge_data) in base_edge_map.items():
+            lanes = edge_data.get('lanes', [])
+            if not lanes:
+                continue
+            
+            shape = lanes[0].get('shape', [])
+            if len(shape) < 2:
+                continue
+            
+            # Calculate bounding box
+            xs = [p[0] for p in shape]
+            ys = [p[1] for p in shape]
+            min_x, max_x = min(xs), max(xs)
+            min_y, max_y = min(ys), max(ys)
+            
+            self.edge_bounds[edge_id] = (min_x, min_y, max_x, max_y)
+            
+            # Add edge to all grid cells it intersects
+            min_grid_x = int(min_x / cell_size)
+            max_grid_x = int(max_x / cell_size)
+            min_grid_y = int(min_y / cell_size)
+            max_grid_y = int(max_y / cell_size)
+            
+            for grid_x in range(min_grid_x, max_grid_x + 1):
+                for grid_y in range(min_grid_y, max_grid_y + 1):
+                    self.grid[(grid_x, grid_y)].add(edge_id)
+    
+    def get_candidates_in_radius(self, x: float, y: float, radius: float) -> set:
+        """
+        Get all edge IDs that might be within radius (using bounding box check).
+        
+        Args:
+            x: X coordinate in SUMO space
+            y: Y coordinate in SUMO space
+            radius: Search radius in meters
+        
+        Returns:
+            Set of edge IDs that might be within radius
+        """
+        # Calculate grid cells to check
+        min_x = x - radius
+        max_x = x + radius
+        min_y = y - radius
+        max_y = y + radius
+        
+        min_grid_x = int(min_x / self.cell_size)
+        max_grid_x = int(max_x / self.cell_size)
+        min_grid_y = int(min_y / self.cell_size)
+        max_grid_y = int(max_y / self.cell_size)
+        
+        candidates = set()
+        for grid_x in range(min_grid_x, max_grid_x + 1):
+            for grid_y in range(min_grid_y, max_grid_y + 1):
+                candidates.update(self.grid.get((grid_x, grid_y), set()))
+        
+        return candidates
 
 
 class NetworkLoaderWorker(QThread):
@@ -73,43 +166,6 @@ class NetworkLoaderWorker(QThread):
             
         except Exception as e:
             self.finished.emit(False, None, str(e))
-
-
-class NetworkFilterWorker(QThread):
-    """Worker thread for preparing filtered network data."""
-    
-    finished = Signal(bool, bool, dict)  # Success, filter_enabled, stats dict
-    
-    def __init__(self, network_parser, roads_junctions_only: bool, parent=None):
-        super().__init__(parent)
-        self.network_parser = network_parser
-        self.roads_junctions_only = roads_junctions_only
-    
-    def run(self):
-        """Prepare filtered network statistics."""
-        try:
-            edges = self.network_parser.get_edges()
-            
-            if self.roads_junctions_only:
-                # Count filtered items
-                filtered_edges = sum(1 for e in edges.values() if e.get('allows_passenger', True))
-                junctions = self.network_parser.get_junctions()
-                stats = {
-                    'edge_count': filtered_edges,
-                    'node_count': len(junctions),
-                    'filtered': True
-                }
-            else:
-                nodes = self.network_parser.get_nodes()
-                stats = {
-                    'edge_count': len(edges),
-                    'node_count': len(nodes),
-                    'filtered': False
-                }
-            
-            self.finished.emit(True, self.roads_junctions_only, stats)
-        except Exception as e:
-            self.finished.emit(False, self.roads_junctions_only, {'error': str(e)})
 
 
 class DownloadWorker(QThread):
@@ -346,11 +402,26 @@ class DatasetConversionPage(QWidget):
         self.project_name = project_name
         self.project_path = project_path
         self.network_parser = None
+        self.network_file_path = None  # Store network file path for TraCI routing
+        self.sumo_net = None  # Cached sumolib network object (loaded once)
+        self._edge_spatial_index = None  # Spatial index for fast edge lookups
+        self.destination_candidate_edges = []  # Store destination candidate edges from Step 1.4
+        
+        # Candidate edge counts
+        self.START_END_CANDIDATES = 10  # Number of candidate edges for start and end points
+        self.INTERMEDIATE_CANDIDATES = 6  # Number of candidate edges for intermediate GPS points
         self.download_worker = None
         self.network_loader_worker = None
         self._loading_settings = False  # Flag to prevent save during load
         self._train_trip_count = None  # Cached trip count
         self._route_items = []  # Graphics items for current route display
+        self._current_polyline = None  # Store current polyline for SUMO route mapping
+        self._current_segments = None  # Store current segments for SUMO route mapping
+        
+        # Cache for prepared route data (computed only once per route selection)
+        self._cached_route_num = None
+        self._cached_original_polyline = None
+        self._cached_route_data = None  # Tuple: (invalid_segments, real_start_idx, real_end_idx, segment_trim_data)
         
         self.init_ui()
         
@@ -434,53 +505,13 @@ class DatasetConversionPage(QWidget):
         
         map_header_layout.addSpacing(20)
         
-        # Roads and junctions only checkbox
-        self.roads_junctions_only_checkbox = QCheckBox("Roads and junctions only")
-        self.roads_junctions_only_checkbox.setToolTip(
-            "When checked, only show road edges and junction nodes\n"
-            "(hides pedestrian paths, rail tracks, and other non-road elements)"
+        # OSM map checkbox
+        self.osm_map_checkbox = QCheckBox("Show OSM map")
+        self.osm_map_checkbox.setToolTip(
+            "When checked, display OpenStreetMap tiles as map background\n"
+            "(downloads tiles from OpenStreetMap service)"
         )
-        self.roads_junctions_only_checkbox.setStyleSheet("""
-            QCheckBox {
-                color: #333;
-                font-size: 11px;
-            }
-            QCheckBox::indicator {
-                width: 16px;
-                height: 16px;
-                border: 2px solid #999;
-                border-radius: 3px;
-                background-color: white;
-            }
-            QCheckBox::indicator:checked {
-                border: 2px solid #4CAF50;
-                background-color: white;
-            }
-            QCheckBox::indicator:unchecked {
-                border: 2px solid #999;
-                background-color: white;
-            }
-        """)
-        self.roads_junctions_only_checkbox.stateChanged.connect(self.on_roads_junctions_filter_changed)
-        self.roads_junctions_only_checkbox.setVisible(False)  # Hidden until map is loaded
-        map_header_layout.addWidget(self.roads_junctions_only_checkbox)
-        
-        # Loading indicator for filter
-        self.filter_loading_label = QLabel("")
-        self.filter_loading_label.setStyleSheet("font-size: 14px;")
-        self.filter_loading_label.setFixedWidth(20)
-        self.filter_loading_label.setVisible(False)
-        map_header_layout.addWidget(self.filter_loading_label)
-        
-        map_header_layout.addSpacing(10)
-        
-        # Satellite imagery checkbox
-        self.satellite_checkbox = QCheckBox("Show satellite imagery")
-        self.satellite_checkbox.setToolTip(
-            "When checked, display satellite imagery as map background\n"
-            "(downloads tiles from ESRI World Imagery service)"
-        )
-        self.satellite_checkbox.setStyleSheet("""
+        self.osm_map_checkbox.setStyleSheet("""
             QCheckBox {
                 color: #333;
                 font-size: 11px;
@@ -501,16 +532,113 @@ class DatasetConversionPage(QWidget):
                 background-color: white;
             }
         """)
-        self.satellite_checkbox.stateChanged.connect(self.on_satellite_changed)
-        self.satellite_checkbox.setVisible(False)  # Hidden until map is loaded
-        map_header_layout.addWidget(self.satellite_checkbox)
+        self.osm_map_checkbox.stateChanged.connect(self.on_osm_map_changed)
+        self.osm_map_checkbox.setVisible(False)  # Hidden until map is loaded
+        map_header_layout.addWidget(self.osm_map_checkbox)
         
-        # Loading indicator for satellite
-        self.satellite_loading_label = QLabel("")
-        self.satellite_loading_label.setStyleSheet("font-size: 14px;")
-        self.satellite_loading_label.setFixedWidth(20)
-        self.satellite_loading_label.setVisible(False)
-        map_header_layout.addWidget(self.satellite_loading_label)
+        # Loading indicator for OSM map
+        self.osm_map_loading_label = QLabel("")
+        self.osm_map_loading_label.setStyleSheet("font-size: 14px;")
+        self.osm_map_loading_label.setFixedWidth(20)
+        self.osm_map_loading_label.setVisible(False)
+        map_header_layout.addWidget(self.osm_map_loading_label)
+        
+        map_header_layout.addSpacing(10)
+        
+        # SUMO network checkbox
+        self.show_network_checkbox = QCheckBox("Show SUMO network")
+        self.show_network_checkbox.setToolTip(
+            "When checked, display the SUMO network (edges and nodes)\n"
+            "on top of the map"
+        )
+        self.show_network_checkbox.setStyleSheet("""
+            QCheckBox {
+                color: #333;
+                font-size: 11px;
+            }
+            QCheckBox::indicator {
+                width: 16px;
+                height: 16px;
+                border: 2px solid #999;
+                border-radius: 3px;
+                background-color: white;
+            }
+            QCheckBox::indicator:checked {
+                border: 2px solid #4CAF50;
+                background-color: white;
+            }
+            QCheckBox::indicator:unchecked {
+                border: 2px solid #999;
+                background-color: white;
+            }
+        """)
+        self.show_network_checkbox.setChecked(True)  # Show by default
+        self.show_network_checkbox.stateChanged.connect(self.on_show_network_changed)
+        self.show_network_checkbox.setVisible(False)  # Hidden until map is loaded
+        map_header_layout.addWidget(self.show_network_checkbox)
+        
+        map_header_layout.addSpacing(10)
+        
+        # Map offset controls
+        self.map_offset_label = QLabel("Map offset:")
+        self.map_offset_label.setStyleSheet("color: #333; font-size: 11px;")
+        self.map_offset_label.setVisible(False)  # Hidden until map is loaded
+        map_header_layout.addWidget(self.map_offset_label)
+        
+        # X offset
+        self.map_offset_x_label = QLabel("X:")
+        self.map_offset_x_label.setStyleSheet("color: #333; font-size: 10px;")
+        self.map_offset_x_label.setVisible(False)  # Hidden until map is loaded
+        map_header_layout.addWidget(self.map_offset_x_label)
+        
+        from PySide6.QtWidgets import QDoubleSpinBox
+        self.map_offset_x_spinbox = QDoubleSpinBox()
+        self.map_offset_x_spinbox.setRange(-10000.0, 10000.0)
+        self.map_offset_x_spinbox.setSingleStep(10.0)
+        self.map_offset_x_spinbox.setValue(0.0)
+        self.map_offset_x_spinbox.setSuffix(" m")
+        self.map_offset_x_spinbox.setToolTip("Adjust map X offset in meters (positive = move map right)")
+        self.map_offset_x_spinbox.setStyleSheet("""
+            QDoubleSpinBox {
+                color: #333;
+                font-size: 10px;
+                padding: 2px;
+                border: 1px solid #999;
+                border-radius: 3px;
+                min-width: 80px;
+            }
+        """)
+        self.map_offset_x_spinbox.valueChanged.connect(self.on_map_offset_changed)
+        self.map_offset_x_spinbox.setVisible(False)  # Hidden until map is loaded
+        map_header_layout.addWidget(self.map_offset_x_spinbox)
+        
+        # Y offset
+        self.map_offset_y_label = QLabel("Y:")
+        self.map_offset_y_label.setStyleSheet("color: #333; font-size: 10px;")
+        self.map_offset_y_label.setVisible(False)  # Hidden until map is loaded
+        map_header_layout.addWidget(self.map_offset_y_label)
+        
+        self.map_offset_y_spinbox = QDoubleSpinBox()
+        self.map_offset_y_spinbox.setRange(-10000.0, 10000.0)
+        self.map_offset_y_spinbox.setSingleStep(10.0)
+        self.map_offset_y_spinbox.setValue(0.0)
+        self.map_offset_y_spinbox.setSuffix(" m")
+        self.map_offset_y_spinbox.setToolTip("Adjust map Y offset in meters (positive = move map down)")
+        self.map_offset_y_spinbox.setStyleSheet("""
+            QDoubleSpinBox {
+                color: #333;
+                font-size: 10px;
+                padding: 2px;
+                border: 1px solid #999;
+                border-radius: 3px;
+                min-width: 80px;
+            }
+        """)
+        self.map_offset_y_spinbox.valueChanged.connect(self.on_map_offset_changed)
+        self.map_offset_y_spinbox.setVisible(False)  # Hidden until map is loaded
+        map_header_layout.addWidget(self.map_offset_y_spinbox)
+        
+        map_header_layout.addSpacing(10)
         
         map_header_layout.addStretch()
         
@@ -1269,6 +1397,28 @@ class DatasetConversionPage(QWidget):
         self.route_info_label.setWordWrap(True)
         route_group_layout.addWidget(self.route_info_label)
         
+        # ---- GPS Points Path Checkbox ----
+        gps_path_layout = QHBoxLayout()
+        gps_path_layout.setSpacing(8)
+        
+        self.draw_gps_points_path_checkbox = QCheckBox("Draw GPS points path")
+        self.draw_gps_points_path_checkbox.setToolTip("Display the blue GPS points and route path on the map")
+        self.draw_gps_points_path_checkbox.setChecked(True)  # Enabled by default
+        self.draw_gps_points_path_checkbox.setStyleSheet("""
+            QCheckBox {
+                color: #333;
+                font-size: 10px;
+            }
+            QCheckBox::indicator {
+                width: 16px;
+                height: 16px;
+            }
+        """)
+        self.draw_gps_points_path_checkbox.stateChanged.connect(self._on_draw_gps_points_path_changed)
+        gps_path_layout.addWidget(self.draw_gps_points_path_checkbox)
+        gps_path_layout.addStretch()
+        route_group_layout.addLayout(gps_path_layout)
+        
         # ---- Route Repair Subsection ----
         # Line 1: Fix Invalid Segments checkbox + fix information
         repair_line1_layout = QHBoxLayout()
@@ -1287,7 +1437,7 @@ class DatasetConversionPage(QWidget):
                 height: 16px;
             }
         """)
-        self.fix_invalid_segments_checkbox.stateChanged.connect(self._on_fix_route_changed)
+        self.fix_invalid_segments_checkbox.stateChanged.connect(self._on_fix_invalid_segments_changed)
         repair_line1_layout.addWidget(self.fix_invalid_segments_checkbox)
         
         # Invalid segments fix info label
@@ -1330,6 +1480,54 @@ class DatasetConversionPage(QWidget):
         
         repair_line2_layout.addStretch()
         route_group_layout.addLayout(repair_line2_layout)
+        
+        # Line 3: Show SUMO Step 1 route checkbox
+        repair_line3_layout = QHBoxLayout()
+        repair_line3_layout.setSpacing(8)
+        
+        self.show_sumo_step1_route_checkbox = QCheckBox("Show SUMO Step 1 route")
+        self.show_sumo_step1_route_checkbox.setToolTip("Display the Step 1 SUMO route as a dashed line (magenta) for visual validation (requires both 'Fix invalid segments' and 'Trim Start/End' to be enabled)")
+        self.show_sumo_step1_route_checkbox.setEnabled(False)  # Initially disabled
+        self.show_sumo_step1_route_checkbox.setStyleSheet("""
+            QCheckBox {
+                color: #333;
+                font-size: 10px;
+            }
+            QCheckBox:disabled {
+                color: #999;
+            }
+            QCheckBox::indicator {
+                width: 16px;
+                height: 16px;
+            }
+        """)
+        self.show_sumo_step1_route_checkbox.stateChanged.connect(self._on_show_sumo_step1_route_changed)
+        repair_line3_layout.addWidget(self.show_sumo_step1_route_checkbox)
+        
+        # Line 3: Show SUMO Step 2 route checkbox
+        self.show_sumo_step2_route_checkbox = QCheckBox("Show SUMO Step 2 route")
+        self.show_sumo_step2_route_checkbox.setToolTip("Display the Step 2 SUMO route as a dashed line for visual validation (requires both 'Fix invalid segments' and 'Trim Start/End' to be enabled)")
+        self.show_sumo_step2_route_checkbox.setEnabled(False)  # Initially disabled
+        self.show_sumo_step2_route_checkbox.setStyleSheet("""
+            QCheckBox {
+                color: #333;
+                font-size: 10px;
+            }
+            QCheckBox:disabled {
+                color: #999;
+            }
+            QCheckBox::indicator {
+                width: 16px;
+                height: 16px;
+            }
+        """)
+        self.show_sumo_step2_route_checkbox.stateChanged.connect(self._on_show_sumo_step2_route_changed)
+        repair_line3_layout.addWidget(self.show_sumo_step2_route_checkbox)
+        repair_line3_layout.addStretch()
+        route_group_layout.addLayout(repair_line3_layout)
+        
+        # Initialize show SUMO route checkboxes state
+        self._update_show_sumo_route_enabled()
         
         self.route_group.setLayout(route_group_layout)
         self.route_group.setVisible(False)  # Hidden until map and dataset ready
@@ -1544,95 +1742,25 @@ class DatasetConversionPage(QWidget):
         self.zones_value_label.setText(str(value))
         self.save_settings()
     
-    def on_roads_junctions_filter_changed(self, state: int):
-        """Handle roads and junctions filter checkbox change."""
-        self.save_settings()
-        
-        # Reload the network with the new filter setting
-        if self.network_parser:
-            self.log(f"Filter changed: Roads and junctions only = {self.roads_junctions_only_checkbox.isChecked()}")
-            # Re-render the network with current filter (async)
-            self._reload_network_with_filter_async()
-    
-    def _reload_network_with_filter_async(self):
-        """Reload the network view with current filter settings asynchronously."""
-        if not self.network_parser:
-            return
-        
-        # Show loading indicator and disable checkbox
-        self.filter_loading_label.setText("⏳")
-        self.roads_junctions_only_checkbox.setEnabled(False)
-        
-        # Force UI update before starting work
-        from PySide6.QtWidgets import QApplication
-        QApplication.processEvents()
-        
-        # Use QTimer to defer the actual work, allowing UI to update first
-        from PySide6.QtCore import QTimer
-        QTimer.singleShot(50, self._do_filter_reload)
-    
-    def _do_filter_reload(self):
-        """Actually perform the filter reload (called after UI updates)."""
-        if not self.network_parser:
-            self._finish_filter_reload()
-            return
-        
-        try:
-            filter_roads_only = self.roads_junctions_only_checkbox.isChecked()
-            
-            # Load network with filter
-            self.map_view.load_network(self.network_parser, roads_junctions_only=filter_roads_only)
-            
-            # Zoom to Porto city center
-            self._zoom_to_porto_center()
-            
-            # Update status
-            edges = self.network_parser.get_edges()
-            
-            if filter_roads_only:
-                # Count filtered items
-                filtered_edges = sum(1 for e in edges.values() if e.get('allows_passenger', True))
-                junctions = self.network_parser.get_junctions()
-                self.map_status_label.setText(
-                    f"Map loaded (filtered): {filtered_edges} road edges, {len(junctions)} junctions"
-                )
-            else:
-                nodes = self.network_parser.get_nodes()
-                self.map_status_label.setText(
-                    f"Map loaded: {len(edges)} edges, {len(nodes)} nodes"
-                )
-            self.map_status_label.setStyleSheet("color: #333; font-size: 12px;")
-            
-        except Exception as e:
-            self.log(f"Error applying filter: {e}")
-        finally:
-            self._finish_filter_reload()
-    
-    def _finish_filter_reload(self):
-        """Clean up after filter reload completes."""
-        # Hide loading indicator and re-enable checkbox
-        self.filter_loading_label.setText("")
-        self.roads_junctions_only_checkbox.setEnabled(True)
-    
-    def on_satellite_changed(self, state: int):
-        """Handle satellite imagery checkbox change."""
+    def on_osm_map_changed(self, state: int):
+        """Handle OSM map checkbox change."""
         self.save_settings()
         
         if self.network_parser:
-            show_satellite = self.satellite_checkbox.isChecked()
-            self.log(f"Satellite imagery: {'enabled' if show_satellite else 'disabled'}")
+            show_osm_map = self.osm_map_checkbox.isChecked()
+            self.log(f"OSM map: {'enabled' if show_osm_map else 'disabled'}")
             
             # Show loading indicator
-            if show_satellite:
-                self.satellite_loading_label.setText("⏳")
-                self.satellite_checkbox.setEnabled(False)
+            if show_osm_map:
+                self.osm_map_loading_label.setText("⏳")
+                self.osm_map_checkbox.setEnabled(False)
                 
                 # Connect to the finished signal (disconnect first to avoid duplicate connections)
                 try:
-                    self.map_view.satellite_loading_finished.disconnect(self._on_satellite_loading_finished)
+                    self.map_view.osm_map_loading_finished.disconnect(self._on_osm_map_loading_finished)
                 except RuntimeError:
                     pass  # Not connected yet
-                self.map_view.satellite_loading_finished.connect(self._on_satellite_loading_finished)
+                self.map_view.osm_map_loading_finished.connect(self._on_osm_map_loading_finished)
                 
                 # Force UI update
                 from PySide6.QtWidgets import QApplication
@@ -1640,21 +1768,40 @@ class DatasetConversionPage(QWidget):
                 
                 # Use QTimer to defer the work
                 from PySide6.QtCore import QTimer
-                QTimer.singleShot(50, self._do_satellite_toggle)
+                QTimer.singleShot(50, self._do_osm_map_toggle)
             else:
                 # Disabling is quick, do it directly
-                self.map_view.set_satellite_visible(False)
+                self.map_view.set_osm_map_visible(False)
     
-    def _do_satellite_toggle(self):
-        """Actually toggle satellite visibility."""
-        self.map_view.set_satellite_visible(True)
-        # Note: loading indicator is cleared when satellite_loading_finished signal is emitted
+    def _do_osm_map_toggle(self):
+        """Actually toggle OSM map visibility."""
+        self.map_view.set_osm_map_visible(True)
+        # Note: loading indicator is cleared when osm_map_loading_finished signal is emitted
     
-    def _on_satellite_loading_finished(self):
-        """Handle satellite loading completion."""
-        self.satellite_loading_label.setText("")
-        self.satellite_checkbox.setEnabled(True)
-        self.log("Satellite imagery loaded")
+    def _on_osm_map_loading_finished(self):
+        """Handle OSM map loading completion."""
+        self.osm_map_loading_label.setText("")
+        self.osm_map_checkbox.setEnabled(True)
+        self.log("OSM map loaded")
+    
+    def on_show_network_changed(self, state: int):
+        """Handle show network checkbox change."""
+        self.save_settings()
+        
+        if self.map_view:
+            show_network = self.show_network_checkbox.isChecked()
+            self.log(f"SUMO network: {'shown' if show_network else 'hidden'}")
+            self.map_view.set_network_visible(show_network)
+    
+    def on_map_offset_changed(self, value: float):
+        """Handle map offset change."""
+        self.save_settings()
+        
+        if self.map_view:
+            x_offset = self.map_offset_x_spinbox.value()
+            y_offset = self.map_offset_y_spinbox.value()
+            self.map_view.set_map_offset(x_offset, y_offset)
+            self.log(f"Map offset: X={x_offset:.1f}m, Y={y_offset:.1f}m")
     
     def is_map_ready(self) -> bool:
         """Check if the map is loaded."""
@@ -1699,29 +1846,41 @@ class DatasetConversionPage(QWidget):
             self.map_status.setText("✅ Network map available")
             self.map_status.setStyleSheet("color: #4CAF50; font-size: 11px; font-weight: bold;")
             self.download_map_btn.setVisible(False)  # Hide the button when map is available
-            self.roads_junctions_only_checkbox.setVisible(True)  # Show the filter checkbox
-            self.filter_loading_label.setVisible(False)
-            self.satellite_checkbox.setVisible(True)  # Show the satellite checkbox
-            self.satellite_loading_label.setVisible(False)
+            self.osm_map_checkbox.setVisible(True)  # Show the OSM map checkbox
+            self.osm_map_loading_label.setVisible(False)
+            self.show_network_checkbox.setVisible(True)  # Show the network checkbox
+            self.map_offset_label.setVisible(True)  # Show offset controls
+            self.map_offset_x_label.setVisible(True)
+            self.map_offset_y_label.setVisible(True)
+            self.map_offset_x_spinbox.setVisible(True)
+            self.map_offset_y_spinbox.setVisible(True)
             self.load_network_async(net_file)
         elif porto_net_file.exists():
             self.map_status.setText("✅ Network map available (Porto folder)")
             self.map_status.setStyleSheet("color: #4CAF50; font-size: 11px; font-weight: bold;")
             self.download_map_btn.setVisible(False)  # Hide the button when map is available
-            self.roads_junctions_only_checkbox.setVisible(True)  # Show the filter checkbox
-            self.filter_loading_label.setVisible(False)
-            self.satellite_checkbox.setVisible(True)  # Show the satellite checkbox
-            self.satellite_loading_label.setVisible(False)
+            self.osm_map_checkbox.setVisible(True)  # Show the OSM map checkbox
+            self.osm_map_loading_label.setVisible(False)
+            self.show_network_checkbox.setVisible(True)  # Show the network checkbox
+            self.map_offset_label.setVisible(True)  # Show offset controls
+            self.map_offset_x_label.setVisible(True)
+            self.map_offset_y_label.setVisible(True)
+            self.map_offset_x_spinbox.setVisible(True)
+            self.map_offset_y_spinbox.setVisible(True)
             self.load_network_async(porto_net_file)
         else:
             self.map_status.setText("❌ Network map not found\nClick to download from OpenStreetMap")
             self.map_status.setStyleSheet("color: #f44336; font-size: 11px;")
             self.download_map_btn.setVisible(True)
             self.download_map_btn.setEnabled(True)
-            self.roads_junctions_only_checkbox.setVisible(False)
-            self.filter_loading_label.setVisible(False)
-            self.satellite_checkbox.setVisible(False)
-            self.satellite_loading_label.setVisible(False)
+            self.osm_map_checkbox.setVisible(False)
+            self.osm_map_loading_label.setVisible(False)
+            self.show_network_checkbox.setVisible(False)
+            self.map_offset_label.setVisible(False)
+            self.map_offset_x_label.setVisible(False)
+            self.map_offset_y_label.setVisible(False)
+            self.map_offset_x_spinbox.setVisible(False)
+            self.map_offset_y_spinbox.setVisible(False)
             self.map_status_label.setText("Map not loaded - click 'Download & Render Map'")
         
         # Check dataset status
@@ -1924,7 +2083,8 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
         )
     
     def load_network_async(self, net_file: Path):
-        """Load network asynchronously to prevent UI freeze."""
+        """Load network asynchronously and store the file path."""
+        self.network_file_path = str(net_file)  # Store network file path for TraCI routing
         if self.network_loader_worker and self.network_loader_worker.isRunning():
             return
         
@@ -1957,31 +2117,65 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
         if success and network_parser:
             self.network_parser = network_parser
             
-            # Apply filter setting when loading
-            filter_roads_only = self.roads_junctions_only_checkbox.isChecked()
-            self.map_view.load_network(self.network_parser, roads_junctions_only=filter_roads_only)
+            # Build spatial index for fast edge lookups (Step 0)
+            # Include ALL edges in spatial index for candidate finding
+            # (We need to find the closest edges, even if they don't allow passengers,
+            #  because the closest passenger-allowed edge might be far away)
+            try:
+                self.log("Building spatial index for edge lookups...")
+                all_edges = self.network_parser.get_edges()
+                # Include ALL edges in spatial index for accurate candidate finding
+                # We'll filter to passenger-allowed edges later when calculating routes
+                self._edge_spatial_index = EdgeSpatialIndex(all_edges, cell_size=500.0)
+                self.log(f"✓ Spatial index built: {len(all_edges)} edges indexed (all edges for accurate candidate finding)")
+            except Exception as e:
+                self.log(f"⚠️ Failed to build spatial index: {e}")
+                self._edge_spatial_index = None
+            
+            # Load sumolib network once for routing (heavy operation, do it once)
+            if self.network_file_path:
+                try:
+                    import sumolib
+                    self.log(f"Loading SUMO network for routing from: {self.network_file_path}")
+                    self.sumo_net = sumolib.net.readNet(self.network_file_path)
+                    edge_count = len(self.sumo_net.getEdges())
+                    node_count = len(self.sumo_net.getNodes())
+                    self.log(f"✓ SUMO network loaded for routing: {edge_count} edges, {node_count} nodes")
+                except ImportError:
+                    self.log("⚠️ sumolib not available. SUMO route overlay will not work.")
+                    self.sumo_net = None
+                except Exception as e:
+                    self.log(f"⚠️ Failed to load SUMO network for routing: {e}")
+                    self.sumo_net = None
+            
+            # Load network
+            self.map_view.load_network(self.network_parser)
             
             # Zoom to Porto city center area
             self._zoom_to_porto_center()
             
-            # Get network statistics
-            edges = self.network_parser.get_edges()
-            nodes = self.network_parser.get_nodes()
+            # Get network statistics - load ALL edges from XML (no filtering)
+            all_edges = self.network_parser.get_edges()
+            junctions = self.network_parser.get_junctions()
             bounds = self.network_parser.get_bounds()
             
-            if filter_roads_only:
-                # Count filtered items
-                filtered_edges = sum(1 for e in edges.values() if e.get('allows_passenger', True))
-                junctions = self.network_parser.get_junctions()
-                self.map_status_label.setText(
-                    f"Map loaded (filtered): {filtered_edges} road edges, {len(junctions)} junctions"
-                )
-                self.log(f"Network loaded (filtered): {filtered_edges} road edges, {len(junctions)} junctions")
-            else:
-                self.map_status_label.setText(
-                    f"Map loaded: {len(edges)} edges, {len(nodes)} nodes"
-                )
-                self.log(f"Network loaded successfully: {len(edges)} edges, {len(nodes)} nodes")
+            # Count passenger-allowed edges for info (but don't filter)
+            roads = {eid: edata for eid, edata in all_edges.items() if edata.get('allows_passenger', True)}
+            
+            self.map_status_label.setText(
+                f"Map loaded: {len(all_edges)} edges ({len(roads)} passenger-allowed), {len(junctions)} junctions"
+            )
+            self.log(f"Network loaded successfully: {len(all_edges)} total edges (including all types: passenger, pedestrian, bicycle, etc.), {len(junctions)} junctions")
+            
+            # Apply OSM map setting if checked
+            if self.osm_map_checkbox.isChecked():
+                self.map_view.set_osm_map_visible(True)
+            
+            # Apply network visibility setting
+            self.map_view.set_network_visible(self.show_network_checkbox.isChecked())
+            
+            # Apply map offset setting
+            self.map_view.set_map_offset(self.map_offset_x_spinbox.value(), self.map_offset_y_spinbox.value())
             
             self.map_status_label.setStyleSheet("color: #333; font-size: 12px;")
             
@@ -1990,10 +2184,6 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
             
             # Show map view
             self.map_stack.setCurrentIndex(0)
-            
-            # Apply satellite setting if checked
-            if self.satellite_checkbox.isChecked():
-                self.map_view.set_satellite_visible(True)
             
             # Check if zones section should be shown
             self.check_zones_visibility()
@@ -2183,8 +2373,14 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
                 self.map_status.setText("✅ Network map available")
                 self.map_status.setStyleSheet("color: #4CAF50; font-size: 11px; font-weight: bold;")
                 self.download_map_btn.setVisible(False)  # Hide the button when map is available
-                self.filter_checkbox_container.setVisible(True)  # Show the filter checkbox
-                self.satellite_checkbox_container.setVisible(True)  # Show the satellite checkbox
+                self.osm_map_checkbox.setVisible(True)  # Show the OSM map checkbox
+                self.osm_map_loading_label.setVisible(False)
+                self.show_network_checkbox.setVisible(True)  # Show the network checkbox
+                self.map_offset_label.setVisible(True)  # Show offset controls
+                self.map_offset_x_label.setVisible(True)
+                self.map_offset_y_label.setVisible(True)
+                self.map_offset_x_spinbox.setVisible(True)
+                self.map_offset_y_spinbox.setVisible(True)
                 self.load_network_async(net_file)
             
             # Check dataset status
@@ -2194,10 +2390,14 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
             QMessageBox.warning(self, "Download Failed", message)
             self.download_map_btn.setVisible(True)
             self.download_map_btn.setEnabled(True)
-            self.roads_junctions_only_checkbox.setVisible(False)
-            self.filter_loading_label.setVisible(False)
-            self.satellite_checkbox.setVisible(False)
-            self.satellite_loading_label.setVisible(False)
+            self.osm_map_checkbox.setVisible(False)
+            self.osm_map_loading_label.setVisible(False)
+            self.show_network_checkbox.setVisible(False)
+            self.map_offset_label.setVisible(False)
+            self.map_offset_x_label.setVisible(False)
+            self.map_offset_y_label.setVisible(False)
+            self.map_offset_x_spinbox.setVisible(False)
+            self.map_offset_y_spinbox.setVisible(False)
         
         # Hide progress section after a short delay
         from PySide6.QtCore import QTimer
@@ -2233,10 +2433,15 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
             'test_csv_path': self.test_path_input.text().strip(),
             'num_zones': self.zones_slider.value(),
             'train_trip_count': getattr(self, '_train_trip_count', None),
-            'roads_junctions_only': self.roads_junctions_only_checkbox.isChecked(),
-            'show_satellite': self.satellite_checkbox.isChecked(),
+            'show_osm_map': self.osm_map_checkbox.isChecked(),
+            'show_network': self.show_network_checkbox.isChecked(),
+            'map_offset_x': self.map_offset_x_spinbox.value(),
+            'map_offset_y': self.map_offset_y_spinbox.value(),
             'fix_route': self.fix_route_checkbox.isChecked(),
             'fix_invalid_segments': self.fix_invalid_segments_checkbox.isChecked(),
+            'show_sumo_step1_route': self.show_sumo_step1_route_checkbox.isChecked(),
+            'show_sumo_step2_route': self.show_sumo_step2_route_checkbox.isChecked(),
+            'draw_gps_points_path': self.draw_gps_points_path_checkbox.isChecked(),
         }
         
         try:
@@ -2275,17 +2480,58 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
                 if 'train_trip_count' in settings and settings['train_trip_count']:
                     self._train_trip_count = settings['train_trip_count']
                 
-                if 'roads_junctions_only' in settings:
-                    self.roads_junctions_only_checkbox.setChecked(settings['roads_junctions_only'])
+                if 'show_osm_map' in settings:
+                    self.osm_map_checkbox.setChecked(settings['show_osm_map'])
                 
-                if 'show_satellite' in settings:
-                    self.satellite_checkbox.setChecked(settings['show_satellite'])
+                if 'show_network' in settings:
+                    self.show_network_checkbox.setChecked(settings['show_network'])
+                    # Apply network visibility if map is already loaded
+                    if self.map_view:
+                        self.map_view.set_network_visible(settings['show_network'])
+                
+                # Block signals during settings loading to avoid duplicate logs
+                if 'map_offset_x' in settings or 'map_offset_y' in settings:
+                    # Temporarily block signals to prevent duplicate log messages
+                    self.map_offset_x_spinbox.blockSignals(True)
+                    self.map_offset_y_spinbox.blockSignals(True)
+                    
+                    if 'map_offset_x' in settings:
+                        self.map_offset_x_spinbox.setValue(settings['map_offset_x'])
+                    
+                    if 'map_offset_y' in settings:
+                        self.map_offset_y_spinbox.setValue(settings['map_offset_y'])
+                    
+                    # Apply both offsets at once if map_view exists
+                    if self.map_view:
+                        x_offset = self.map_offset_x_spinbox.value()
+                        y_offset = self.map_offset_y_spinbox.value()
+                        self.map_view.set_map_offset(x_offset, y_offset)
+                        # Log once with correct values
+                        self.log(f"Map offset: X={x_offset:.1f}m, Y={y_offset:.1f}m")
+                    
+                    # Re-enable signals
+                    self.map_offset_x_spinbox.blockSignals(False)
+                    self.map_offset_y_spinbox.blockSignals(False)
                 
                 if 'fix_route' in settings:
                     self.fix_route_checkbox.setChecked(settings['fix_route'])
                 
                 if 'fix_invalid_segments' in settings:
                     self.fix_invalid_segments_checkbox.setChecked(settings['fix_invalid_segments'])
+                
+                if 'show_sumo_step1_route' in settings:
+                    self.show_sumo_step1_route_checkbox.setChecked(settings['show_sumo_step1_route'])
+                if 'show_sumo_step2_route' in settings:
+                    self.show_sumo_step2_route_checkbox.setChecked(settings['show_sumo_step2_route'])
+                # Backward compatibility: migrate old 'show_sumo_route' to 'show_sumo_step1_route'
+                elif 'show_sumo_route' in settings:
+                    self.show_sumo_step1_route_checkbox.setChecked(settings['show_sumo_route'])
+                
+                if 'draw_gps_points_path' in settings:
+                    self.draw_gps_points_path_checkbox.setChecked(settings['draw_gps_points_path'])
+                
+                # Update show SUMO route enabled state after loading settings
+                self._update_show_sumo_route_enabled()
                 
                 self.log("Settings loaded from config")
         except Exception as e:
@@ -2349,12 +2595,76 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
         self.route_spinbox.setMaximum(count if count > 0 else 1)
         self.route_info_label.setText(f"Select a route from 1 to {count:,}")
     
-    def _on_fix_route_changed(self):
-        """Handle fix route checkbox change."""
+    def _update_show_sumo_route_enabled(self):
+        """Update the enabled state of 'Show SUMO route' checkboxes."""
+        # Enable only if both checkboxes are checked
+        both_checked = (
+            self.fix_route_checkbox.isChecked() and 
+            self.fix_invalid_segments_checkbox.isChecked()
+        )
+        self.show_sumo_step1_route_checkbox.setEnabled(both_checked)
+        self.show_sumo_step2_route_checkbox.setEnabled(both_checked)
+        
+        # If disabled, uncheck them
+        if not both_checked:
+            if self.show_sumo_step1_route_checkbox.isChecked():
+                self.show_sumo_step1_route_checkbox.setChecked(False)
+            if self.show_sumo_step2_route_checkbox.isChecked():
+                self.show_sumo_step2_route_checkbox.setChecked(False)
+    
+    def _on_fix_invalid_segments_changed(self):
+        """Handle fix invalid segments checkbox change."""
         self.save_settings()
+        self._update_show_sumo_route_enabled()
         # Refresh the route display if a route is currently shown
         if hasattr(self, '_route_items') and self._route_items:
             self.show_selected_route()
+    
+    def _on_fix_route_changed(self):
+        """Handle fix route checkbox change."""
+        self.save_settings()
+        self._update_show_sumo_route_enabled()
+        # Refresh the route display if a route is currently shown
+        if hasattr(self, '_route_items') and self._route_items:
+            self.show_selected_route()
+    
+    def _prepare_route_data(self, original_polyline: List[List[float]]):
+        """
+        Prepare route data by analyzing the polyline once.
+        This function performs expensive operations only once and returns all needed data.
+        
+        Args:
+            original_polyline: The original GPS polyline (list of [lon, lat] points)
+        
+        Returns:
+            tuple: (
+                invalid_segments: TripValidationResult object with invalid segment info,
+                real_start_idx: int - real start index for entire original GPS segment,
+                real_end_idx: int - real end index for entire original GPS segment,
+                segment_trim_data: List[Tuple[int, int]] - list of (real_start, real_last) 
+                    for each split GPS segment (empty list if no invalid segments exist)
+            )
+        """
+        # Validate original polyline to find invalid segments
+        validation_result = validate_trip_segments(original_polyline)
+        
+        # Detect real start and end points for the entire original GPS segment
+        real_start_idx, real_end_idx = self._detect_real_start_and_end(original_polyline)
+        
+        # Calculate segment trim data (real_start, real_last) for each split segment
+        segment_trim_data = []
+        if validation_result.invalid_segment_count > 0:
+            # Split at invalid segments to get individual segments
+            split_segments = self._split_at_invalid_segments(original_polyline)
+            
+            # For each split segment, calculate its real start and end
+            for segment in split_segments:
+                if len(segment) >= 2:
+                    seg_start, seg_end = self._detect_real_start_and_end(segment)
+                    segment_trim_data.append((seg_start, seg_end))
+        # If no invalid segments, segment_trim_data remains empty list
+        
+        return validation_result, real_start_idx, real_end_idx, segment_trim_data
     
     def show_selected_route(self):
         """Display the selected route on the map."""
@@ -2369,117 +2679,2063 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
             QMessageBox.warning(self, "Error", "Map not loaded.")
             return
         
-        self.log(f"Loading route #{route_num}...")
-        self.route_info_label.setText(f"Loading route #{route_num}...")
-        
-        # Load the specific trip's polyline
-        try:
-            polyline = self._load_trip_polyline(train_path, route_num)
+        # Check if we have cached data for this route number
+        if self._cached_route_num == route_num and self._cached_route_data is not None:
+            # Use cached data (checkbox change - no need to reload)
+            original_polyline = self._cached_original_polyline
+            invalid_segments, real_start_idx, real_end_idx, segment_trim_data = self._cached_route_data
+            original_length = len(original_polyline)
+            self.log(f"Using cached data for route #{route_num}")
+        else:
+            # New route selected - load and prepare data
+            self.log(f"Loading route #{route_num}...")
+            self.route_info_label.setText(f"Loading route #{route_num}...")
             
-            if polyline and len(polyline) >= 2:
-                # Store original polyline before any modifications
-                original_polyline = polyline.copy()
+            # Reset Step 1 route edges set for new route ONLY if it's a different route number
+            # Don't clear if we're just reloading the same route (e.g., for Step 2)
+            if not hasattr(self, '_last_route_num') or self._last_route_num != route_num:
+                self._step1_route_edges = set()
+                self._step1_final_segments = []  # Clear Step 1 final segments for new route
+                # Reset all Step 2 diagnostic flags for new route
+                self._step2_coord_logged = False
+                self._step2_comparison_logged = False
+                self._step2_distance_diagnostic_logged = False
+                self._step2_return_logged = False
+                self._step2_missing_diagnostic_logged = False
+            self._last_route_num = route_num
+            
+            # Load the specific trip's polyline
+            try:
+                original_polyline = self._load_trip_polyline(train_path, route_num)
+                
+                if not original_polyline or len(original_polyline) < 2:
+                    self.route_info_label.setText(f"Route #{route_num}: No valid GPS data")
+                    self.route_info_label.setStyleSheet("color: #666; font-size: 9px;")
+                    self.log(f"Route #{route_num} has no valid GPS data")
+                    # Clear cache
+                    self._cached_route_num = None
+                    self._cached_original_polyline = None
+                    self._cached_route_data = None
+                    return
+                
                 original_length = len(original_polyline)
                 
-                # Detect real start and end points (always detect, for display purposes)
-                real_start_idx, real_end_idx = self._detect_real_start_and_end(original_polyline)
+                # Prepare route data once (expensive operations done here)
+                invalid_segments, real_start_idx, real_end_idx, segment_trim_data = self._prepare_route_data(original_polyline)
                 
-                # Update labels (without coordinates)
-                if real_start_idx < len(original_polyline):
-                    self.real_start_label.setText(f"Real Start: Point {real_start_idx + 1}")
+                # Cache the data for this route
+                self._cached_route_num = route_num
+                self._cached_original_polyline = original_polyline
+                self._cached_route_data = (invalid_segments, real_start_idx, real_end_idx, segment_trim_data)
+                
+            except Exception as e:
+                self.route_info_label.setText(f"Error loading route: {str(e)[:30]}")
+                self.route_info_label.setStyleSheet("color: #f44336; font-size: 9px;")
+                self.log(f"Error loading route #{route_num}: {e}")
+                # Clear cache on error
+                self._cached_route_num = None
+                self._cached_original_polyline = None
+                self._cached_route_data = None
+                return
+        
+        try:
+            # Update labels with real start/end info
+            if real_start_idx < len(original_polyline):
+                self.real_start_label.setText(f"Real Start: Point {real_start_idx + 1}")
+            else:
+                self.real_start_label.setText("Real Start: N/A")
+            
+            if real_end_idx < len(original_polyline):
+                self.real_destination_label.setText(f"Real Destination: Point {real_end_idx + 1}")
+            else:
+                self.real_destination_label.setText("Real Destination: N/A")
+            
+            # Determine what to display based on checkbox states
+            fix_invalid = self.fix_invalid_segments_checkbox.isChecked()
+            trim_start_end = self.fix_route_checkbox.isChecked()
+            show_sumo_step1 = self.show_sumo_step1_route_checkbox.isChecked()
+            show_sumo_step2 = self.show_sumo_step2_route_checkbox.isChecked()
+            
+            # Build segments to display
+            if fix_invalid and invalid_segments.invalid_segment_count > 0:
+                # Use split segments
+                segments = self._split_at_invalid_segments(original_polyline)
+                
+                # Apply trim start/end to each segment if trim checkbox is checked
+                if trim_start_end and segment_trim_data:
+                    trimmed_segments = []
+                    for i, segment in enumerate(segments):
+                        if i < len(segment_trim_data) and len(segment) >= 2:
+                            seg_start, seg_end = segment_trim_data[i]
+                            trimmed_seg = segment[seg_start:seg_end + 1]
+                            if len(trimmed_seg) >= 2:  # Only add if has at least 2 points
+                                trimmed_segments.append(trimmed_seg)
+                    segments = trimmed_segments if trimmed_segments else segments
+            else:
+                # Use original polyline (single segment)
+                if trim_start_end:
+                    # Apply trim to original
+                    segments = [original_polyline[real_start_idx:real_end_idx + 1]]
                 else:
-                    self.real_start_label.setText("Real Start: N/A")
-                
-                if real_end_idx < len(original_polyline):
-                    self.real_destination_label.setText(f"Real Destination: Point {real_end_idx + 1}")
+                    segments = [original_polyline]
+            
+            # Store current segments for SUMO route mapping
+            self._current_segments = segments
+            
+            # Clear previous route
+            self.clear_route_display()
+            
+            # Update invalid segments info label
+            if fix_invalid and invalid_segments.invalid_segment_count > 0:
+                invalid_count = invalid_segments.invalid_segment_count
+                if len(segments) > 1:
+                    total_points = sum(len(seg) for seg in segments)
+                    self.invalid_segments_info_label.setText(
+                        f"Invalid segments: {invalid_count} | New routes: {len(segments)} segments ({total_points} total points)"
+                    )
                 else:
-                    self.real_destination_label.setText("Real Destination: N/A")
-                
-                # Apply route repair if checkbox is checked, otherwise use original
-                if self.fix_route_checkbox.isChecked():
-                    polyline = original_polyline[real_start_idx:real_end_idx + 1]
-                else:
-                    polyline = original_polyline  # Use untrimmed route
-                
-                # Split at invalid segments if checkbox is checked
-                segments = [polyline]  # Default: single segment
-                if self.fix_invalid_segments_checkbox.isChecked():
-                    segments = self._split_at_invalid_segments(polyline)
-                    # Apply trim start/end to each segment if trim checkbox is also checked
-                    if self.fix_route_checkbox.isChecked():
-                        trimmed_segments = []
-                        for segment in segments:
-                            if len(segment) >= 2:
-                                seg_start, seg_end = self._detect_real_start_and_end(segment)
-                                trimmed_seg = segment[seg_start:seg_end + 1]
-                                if len(trimmed_seg) >= 2:  # Only add if has at least 2 points
-                                    trimmed_segments.append(trimmed_seg)
-                        segments = trimmed_segments if trimmed_segments else segments
-                
-                # Clear previous route
-                self.clear_route_display()
-                
-                # Get validation result from original polyline (for invalid segments info)
-                original_validation = validate_trip_segments(original_polyline) if original_polyline else None
-                
-                # Update invalid segments info label
-                if self.fix_invalid_segments_checkbox.isChecked() and original_validation:
-                    invalid_count = original_validation.invalid_segment_count
-                    if len(segments) > 1:
-                        total_points = sum(len(seg) for seg in segments)
-                        self.invalid_segments_info_label.setText(
-                            f"Invalid segments: {invalid_count} | New routes: {len(segments)} segments ({total_points} total points)"
-                        )
-                    else:
-                        self.invalid_segments_info_label.setText(f"Invalid segments: {invalid_count} | No split needed")
-                else:
-                    self.invalid_segments_info_label.setText("")
-                
-                # Draw route on map (returns validation result)
-                # Use original_polyline for invalid segment detection when not fixing
-                display_polyline = original_polyline if not self.fix_invalid_segments_checkbox.isChecked() else None
+                    self.invalid_segments_info_label.setText(f"Invalid segments: {invalid_count} | No split needed")
+            elif not fix_invalid and invalid_segments.invalid_segment_count > 0:
+                # Show invalid segments info when not fixing
+                invalid_count = invalid_segments.invalid_segment_count
+                self.invalid_segments_info_label.setText(f"Invalid segments: {invalid_count} (shown in red)")
+            else:
+                self.invalid_segments_info_label.setText("")
+            
+            # Draw route on map (only if GPS points path checkbox is checked)
+            draw_gps_path = self.draw_gps_points_path_checkbox.isChecked()
+            validation_result = None
+            if draw_gps_path:
+                # Show invalid in red only if fix_invalid is NOT checked
+                show_invalid_in_red = not fix_invalid
                 validation_result = self._draw_route_on_map(
                     segments, 
                     route_num, 
-                    show_invalid_in_red=not self.fix_invalid_segments_checkbox.isChecked(),
-                    original_polyline=display_polyline
+                    show_invalid_in_red=show_invalid_in_red,
+                    original_polyline=original_polyline if show_invalid_in_red else None
                 )
-                
-                # Build route info text
-                repair_info = ""
-                if self.fix_route_checkbox.isChecked():
-                    repair_info = f" (Trimmed: {original_length} → {len(polyline)} points)"
+            
+            # Draw SUMO Step 1 route overlay if checkbox is checked
+            if show_sumo_step1 and fix_invalid and trim_start_end:
+                # Use the cached sumolib network (loaded in on_network_load_finished)
+                if not self.sumo_net:
+                    self.log("⚠️ SUMO network not loaded. Please wait for network to finish loading.")
                 else:
-                    repair_info = f" (Original: {original_length} points)"
-                
-                if validation_result and not validation_result.is_valid and not self.fix_invalid_segments_checkbox.isChecked():
-                    self.route_info_label.setText(
-                        f"Route #{route_num}: {len(polyline)} points{repair_info} | "
-                        f"⚠️ {validation_result.invalid_segment_count} invalid segment(s)"
+                    self._draw_sumo_route_overlay_placeholder(
+                        segments, 
+                        invalid_segments, 
+                        real_start_idx, 
+                        real_end_idx, 
+                        segment_trim_data,
+                        self.sumo_net
                     )
-                    self.route_info_label.setStyleSheet("color: #f44336; font-size: 9px; font-weight: bold;")
+            
+            # Draw SUMO Step 2 visualization if checkbox is checked
+            if show_sumo_step2 and fix_invalid and trim_start_end:
+                # Use the cached sumolib network (loaded in on_network_load_finished)
+                if not self.sumo_net:
+                    self.log("⚠️ SUMO network not loaded. Please wait for network to finish loading.")
                 else:
-                    self.route_info_label.setText(
-                        f"Route #{route_num}: {len(polyline)} GPS points{repair_info} ✅"
-                    )
-                    self.route_info_label.setStyleSheet("color: #4CAF50; font-size: 9px; font-weight: bold;")
-                
-                log_msg = f"Route #{route_num} displayed"
-                if self.fix_invalid_segments_checkbox.isChecked():
-                    log_msg += f" as {len(segments)} segment(s)"
-                else:
-                    log_msg += f" with {len(polyline)} GPS points"
-                if repair_info:
-                    log_msg += f" (trimmed from {original_length})"
-                self.log(log_msg)
+                    # Step 2: Draw GPS points and their 3 closest edges with distinct colors
+                    # Use the same final_segments that Step 1 used (after iterative shortening)
+                    # This ensures Step 2 checks the same GPS points that Step 1 route covers
+                    step2_segments = getattr(self, '_step1_final_segments', segments)
+                    if not step2_segments:
+                        step2_segments = segments  # Fallback to original segments
+                    self._draw_step2_gps_points_and_edges(step2_segments)
+            
+            # Build route info text
+            display_polyline = segments[0] if segments else []
+            repair_info = ""
+            if trim_start_end:
+                repair_info = f" (Trimmed: {original_length} → {len(display_polyline)} points)"
             else:
-                self.route_info_label.setText(f"Route #{route_num}: No valid GPS data")
-                self.route_info_label.setStyleSheet("color: #666; font-size: 9px;")
-                self.log(f"Route #{route_num} has no valid GPS data")
+                repair_info = f" (Original: {original_length} points)"
+            
+            if validation_result and not validation_result.is_valid and not fix_invalid:
+                self.route_info_label.setText(
+                    f"Route #{route_num}: {len(display_polyline)} points{repair_info} | "
+                    f"⚠️ {validation_result.invalid_segment_count} invalid segment(s)"
+                )
+                self.route_info_label.setStyleSheet("color: #f44336; font-size: 9px; font-weight: bold;")
+            else:
+                self.route_info_label.setText(
+                    f"Route #{route_num}: {len(display_polyline)} GPS points{repair_info} ✅"
+                )
+                self.route_info_label.setStyleSheet("color: #4CAF50; font-size: 9px; font-weight: bold;")
+            
+            log_msg = f"Route #{route_num} displayed"
+            if fix_invalid:
+                log_msg += f" as {len(segments)} segment(s)"
+            else:
+                log_msg += f" with {len(display_polyline)} GPS points"
+            if trim_start_end:
+                log_msg += f" (trimmed from {original_length})"
+            self.log(log_msg)
+            
         except Exception as e:
-            self.route_info_label.setText(f"Error loading route: {str(e)[:30]}")
+            self.route_info_label.setText(f"Error displaying route: {str(e)[:30]}")
             self.route_info_label.setStyleSheet("color: #f44336; font-size: 9px;")
-            self.log(f"Error loading route #{route_num}: {e}")
+            self.log(f"Error displaying route #{route_num}: {e}")
+    
+    def _draw_sumo_route_overlay_placeholder(
+        self,
+        segments: List[List[List[float]]],
+        invalid_segments,
+        real_start_idx: int,
+        real_end_idx: int,
+        segment_trim_data: List[Tuple[int, int]],
+        sumo_net
+    ):
+        """
+        Draw SUMO route overlay using Step 1 of the algorithm.
+        
+        Args:
+            segments: List of polyline segments to draw routes for
+            invalid_segments: TripValidationResult with invalid segment info
+            real_start_idx: Real start index for entire original GPS segment
+            real_end_idx: Real end index for entire original GPS segment
+            segment_trim_data: List of (real_start, real_last) tuples for each split segment
+            sumo_net: SUMO network object
+        """
+        if not sumo_net:
+            self.log("⚠️ SUMO network not available for route calculation")
+            return
+        
+        if not self._edge_spatial_index:
+            self.log("⚠️ Spatial index not available for route calculation")
+            return
+        
+        if not self.network_parser:
+            self.log("⚠️ Network parser not available")
+            return
+        
+        # Process each segment separately
+        all_route_edges = []
+        final_segments = []  # Store final segments (may be shortened) for star drawing
+        # Store final_segments as instance variable for Step 2 to use
+        self._step1_final_segments = []
+        for seg_idx, segment in enumerate(segments):
+            if not segment or len(segment) < 2:
+                continue
+            
+            # Step 1: Calculate initial SUMO route for this segment (with iterative shortening)
+            routes, start_candidates, dest_candidates, route_scores, final_segment = self._calculate_step1_route(segment, sumo_net, seg_idx)
+            
+            # Draw only Rank 1 route (best match) - the selected route
+            if routes:
+                # Only draw the first route (Rank 1 - best similarity score)
+                best_route = routes[0]
+                
+                # Store Step 1 route edges for comparison with Step 2
+                if not hasattr(self, '_step1_route_edges'):
+                    self._step1_route_edges = set()
+                # Store base edge IDs (without lane #) for comparison
+                for edge_id in best_route:
+                    base_id = edge_id.split('#')[0]
+                    self._step1_route_edges.add(base_id)
+                
+                # Log Step 1 route edges for debugging
+                if seg_idx == 0:  # Only log once per route load
+                    self.log(f"📍 Step 1 route edges ({len(best_route)} edges): {best_route[:10]}{'...' if len(best_route) > 10 else ''}")
+                    # Log all Step 1 route base IDs
+                    step1_base_ids = sorted(self._step1_route_edges)
+                    self.log(f"📍 Step 1 route base IDs ({len(step1_base_ids)}): {step1_base_ids}")
+                
+                route_color = QColor(255, 0, 255)  # Magenta for Rank 1
+                
+                # Log similarity score of displayed route (Rank 1)
+                if route_scores and len(route_scores) > 0:
+                    best_score = route_scores[0]
+                    self.log(f"📍 Segment {seg_idx + 1}: Displayed SUMO route similarity score: {best_score:.4f} (Rank 1 - Best Match)")
+                
+                # Draw only Rank 1 route
+                all_route_edges.extend(best_route)
+                self._draw_route_edges(best_route, color=route_color)
+                
+                # Log all route scores for reference (but only display Rank 1)
+                if route_scores:
+                    for route_idx, score in enumerate(route_scores):
+                        rank = route_idx + 1
+                        if route_idx < len(routes):
+                            edges_count = len(routes[route_idx])
+                            status = " (displayed)" if rank == 1 else " (not displayed)"
+                            self.log(f"  Route Rank {rank}: similarity={score:.4f}, edges={edges_count}{status}")
+            
+            # Store final segment for star drawing (may be shortened)
+            if final_segment:
+                final_segments.append(final_segment)
+                self._step1_final_segments.append(final_segment)
+        
+        # Draw stars at GPS points using SUMO coordinates - only for final segments (may be shortened)
+        if final_segments:
+            self._draw_gps_points_as_stars(final_segments)
+        else:
+            # Fallback to original segments if no final segments
+            self._draw_gps_points_as_stars(segments)
+        
+        if all_route_edges:
+            self.log(f"✅ Step 1: Calculated SUMO route with {len(all_route_edges)} edges across {len(segments)} segment(s)")
+        else:
+            self.log("⚠️ Step 1: No valid routes calculated")
+    
+    def _find_candidate_edges(self, lon: float, lat: float, max_candidates: int = None, max_radius: float = None) -> List[Tuple[str, float]]:
+        """
+        Step 1.1: Find candidate edges for a GPS point.
+        
+        Args:
+            lon: Longitude
+            lat: Latitude
+            max_candidates: Maximum number of candidates to return (default: INTERMEDIATE_CANDIDATES for intermediate points)
+                          If max_radius is specified, this is ignored and all edges within radius are returned
+            max_radius: Maximum radius in meters to search for edges. If specified, returns all edges within this radius
+                       (used for start/end points). If None, uses max_candidates limit.
+        
+        Returns:
+            List of (edge_id, distance) tuples, sorted by distance (closest first)
+        """
+        # Use default for intermediate points if not specified
+        if max_candidates is None and max_radius is None:
+            max_candidates = getattr(self, 'INTERMEDIATE_CANDIDATES', 6)
+        
+        # Convert GPS to SUMO coordinates
+        sumo_coords = self.network_parser.gps_to_sumo_coords(lon, lat)
+        if not sumo_coords:
+            return []
+        
+        x, y = sumo_coords
+        
+        # Determine search radius
+        # If max_radius is specified, use it; otherwise use a larger radius for initial search
+        search_radius = max_radius if max_radius is not None else 500.0
+        
+        # Use spatial index to get candidate edges
+        candidate_edge_ids = self._edge_spatial_index.get_candidates_in_radius(x, y, radius=search_radius)
+        
+        if not candidate_edge_ids:
+            return []
+        
+        # Calculate precise distance from GPS point to each candidate edge
+        edges_dict = self.network_parser.get_edges()
+        edge_distances = []  # List of (edge_id, distance)
+        
+        for edge_id in candidate_edge_ids:
+            if edge_id not in edges_dict:
+                continue
+            
+            edge_data = edges_dict[edge_id]
+            lanes = edge_data.get('lanes', [])
+            if not lanes:
+                continue
+            
+            # Use first lane's shape
+            shape = lanes[0].get('shape', [])
+            if len(shape) < 2:
+                continue
+            
+            # Calculate minimum distance from point to edge shape
+            min_dist = float('inf')
+            for i in range(len(shape) - 1):
+                x1, y1 = shape[i]
+                x2, y2 = shape[i + 1]
+                # Calculate distance manually (point to segment)
+                dx = x2 - x1
+                dy = y2 - y1
+                len_sq = dx * dx + dy * dy
+                if len_sq == 0:
+                    dist = math.sqrt((x - x1)**2 + (y - y1)**2)
+                else:
+                    t = max(0, min(1, ((x - x1) * dx + (y - y1) * dy) / len_sq))
+                    closest_x = x1 + t * dx
+                    closest_y = y1 + t * dy
+                    dist = math.sqrt((x - closest_x)**2 + (y - closest_y)**2)
+                min_dist = min(min_dist, dist)
+            
+            # If max_radius is specified, filter by distance; otherwise include all
+            if max_radius is not None:
+                if min_dist <= max_radius:
+                    edge_distances.append((edge_id, min_dist))
+            else:
+                if min_dist < float('inf'):
+                    edge_distances.append((edge_id, min_dist))
+        
+        # Deduplicate by base edge ID (ignore lane #)
+        # Keep closest variant per base edge
+        base_edge_map = {}  # base_id -> (edge_id, distance) - keep closest variant
+        for edge_id, distance in edge_distances:
+            # Get base edge ID (strip # suffix)
+            base_id = edge_id.split('#')[0] if '#' in edge_id else edge_id
+            
+            # Keep only closest variant per base edge
+            if base_id not in base_edge_map or distance < base_edge_map[base_id][1]:
+                base_edge_map[base_id] = (edge_id, distance)
+        
+        # Sort by distance
+        candidates = sorted(base_edge_map.values(), key=lambda x: x[1])
+        
+        # If max_radius was specified, return all candidates within radius
+        # Otherwise, limit to max_candidates
+        if max_radius is not None:
+            return candidates  # Return all within radius
+        else:
+            return candidates[:max_candidates]  # Limit to max_candidates
+    
+    def _calculate_route_similarity_score(
+        self,
+        route_edges: List[str],
+        gps_points: List[List[float]],
+        seg_idx: int
+    ) -> float:
+        """
+        Calculate similarity score for a route based on how well it matches GPS trajectory.
+        
+        **Important**: Only GPS points in the provided `gps_points` list are used for scoring.
+        This ensures that if the segment was shortened (e.g., points 0 and 21 removed),
+        only the GPS points actually used for route calculation (e.g., points 1-20) are
+        considered in the similarity score.
+        
+        Uses Option 2: Weighted Point-to-Edge Distance with Edge Coverage
+        - Coverage score: How many GPS points have their candidate edges in the route
+        - Distance score: Average distance from GPS points to route edges
+        
+        Args:
+            route_edges: List of edge IDs in the route
+            gps_points: List of [lon, lat] GPS points (should be the segment actually used for route calculation)
+            seg_idx: Segment index for logging
+        
+        Returns:
+            Similarity score (0-1, higher is better match)
+        """
+        if not route_edges or not gps_points:
+            return 0.0
+        
+        # Get base edge IDs from route (ignore lane #)
+        route_base_ids = {edge_id.split('#')[0] for edge_id in route_edges}
+        
+        # Get edges dict for distance calculation
+        edges_dict = self.network_parser.get_edges()
+        
+        matched_points = 0
+        total_distance = 0.0
+        valid_points = 0
+        
+        # Iterate only over GPS points in the provided segment (not original full segment)
+        # This ensures that if points were removed during iterative shortening, they are not included in the score
+        for lon, lat in gps_points:
+            # Find 3 closest candidate edges for this GPS point
+            candidates = self._find_candidate_edges(lon, lat, max_candidates=3)
+            
+            if not candidates:
+                continue
+            
+            valid_points += 1
+            
+            # Check if any candidate's base ID is in route (coverage metric)
+            candidate_base_ids = {edge_id.split('#')[0] for edge_id, _ in candidates}
+            if route_base_ids.intersection(candidate_base_ids):
+                matched_points += 1
+            
+            # Calculate minimum distance from GPS point to any edge in route (distance metric)
+            # Convert GPS to SUMO coordinates
+            sumo_coords = self.network_parser.gps_to_sumo_coords(lon, lat)
+            if not sumo_coords:
+                continue
+            
+            x, y = sumo_coords
+            min_dist_to_route = float('inf')
+            
+            # Calculate distance to each edge in route
+            for edge_id in route_edges:
+                if edge_id not in edges_dict:
+                    continue
+                
+                edge_data = edges_dict[edge_id]
+                lanes = edge_data.get('lanes', [])
+                if not lanes:
+                    continue
+                
+                # Use first lane's shape
+                shape = lanes[0].get('shape', [])
+                if len(shape) < 2:
+                    continue
+                
+                # Calculate minimum distance from point to edge shape segments
+                for i in range(len(shape) - 1):
+                    x1, y1 = shape[i]
+                    x2, y2 = shape[i + 1]
+                    
+                    # Calculate distance from point to line segment
+                    dx = x2 - x1
+                    dy = y2 - y1
+                    len_sq = dx * dx + dy * dy
+                    
+                    if len_sq == 0:
+                        dist = math.sqrt((x - x1)**2 + (y - y1)**2)
+                    else:
+                        t = max(0, min(1, ((x - x1) * dx + (y - y1) * dy) / len_sq))
+                        closest_x = x1 + t * dx
+                        closest_y = y1 + t * dy
+                        dist = math.sqrt((x - closest_x)**2 + (y - closest_y)**2)
+                    
+                    min_dist_to_route = min(min_dist_to_route, dist)
+            
+            if min_dist_to_route < float('inf'):
+                total_distance += min_dist_to_route
+        
+        if valid_points == 0:
+            return 0.0
+        
+        # Calculate coverage score (0-1)
+        coverage_score = matched_points / valid_points if valid_points > 0 else 0.0
+        
+        # Calculate distance score (0-1, using exponential decay)
+        avg_distance = total_distance / valid_points if valid_points > 0 else float('inf')
+        scale_factor = 100.0  # meters - tune based on GPS accuracy
+        distance_score = math.exp(-avg_distance / scale_factor) if avg_distance < float('inf') else 0.0
+        
+        # Weighted combination (60% coverage, 40% distance)
+        coverage_weight = 0.6
+        distance_weight = 0.4
+        final_score = coverage_weight * coverage_score + distance_weight * distance_score
+        
+        return final_score
+    
+    def _calculate_step1_route_single(self, segment: List[List[float]], sumo_net, seg_idx: int) -> Tuple[List[str], List[Tuple[str, float]], List[Tuple[str, float]], List[float], float]:
+        """
+        Calculate Step 1 route for a single segment (without iterative shortening).
+        
+        **Important**: The similarity score is calculated using only the GPS points in the provided
+        `segment` parameter. If the segment was shortened (e.g., points 0 and 21 removed),
+        only the GPS points in this segment (e.g., points 1-20) are used for similarity scoring.
+        
+        Args:
+            segment: List of [lon, lat] GPS points (may be shortened from original)
+            sumo_net: SUMO network object
+            seg_idx: Segment index for logging
+        
+        Returns:
+            Tuple of (route_edges, start_candidates, dest_candidates, route_scores, best_score):
+            - route_edges: List of edge IDs representing the route, or empty list if no route found
+            - start_candidates: List of (edge_id, distance) tuples for start point
+            - dest_candidates: List of (edge_id, distance) tuples for destination point
+            - route_scores: List of similarity scores for each route (sorted by score, best first)
+            - best_score: Similarity score of the best route (Rank 1), or 0.0 if no route found
+        """
+        if len(segment) < 2:
+            return [], [], [], [], 0.0
+        
+        # Step 1.1: Find candidate edges for start and destination
+        # Select up to 3 closest candidate edges (by distance)
+        # If fewer than 3 candidates found: Use all available candidates
+        start_lon, start_lat = segment[0]
+        dest_lon, dest_lat = segment[-1]
+        
+        # Find all candidate edges within 100m radius for start and destination
+        start_candidates = self._find_candidate_edges(start_lon, start_lat, max_radius=100.0)
+        dest_candidates = self._find_candidate_edges(dest_lon, dest_lat, max_radius=100.0)
+        
+        # Always return candidates even if route calculation fails
+        if not start_candidates:
+            self.log(f"⚠️ Segment {seg_idx + 1}: No candidate edges found for start GPS point")
+            return [], dest_candidates if dest_candidates else [], [], [], 0.0
+        
+        if not dest_candidates:
+            self.log(f"⚠️ Segment {seg_idx + 1}: No candidate edges found for destination GPS point")
+            return [], start_candidates, [], [], 0.0
+        
+        self.log(f"Segment {seg_idx + 1} Step 1.1: Found {len(start_candidates)} start candidates, {len(dest_candidates)} dest candidates")
+        
+        # Step 1.2: Calculate k-shortest paths for all combinations (up to 5 routes per combination)
+        all_routes = []  # List of (route_edges, cost) - will contain up to 5 routes per combination
+        
+        for start_edge_id, start_dist in start_candidates:
+            for dest_edge_id, dest_dist in dest_candidates:
+                try:
+                    # Get base edge IDs (remove lane suffix)
+                    start_base_id = start_edge_id.split('#')[0]
+                    dest_base_id = dest_edge_id.split('#')[0]
+                    
+                    # Check if edges exist in the network before trying to get them
+                    if not sumo_net.hasEdge(start_base_id):
+                        continue  # Skip if edge doesn't exist
+                    if not sumo_net.hasEdge(dest_base_id):
+                        continue  # Skip if edge doesn't exist
+                    
+                    # Get SUMO edge objects
+                    start_edge = sumo_net.getEdge(start_base_id)
+                    dest_edge = sumo_net.getEdge(dest_base_id)
+                    
+                    # Calculate k-shortest paths (up to 5 routes)
+                    # Check if getKShortestPaths method exists
+                    if hasattr(sumo_net, 'getKShortestPaths'):
+                        try:
+                            k_routes = sumo_net.getKShortestPaths(start_edge, dest_edge, 5)
+                            if k_routes:
+                                # getKShortestPaths returns a list of (edges, cost) tuples
+                                for route_result in k_routes:
+                                    if route_result and len(route_result) >= 2:
+                                        route_edges, cost = route_result
+                                        if route_edges:
+                                            # Convert to list of edge IDs (base IDs only)
+                                            edge_ids = [edge.getID() for edge in route_edges]
+                                            all_routes.append((edge_ids, cost))
+                        except Exception as e:
+                            # Fallback to single shortest path
+                            route_result = sumo_net.getShortestPath(start_edge, dest_edge)
+                            if route_result and len(route_result) >= 2:
+                                route_edges, cost = route_result
+                                if route_edges:
+                                    edge_ids = [edge.getID() for edge in route_edges]
+                                    all_routes.append((edge_ids, cost))
+                    else:
+                        # Fallback: use getShortestPath (only one route)
+                        route_result = sumo_net.getShortestPath(start_edge, dest_edge)
+                        if route_result and len(route_result) >= 2:
+                            route_edges, cost = route_result
+                            if route_edges:
+                                edge_ids = [edge.getID() for edge in route_edges]
+                                all_routes.append((edge_ids, cost))
+                except Exception as e:
+                    # Skip this combination if route calculation fails (don't log every error to avoid spam)
+                    continue
+        
+        if not all_routes:
+            self.log(f"⚠️ Segment {seg_idx + 1}: No valid routes found for any combination")
+            # Return empty route but still return candidates for visualization
+            return [], start_candidates, dest_candidates, [], 0.0
+        
+        # Step 1.3: Select top routes (up to 5, sorted by cost) and calculate similarity scores
+        all_routes.sort(key=lambda x: x[1])  # Sort by cost
+        # Deduplicate routes (same edge sequence) and take top 5 unique routes
+        seen_routes = set()
+        top_routes = []
+        for route_edges, cost in all_routes:
+            route_tuple = tuple(route_edges)  # Use tuple for hashing
+            if route_tuple not in seen_routes:
+                seen_routes.add(route_tuple)
+                top_routes.append((route_edges, cost))
+                if len(top_routes) >= 5:
+                    break
+        
+        # Step 1.3: Calculate similarity scores for all top routes and select the best one
+        # Important: Use the current segment (may be shortened) for similarity calculation
+        # This ensures only GPS points actually used for route calculation are scored
+        route_scores = []
+        for route_edges, cost in top_routes:
+            # Calculate similarity using the segment that was used to find this route
+            # (segment may be shortened if iterative shortening occurred)
+            similarity_score = self._calculate_route_similarity_score(route_edges, segment, seg_idx)
+            route_scores.append((route_edges, cost, similarity_score))
+        
+        # Select route with highest similarity score
+        if route_scores:
+            # Sort by similarity score (descending), then by cost (ascending) as tiebreaker
+            route_scores.sort(key=lambda x: (-x[2], x[1]))
+            best_route, best_cost, best_score = route_scores[0]
+            
+            self.log(f"Segment {seg_idx + 1} Step 1.3: Evaluated {len(route_scores)} route(s), selected route with similarity score {best_score:.4f} (cost: {best_cost:.2f})")
+            
+            # Log all route scores for debugging
+            for idx, (route_edges, cost, score) in enumerate(route_scores):
+                self.log(f"  Route {idx + 1}: similarity={score:.4f}, cost={cost:.2f}, edges={len(route_edges)}")
+            
+            # Return routes sorted by similarity score (best first) for visualization
+            # The first route is the selected one (highest similarity score)
+            selected_routes = [route_edges for route_edges, _, _ in route_scores]
+        else:
+            selected_routes = []
+            best_score = 0.0
+        
+        # Step 1.4: Store destination candidate edges
+        dest_candidate_edge_ids = [edge_id.split('#')[0] for edge_id, _ in dest_candidates]
+        self.destination_candidate_edges = dest_candidate_edge_ids[:3]  # Store up to 3
+        
+        # Step 1.5: First edge is already marked as valid (it's the first edge of selected route)
+        
+        # Return routes sorted by similarity score (best first) along with their scores
+        # The first route in the list has the highest similarity score and is the selected route
+        route_scores_list = [score for _, _, score in route_scores] if route_scores else []
+        return selected_routes, start_candidates, dest_candidates, route_scores_list, best_score
+    
+    def _calculate_step1_route(self, segment: List[List[float]], sumo_net, seg_idx: int) -> Tuple[List[str], List[Tuple[str, float]], List[Tuple[str, float]], List[float], List[List[float]]]:
+        """
+        Step 1: Calculate initial SUMO route from start to destination with iterative shortening.
+        
+        If no route found or similarity score < 0.75, iteratively shortens the segment by removing
+        GPS points: 6 points from start, then 4 points from end, repeating (max 10 iterations or until < 4 points remain).
+        
+        Args:
+            segment: List of [lon, lat] GPS points
+            sumo_net: SUMO network object
+            seg_idx: Segment index for logging
+        
+        Returns:
+            Tuple of (route_edges, start_candidates, dest_candidates, route_scores, final_segment):
+            - route_edges: List of edge IDs representing the route, or empty list if no route found
+            - start_candidates: List of (edge_id, distance) tuples for start point
+            - dest_candidates: List of (edge_id, distance) tuples for destination point
+            - route_scores: List of similarity scores for each route (sorted by score, best first)
+            - final_segment: The final segment used (may be shortened from original)
+        """
+        if len(segment) < 2:
+            return [], [], [], [], segment
+        
+        SIMILARITY_THRESHOLD = 0.75
+        MAX_ITERATIONS = 10
+        MIN_POINTS = 4
+        
+        current_segment = segment.copy()
+        removed_from_start = 0
+        removed_from_end = 0
+        best_result = None
+        best_score = 0.0
+        best_segment = current_segment
+        
+        # Try initial calculation
+        routes, start_candidates, dest_candidates, route_scores, score = self._calculate_step1_route_single(
+            current_segment, sumo_net, seg_idx
+        )
+        
+        if routes and score >= SIMILARITY_THRESHOLD:
+            # Success on first try
+            self.log(f"✓ Segment {seg_idx + 1} Step 1: Route found with similarity score {score:.4f} (≥ {SIMILARITY_THRESHOLD})")
+            # Return a copy to ensure the segment matches the route
+            return routes, start_candidates, dest_candidates, route_scores, current_segment.copy()
+        
+        # Store initial result as best so far
+        if routes:
+            # Store the segment that was used to calculate this route
+            best_result = (routes, start_candidates, dest_candidates, route_scores, current_segment.copy())
+            best_score = score
+            best_segment = current_segment.copy()
+            reason = "low similarity score" if score < SIMILARITY_THRESHOLD else "no route found"
+            self.log(f"⚠️ Segment {seg_idx + 1} Step 1: Initial attempt - {reason} (score: {score:.4f}), starting iterative shortening...")
+        else:
+            self.log(f"⚠️ Segment {seg_idx + 1} Step 1: No route found, starting iterative shortening...")
+        
+        # Iterative shortening: Remove 6 points from start, then 4 from end, repeat
+        POINTS_TO_REMOVE_FROM_START = 6
+        POINTS_TO_REMOVE_FROM_END = 4
+        
+        iteration = 0
+        while iteration < MAX_ITERATIONS:
+            if len(current_segment) < MIN_POINTS:
+                self.log(f"⚠️ Segment {seg_idx + 1} Step 1: Stopping - too few GPS points remaining ({len(current_segment)} < {MIN_POINTS})")
+                break
+            
+            # Remove 6 points from start
+            points_removed_this_iteration = 0
+            for i in range(POINTS_TO_REMOVE_FROM_START):
+                if len(current_segment) < MIN_POINTS:
+                    break
+                if len(current_segment) <= 1:
+                    break
+                removed_point = current_segment.pop(0)
+                removed_from_start += 1
+                points_removed_this_iteration += 1
+                self.log(f"  Iteration {iteration + 1}: Removed GPS point from START (point {removed_from_start}): [{removed_point[0]:.6f}, {removed_point[1]:.6f}]")
+            
+            if len(current_segment) < MIN_POINTS:
+                break
+            
+            # Recalculate after removing from start
+            routes, start_candidates, dest_candidates, route_scores, score = self._calculate_step1_route_single(
+                current_segment, sumo_net, seg_idx
+            )
+            
+            if routes:
+                if score > best_score:
+                    # Save the best result along with the segment that was used to calculate it
+                    best_result = (routes, start_candidates, dest_candidates, route_scores, current_segment.copy())
+                    best_score = score
+                    best_segment = current_segment.copy()
+                
+                if score >= SIMILARITY_THRESHOLD:
+                    self.log(f"✓ Segment {seg_idx + 1} Step 1: Success after removing {removed_from_start} point(s) from start! Similarity score: {score:.4f} (≥ {SIMILARITY_THRESHOLD})")
+                    return routes, start_candidates, dest_candidates, route_scores, current_segment.copy()
+                else:
+                    self.log(f"  Iteration {iteration + 1} (after removing {points_removed_this_iteration} from start): Route found but score {score:.4f} < {SIMILARITY_THRESHOLD}, continuing...")
+            else:
+                self.log(f"  Iteration {iteration + 1} (after removing {points_removed_this_iteration} from start): No route found, continuing...")
+            
+            if len(current_segment) < MIN_POINTS:
+                break
+            
+            # Remove 4 points from end
+            points_removed_this_iteration = 0
+            for i in range(POINTS_TO_REMOVE_FROM_END):
+                if len(current_segment) < MIN_POINTS:
+                    break
+                if len(current_segment) <= 1:
+                    break
+                removed_point = current_segment.pop()
+                removed_from_end += 1
+                points_removed_this_iteration += 1
+                self.log(f"  Iteration {iteration + 1}: Removed GPS point from END (point {removed_from_end}): [{removed_point[0]:.6f}, {removed_point[1]:.6f}]")
+            
+            if len(current_segment) < MIN_POINTS:
+                break
+            
+            # Recalculate after removing from end
+            routes, start_candidates, dest_candidates, route_scores, score = self._calculate_step1_route_single(
+                current_segment, sumo_net, seg_idx
+            )
+            
+            if routes:
+                if score > best_score:
+                    # Save the best result along with the segment that was used to calculate it
+                    best_result = (routes, start_candidates, dest_candidates, route_scores, current_segment.copy())
+                    best_score = score
+                    best_segment = current_segment.copy()
+                
+                if score >= SIMILARITY_THRESHOLD:
+                    self.log(f"✓ Segment {seg_idx + 1} Step 1: Success after removing {removed_from_start} point(s) from start and {removed_from_end} point(s) from end! Similarity score: {score:.4f} (≥ {SIMILARITY_THRESHOLD})")
+                    return routes, start_candidates, dest_candidates, route_scores, current_segment.copy()
+                else:
+                    self.log(f"  Iteration {iteration + 1} (after removing {points_removed_this_iteration} from end): Route found but score {score:.4f} < {SIMILARITY_THRESHOLD}, continuing...")
+            else:
+                self.log(f"  Iteration {iteration + 1} (after removing {points_removed_this_iteration} from end): No route found, continuing...")
+            
+            iteration += 1
+            
+            # Recalculate Step 1 with shortened segment
+            routes, start_candidates, dest_candidates, route_scores, score = self._calculate_step1_route_single(
+                current_segment, sumo_net, seg_idx
+            )
+            
+            if routes:
+                if score > best_score:
+                    # Save the best result along with the segment that was used to calculate it
+                    best_result = (routes, start_candidates, dest_candidates, route_scores, current_segment.copy())
+                    best_score = score
+                    best_segment = current_segment.copy()
+                
+                if score >= SIMILARITY_THRESHOLD:
+                    self.log(f"✓ Segment {seg_idx + 1} Step 1: Success after {iteration + 1} iteration(s)! Similarity score: {score:.4f} (≥ {SIMILARITY_THRESHOLD})")
+                    self.log(f"  Removed {removed_from_start} point(s) from start, {removed_from_end} point(s) from end")
+                    # Return the segment that was used to calculate this route
+                    return routes, start_candidates, dest_candidates, route_scores, current_segment.copy()
+                else:
+                    self.log(f"  Iteration {iteration + 1}: Route found but score {score:.4f} < {SIMILARITY_THRESHOLD}, continuing...")
+            else:
+                self.log(f"  Iteration {iteration + 1}: No route found, continuing...")
+        
+        # If we get here, we didn't reach the threshold
+        if best_result:
+            routes, start_candidates, dest_candidates, route_scores, best_segment_for_route = best_result
+            self.log(f"⚠️ Segment {seg_idx + 1} Step 1: Best route found after {MAX_ITERATIONS} iterations with score {best_score:.4f} (< {SIMILARITY_THRESHOLD})")
+            self.log(f"  Removed {removed_from_start} point(s) from start, {removed_from_end} point(s) from end")
+            self.log(f"  Step 1 failed - will proceed to Step 2")
+            # Return the segment that was used to calculate the best route
+            return routes, start_candidates, dest_candidates, route_scores, best_segment_for_route
+        else:
+            self.log(f"⚠️ Segment {seg_idx + 1} Step 1: No route found after {MAX_ITERATIONS} iterations")
+            self.log(f"  Removed {removed_from_start} point(s) from start, {removed_from_end} point(s) from end")
+            self.log(f"  Step 1 failed - will proceed to Step 2")
+            return [], start_candidates, dest_candidates, [], current_segment
+    
+    def _draw_gps_points_as_stars(self, segments: List[List[List[float]]]):
+        """
+        Draw stars at each GPS point converted to SUMO coordinates.
+        This helps verify alignment between GPS points and SUMO network.
+        
+        Args:
+            segments: List of polyline segments (each segment is a list of [lon, lat] points)
+        """
+        if not self.network_parser:
+            self.log("⚠️ Network parser not available for GPS point drawing")
+            return
+        
+        # Get Y bounds for flipping
+        y_min = getattr(self.map_view, '_network_y_min', 0)
+        y_max = getattr(self.map_view, '_network_y_max', 0)
+        
+        def flip_y(y):
+            """Flip Y coordinate to match network display orientation."""
+            return y_max + y_min - y
+        
+        from PySide6.QtCore import QPointF, Qt
+        from PySide6.QtGui import QBrush, QColor, QFont, QPainterPath, QPen
+        from PySide6.QtWidgets import (QGraphicsPathItem, QGraphicsRectItem,
+                                       QGraphicsTextItem)
+
+        # Star color - bright yellow for visibility
+        star_color = QColor(255, 255, 0)  # Yellow
+        star_pen = QPen(star_color, 2.0)  # Thicker pen for visibility
+        star_brush = QBrush(star_color)
+        
+        # Star size (radius in pixels) - increased for visibility
+        star_radius = 8.0
+        
+        # Text settings for numbers - readable font size
+        text_font = QFont("Arial", 10, QFont.Bold)
+        text_color = QColor(0, 0, 0)  # Black text for contrast
+        
+        def create_star_path(center_x: float, center_y: float, radius: float) -> QPainterPath:
+            """Create a star shape path."""
+            path = QPainterPath()
+            
+            # 5-pointed star
+            num_points = 5
+            outer_radius = radius
+            inner_radius = radius * 0.4
+            
+            for i in range(num_points * 2):
+                angle = (i * math.pi) / num_points - math.pi / 2  # Start at top
+                if i % 2 == 0:
+                    r = outer_radius
+                else:
+                    r = inner_radius
+                
+                x = center_x + r * math.cos(angle)
+                y = center_y + r * math.sin(angle)
+                
+                if i == 0:
+                    path.moveTo(x, y)
+                else:
+                    path.lineTo(x, y)
+            
+            path.closeSubpath()
+            return path
+        
+        total_points = 0
+        point_counter = 0  # Global counter across all segments (starts from 0)
+        
+        for seg_idx, segment in enumerate(segments):
+            if not segment:
+                continue
+            
+            for point_idx, (lon, lat) in enumerate(segment):
+                # Convert GPS to SUMO coordinates
+                sumo_coords = self.network_parser.gps_to_sumo_coords(lon, lat)
+                if not sumo_coords:
+                    continue
+                
+                x, y = sumo_coords
+                
+                # Flip Y coordinate to match network display
+                y_flipped = flip_y(y)
+                
+                # Create star path
+                star_path = create_star_path(x, y_flipped, star_radius)
+                
+                # Create graphics item for star
+                star_item = QGraphicsPathItem(star_path)
+                star_item.setPen(star_pen)
+                star_item.setBrush(star_brush)
+                star_item.setZValue(2000)  # Draw on top of everything
+                star_item.setVisible(True)  # Ensure visibility
+                try:
+                    self.map_view.scene.addItem(star_item)
+                    self._route_items.append(star_item)
+                except RuntimeError:
+                    # Scene was deleted, skip
+                    continue
+                
+                # Create text item for number (simplified - no background for now)
+                text_str = str(point_counter)
+                text_item = QGraphicsTextItem(text_str)
+                text_item.setFont(text_font)
+                text_item.setDefaultTextColor(text_color)
+                
+                # Get text bounding rect (need to set font first)
+                text_rect = text_item.boundingRect()
+                
+                # Center text on star
+                text_x = x - text_rect.width() / 2
+                text_y = y_flipped - text_rect.height() / 2
+                text_item.setPos(text_x, text_y)
+                text_item.setZValue(2001)  # Above star
+                
+                # Add text item
+                try:
+                    self.map_view.scene.addItem(text_item)
+                    self._route_items.append(text_item)
+                except RuntimeError:
+                    # Scene was deleted, skip
+                    continue
+                
+                point_counter += 1
+                total_points += 1
+        
+        self.log(f"✅ Drew {total_points} GPS points as numbered stars (using SUMO coordinates)")
+    
+    def _draw_route_edges(self, route_edges: List[str], color: QColor = None):
+        """
+        Draw route edges on the map as dashed lines.
+        
+        Args:
+            route_edges: List of edge IDs to draw
+            color: QColor to use for drawing (default: magenta)
+        """
+        if not self.network_parser:
+            return
+        
+        edges_dict = self.network_parser.get_edges()
+        
+        # Get Y bounds for flipping
+        y_min = getattr(self.map_view, '_network_y_min', 0)
+        y_max = getattr(self.map_view, '_network_y_max', 0)
+        
+        def flip_y(y):
+            """Flip Y coordinate to match network display orientation."""
+            return y_max + y_min - y
+        
+        from PySide6.QtCore import Qt
+        from PySide6.QtGui import QColor, QPen
+        from PySide6.QtWidgets import QGraphicsLineItem
+
+        # Use provided color or default to magenta
+        if color is None:
+            route_color = QColor(255, 0, 255)  # Magenta
+        else:
+            route_color = color
+        
+        route_pen = QPen(route_color)
+        route_pen.setWidth(3)
+        route_pen.setStyle(Qt.DashLine)
+        route_pen.setDashPattern([5, 5])  # 5px dash, 5px gap
+        
+        for edge_id in route_edges:
+            # Try base edge ID first, then with lane suffixes
+            edge_data = None
+            if edge_id in edges_dict:
+                edge_data = edges_dict[edge_id]
+            else:
+                # Try with lane suffix #0
+                if f"{edge_id}#0" in edges_dict:
+                    edge_data = edges_dict[f"{edge_id}#0"]
+            
+            if not edge_data:
+                continue
+            
+            lanes = edge_data.get('lanes', [])
+            if not lanes:
+                continue
+            
+            # Use first lane's shape
+            shape = lanes[0].get('shape', [])
+            if len(shape) < 2:
+                continue
+            
+            # Draw line segments along the edge shape
+            for i in range(len(shape) - 1):
+                x1, y1 = shape[i]
+                x2, y2 = shape[i + 1]
+                
+                # Flip Y coordinates
+                y1_flipped = flip_y(y1)
+                y2_flipped = flip_y(y2)
+                
+                line = QGraphicsLineItem(x1, y1_flipped, x2, y2_flipped)
+                line.setPen(route_pen)
+                line.setZValue(1000)  # Draw on top
+                self.map_view.scene.addItem(line)
+                self._route_items.append(line)
+    
+    def _find_candidate_edges_step2(self, lon: float, lat: float, max_candidates: int = 10, max_radius: float = 300.0) -> List[Tuple[str, float]]:
+        """
+        Step 2: Find candidate edges for a GPS point.
+        
+        Uses the SAME logic as Step 1's _find_candidate_edges to ensure consistency.
+        The only difference is that we don't use max_radius filtering (we want to see all closest edges).
+        
+        Args:
+            lon: Longitude
+            lat: Latitude
+            max_candidates: Maximum number of candidates to return (default: 10)
+            max_radius: Not used (for compatibility only)
+        
+        Returns:
+            List of (edge_id, distance) tuples, sorted by distance (closest first)
+        """
+        if not self.network_parser:
+            return []
+        
+        # Use the SAME method as Step 1, but with a larger search radius to ensure we find all edges
+        # Step 1 uses spatial index with 500m radius, so we'll use the same approach
+        # but iterate through all edges to ensure we don't miss anything
+        
+        # Convert GPS to SUMO coordinates
+        sumo_coords = self.network_parser.gps_to_sumo_coords(lon, lat)
+        if not sumo_coords:
+            return []
+        
+        x, y = sumo_coords
+        
+        # Check ALL edges from the network (not just spatial index candidates)
+        # This ensures we find edges that might be outside the spatial index radius
+        # The spatial index uses 500m radius, but we want to find ALL closest edges
+        edges_dict = self.network_parser.get_edges()
+        edge_distances = []  # List of (edge_id, distance)
+        
+        import math
+
+        # Iterate through ALL edges to ensure we don't miss anything
+        # This is different from Step 1 which uses spatial index for performance
+        # Step 2 needs to be thorough and find ALL edges, not just those in a radius
+        edges_to_check = edges_dict.keys()
+        
+        for edge_id in edges_to_check:
+            if edge_id not in edges_dict:
+                continue
+            
+            edge_data = edges_dict[edge_id]
+            lanes = edge_data.get('lanes', [])
+            
+            # Use SAME logic as Step 1: skip edges without lanes
+            if not lanes:
+                continue
+            
+            # Use first lane's shape (same as Step 1)
+            shape = lanes[0].get('shape', [])
+            if len(shape) < 2:
+                continue
+            
+            # Calculate minimum distance from point to edge shape (SAME as Step 1)
+            min_dist = float('inf')
+            for i in range(len(shape) - 1):
+                x1, y1 = shape[i]
+                x2, y2 = shape[i + 1]
+                # Calculate distance manually (point to segment)
+                dx = x2 - x1
+                dy = y2 - y1
+                len_sq = dx * dx + dy * dy
+                if len_sq == 0:
+                    dist = math.sqrt((x - x1)**2 + (y - y1)**2)
+                else:
+                    t = max(0, min(1, ((x - x1) * dx + (y - y1) * dy) / len_sq))
+                    closest_x = x1 + t * dx
+                    closest_y = y1 + t * dy
+                    dist = math.sqrt((x - closest_x)**2 + (y - closest_y)**2)
+                min_dist = min(min_dist, dist)
+            
+            # Include all edges (same as Step 1)
+            if min_dist < float('inf'):
+                edge_distances.append((edge_id, min_dist))
+        
+        # Deduplicate by base edge ID (SAME as Step 1)
+        base_edge_map = {}
+        for edge_id, distance in edge_distances:
+            # Get base edge ID (strip # suffix) - SAME as Step 1
+            base_id = edge_id.split('#')[0] if '#' in edge_id else edge_id
+            
+            # Keep only closest variant per base edge (SAME as Step 1)
+            if base_id not in base_edge_map or distance < base_edge_map[base_id][1]:
+                base_edge_map[base_id] = (edge_id, distance)
+        
+        # Sort by distance (SAME as Step 1)
+        deduplicated = sorted(base_edge_map.values(), key=lambda x: x[1])
+        
+        # Debug: Log for first GPS point
+        if not hasattr(self, '_step2_coord_logged'):
+            self.log(f"📍 Step 2: First GPS point ({lon:.6f}, {lat:.6f}) → SUMO ({x:.2f}, {y:.2f})")
+            self.log(f"📍 Step 2: Checking ALL {len(edges_to_check)} edges from network (no spatial index filtering)")
+            
+            # DIAGNOSTIC: Compare with Step 1's spatial index approach
+            spatial_index_candidates = self._edge_spatial_index.get_candidates_in_radius(x, y, radius=500.0)
+            self.log(f"🔍 DIAGNOSTIC: Step 1 spatial index (500m) would find {len(spatial_index_candidates)} candidate edges")
+            if hasattr(self, '_step1_route_edges') and self._step1_route_edges:
+                # Check how many Step 1 route edges are in spatial index
+                step1_in_spatial_index = 0
+                for step1_base_id in self._step1_route_edges:
+                    for eid in spatial_index_candidates:
+                        base_id = eid.split('#')[0] if '#' in eid else eid
+                        if base_id == step1_base_id:
+                            step1_in_spatial_index += 1
+                            break
+                self.log(f"🔍 DIAGNOSTIC: {step1_in_spatial_index}/{len(self._step1_route_edges)} Step 1 route edges are in spatial index (500m radius)")
+                if step1_in_spatial_index < len(self._step1_route_edges):
+                    self.log(f"⚠️ DIAGNOSTIC: {len(self._step1_route_edges) - step1_in_spatial_index} Step 1 route edges are NOT in spatial index - they may be beyond 500m!")
+            self._step2_coord_logged = True
+        
+        if deduplicated:
+            top_50 = deduplicated[:50]
+            top_50_base_ids = {eid.split('#')[0] if '#' in eid else eid for eid, _ in top_50}
+            
+            # Check if Step 1 route edges are in Step 2 results
+            step1_edges_to_include = []
+            if hasattr(self, '_step1_route_edges') and self._step1_route_edges:
+                # Debug: log that we're checking
+                if not hasattr(self, '_step2_comparison_logged'):
+                    self.log(f"🔍 Step 2: Comparing against {len(self._step1_route_edges)} Step 1 route edges: {sorted(list(self._step1_route_edges))[:10]}{'...' if len(self._step1_route_edges) > 10 else ''}")
+                    self._step2_comparison_logged = True
+                # Find which Step 1 route edges are in the full deduplicated list
+                all_base_ids_map = {}  # base_id -> (rank, distance, edge_id)
+                for idx, (eid, dist) in enumerate(deduplicated):
+                    base_id = eid.split('#')[0] if '#' in eid else eid
+                    if base_id not in all_base_ids_map:
+                        all_base_ids_map[base_id] = (idx + 1, dist, eid)
+                
+                # Check each Step 1 route edge
+                found_step1_edges = []
+                missing_step1_edges = []
+                for step1_base_id in self._step1_route_edges:
+                    if step1_base_id in all_base_ids_map:
+                        rank, dist, eid = all_base_ids_map[step1_base_id]
+                        found_step1_edges.append((step1_base_id, rank, dist))
+                        # Include ALL Step 1 route edges regardless of distance
+                        # They're part of the route and should be visible even if far from GPS points
+                        step1_edges_to_include.append((eid, dist))
+                    else:
+                        missing_step1_edges.append(step1_base_id)
+                        # DIAGNOSTIC: Why is this Step 1 route edge missing?
+                        # Check if edge exists in network but wasn't processed
+                        edge_found_in_network = False
+                        edge_has_lanes = False
+                        edge_has_shape = False
+                        for check_eid, check_edata in edges_dict.items():
+                            check_base_id = check_eid.split('#')[0] if '#' in check_eid else check_eid
+                            if check_base_id == step1_base_id:
+                                edge_found_in_network = True
+                                lanes = check_edata.get('lanes', [])
+                                if lanes:
+                                    edge_has_lanes = True
+                                    shape = lanes[0].get('shape', [])
+                                    if len(shape) >= 2:
+                                        edge_has_shape = True
+                                        # Calculate distance for this missing edge
+                                        min_dist = float('inf')
+                                        for i in range(len(shape) - 1):
+                                            x1, y1 = shape[i]
+                                            x2, y2 = shape[i + 1]
+                                            dx = x2 - x1
+                                            dy = y2 - y1
+                                            len_sq = dx * dx + dy * dy
+                                            if len_sq == 0:
+                                                dist = math.sqrt((x - x1)**2 + (y - y1)**2)
+                                            else:
+                                                t = max(0, min(1, ((x - x1) * dx + (y - y1) * dy) / len_sq))
+                                                closest_x = x1 + t * dx
+                                                closest_y = y1 + t * dy
+                                                dist = math.sqrt((x - closest_x)**2 + (y - closest_y)**2)
+                                            min_dist = min(min_dist, dist)
+                                        # Log diagnostic info
+                                        if not hasattr(self, '_step2_missing_diagnostic_logged'):
+                                            self.log(f"🔍 DIAGNOSTIC: Missing Step 1 edge '{step1_base_id}': Found in network={edge_found_in_network}, Has lanes={edge_has_lanes}, Has shape={edge_has_shape}, Calculated distance={min_dist:.2f}m, GPS point SUMO coords=({x:.2f}, {y:.2f}), Edge shape first point=({shape[0][0]:.2f}, {shape[0][1]:.2f})")
+                                            self._step2_missing_diagnostic_logged = True
+                                break
+                        if not edge_found_in_network and not hasattr(self, '_step2_missing_diagnostic_logged'):
+                            self.log(f"🔍 DIAGNOSTIC: Missing Step 1 edge '{step1_base_id}': NOT FOUND IN NETWORK AT ALL")
+                            self._step2_missing_diagnostic_logged = True
+                
+                # Log findings with detailed diagnostics
+                if found_step1_edges:
+                    # Sort by rank
+                    found_step1_edges.sort(key=lambda x: x[1])
+                    top_found = found_step1_edges[:5]
+                    self.log(f"✅ Step 2 GPS ({lon:.6f}, {lat:.6f}): Found {len(found_step1_edges)}/{len(self._step1_route_edges)} Step 1 route edges: {[(bid, f'rank {r}, {d:.2f}m') for bid, r, d in top_found]}{'...' if len(found_step1_edges) > 5 else ''}")
+                    
+                    # DIAGNOSTIC: For the first GPS point, check why Step 1 route edges are ranked so low
+                    if not hasattr(self, '_step2_distance_diagnostic_logged'):
+                        self.log(f"🔍 DIAGNOSTIC: Analyzing why Step 1 route edges are ranked low...")
+                        self.log(f"   GPS point SUMO coordinates: ({x:.2f}, {y:.2f})")
+                        self.log(f"   Total edges checked: {len(edges_to_check)}")
+                        self.log(f"   Total edges with valid shape data: {len(deduplicated)}")
+                        
+                        # Check a few Step 1 route edges that are ranked low
+                        for bid, rank, dist in found_step1_edges[:3]:
+                            # Find the actual edge in the network
+                            for check_eid, check_edata in edges_dict.items():
+                                check_base_id = check_eid.split('#')[0] if '#' in check_eid else check_eid
+                                if check_base_id == bid:
+                                    lanes = check_edata.get('lanes', [])
+                                    if lanes:
+                                        shape = lanes[0].get('shape', [])
+                                        if len(shape) >= 2:
+                                            self.log(f"   Step 1 edge '{bid}' (rank {rank}, {dist:.2f}m):")
+                                            self.log(f"      Edge ID: {check_eid}")
+                                            self.log(f"      Shape points: {len(shape)}")
+                                            self.log(f"      First shape point: ({shape[0][0]:.2f}, {shape[0][1]:.2f})")
+                                            self.log(f"      Last shape point: ({shape[-1][0]:.2f}, {shape[-1][1]:.2f})")
+                                            # Check if this edge would be found by Step 1's spatial index
+                                            spatial_index_candidates = self._edge_spatial_index.get_candidates_in_radius(x, y, radius=500.0)
+                                            found_by_spatial_index = check_eid in spatial_index_candidates
+                                            self.log(f"      Found by Step 1 spatial index (500m): {found_by_spatial_index}")
+                                            if found_by_spatial_index:
+                                                self.log(f"      ⚠️ Edge IS in spatial index but ranked {rank} in Step 2 - distance calculation may be wrong!")
+                                    break
+                        self._step2_distance_diagnostic_logged = True
+                
+                if missing_step1_edges:
+                    self.log(f"⚠️ Step 2 GPS ({lon:.6f}, {lat:.6f}): Missing {len(missing_step1_edges)} Step 1 route edges: {missing_step1_edges[:10]}{'...' if len(missing_step1_edges) > 10 else ''}")
+            
+            self.log(f"🔍 Step 2 candidate search for GPS ({lon:.6f}, {lat:.6f}): Found {len(deduplicated)} unique base edges, top 50: {[(eid.split('#')[0] if '#' in eid else eid, f'{d:.2f}m') for eid, d in top_50]}")
+        
+        # Apply radius filter: include edges within max_radius
+        filtered_by_radius = [(eid, dist) for eid, dist in deduplicated if dist <= max_radius]
+        
+        # Also include ALL Step 1 route edges (even if beyond radius)
+        # They're part of the route and should be visible even if far from GPS points
+        # Deduplicate: don't add Step 1 edges that are already in filtered_by_radius
+        filtered_base_ids = {eid.split('#')[0] if '#' in eid else eid for eid, _ in filtered_by_radius}
+        step1_edges_added = []
+        for eid, dist in step1_edges_to_include:
+            base_id = eid.split('#')[0] if '#' in eid else eid
+            if base_id not in filtered_base_ids:
+                step1_edges_added.append((eid, dist))
+                filtered_base_ids.add(base_id)
+        
+        # Sort regular edges by distance
+        filtered_by_radius.sort(key=lambda x: x[1])
+        
+        # Return regular edges (up to max_candidates) PLUS all Step 1 route edges
+        # This ensures Step 1 route edges are always visible even if beyond radius
+        result = filtered_by_radius[:max_candidates]
+        regular_count = len(result)
+        
+        # Add Step 1 route edges (they may push total above max_candidates, but that's OK)
+        # Sort Step 1 edges by distance before adding
+        step1_edges_added.sort(key=lambda x: x[1])
+        result.extend(step1_edges_added)
+        step1_count = len(step1_edges_added)
+        
+        # Final sort to maintain distance order
+        result.sort(key=lambda x: x[1])
+        
+        # Log summary for first GPS point
+        if not hasattr(self, '_step2_return_logged'):
+            self.log(f"📊 Step 2 candidate return: {regular_count} regular edges (within {max_radius}m) + {step1_count} Step 1 route edges = {len(result)} total candidates")
+            self._step2_return_logged = True
+        
+        return result
+    
+    def _draw_step2_gps_points_and_edges(self, segments: List[List[List[float]]]):
+        """
+        Step 2: Draw each GPS point and its closest edges (up to 10 within 300m) with the same distinct color.
+        
+        For each GPS point in the trimmed segments:
+        - Find up to 10 closest candidate edges within 300m radius (without spatial index)
+        - Assign a distinct color to the GPS point and its edges
+        - Draw the GPS point and edges with that color
+        - If an edge is selected by multiple GPS points, draw it with a dashed line
+        
+        Args:
+            segments: List of polyline segments (each segment is a list of [lon, lat] points)
+        """
+        if not self.network_parser:
+            self.log("⚠️ Network parser not available for Step 2")
+            return
+        
+        from PySide6.QtCore import Qt
+        from PySide6.QtGui import QBrush, QColor, QPen
+        from PySide6.QtWidgets import QGraphicsEllipseItem, QGraphicsLineItem
+
+        # Get Y bounds for flipping
+        y_min = getattr(self.map_view, '_network_y_min', 0)
+        y_max = getattr(self.map_view, '_network_y_max', 0)
+        
+        def flip_y(y):
+            """Flip Y coordinate to match network display orientation."""
+            return y_max + y_min - y
+        
+        edges_dict = self.network_parser.get_edges()
+        total_points = 0
+        
+        # Track which edges are selected by which GPS points
+        # base_edge_id -> list of (point_index, color)
+        edge_to_points = {}
+        point_colors = []
+        point_candidates = []  # List of (point_index, candidates_list)
+        
+        # Generate distinct colors using HSV color space for better color distribution
+        import colorsys
+
+        # First pass: collect all GPS points and their candidate edges
+        for seg_idx, segment in enumerate(segments):
+            if not segment:
+                continue
+            
+            for point_idx, (lon, lat) in enumerate(segment):
+                # Generate a distinct color for this GPS point
+                # Use HSV to get evenly distributed colors
+                hue = (total_points * 137.508) % 360  # Golden angle approximation for good distribution
+                saturation = 0.7
+                value = 0.9
+                rgb = colorsys.hsv_to_rgb(hue / 360.0, saturation, value)
+                point_color = QColor(int(rgb[0] * 255), int(rgb[1] * 255), int(rgb[2] * 255))
+                point_colors.append(point_color)
+                
+                # Find candidate edges for this GPS point (includes Step 1 route edges even if beyond 300m)
+                candidates = self._find_candidate_edges_step2(lon, lat, max_candidates=10, max_radius=300.0)
+                
+                if not candidates:
+                    point_colors.pop()  # Remove the color we just added
+                    continue
+                
+                point_candidates.append((total_points, candidates))
+                
+                # Log for first few points to verify Step 1 edges are included
+                if total_points < 3:
+                    step1_in_candidates = sum(1 for eid, _ in candidates if eid.split('#')[0] in (self._step1_route_edges if hasattr(self, '_step1_route_edges') else set()))
+                    self.log(f"📍 Step 2 GPS point {total_points}: {len(candidates)} candidates returned ({step1_in_candidates} are Step 1 route edges)")
+                
+                # Track which edges are selected by this point (use base ID)
+                for edge_id, distance in candidates:
+                    base_edge_id = edge_id.split('#')[0]  # Use base ID to track duplicates
+                    if base_edge_id not in edge_to_points:
+                        edge_to_points[base_edge_id] = []
+                    edge_to_points[base_edge_id].append((total_points, point_color))
+                
+                total_points += 1
+        
+        # Track which edges have been drawn (to avoid duplicates for multi-color edges)
+        drawn_edges = set()
+        
+        # Second pass: draw GPS points and edges
+        point_index = 0
+        for seg_idx, segment in enumerate(segments):
+            if not segment:
+                continue
+            
+            for point_idx, (lon, lat) in enumerate(segment):
+                if point_index >= len(point_colors):
+                    break
+                
+                point_color = point_colors[point_index]
+                
+                # Find candidates for this point
+                candidates = None
+                for pc_idx, pc_candidates in point_candidates:
+                    if pc_idx == point_index:
+                        candidates = pc_candidates
+                        break
+                
+                if not candidates:
+                    point_index += 1
+                    continue
+                
+                # Convert GPS to SUMO coordinates for the point
+                sumo_coords = self.network_parser.gps_to_sumo_coords(lon, lat)
+                if not sumo_coords:
+                    point_index += 1
+                    continue
+                
+                x, y = sumo_coords
+                y_flipped = flip_y(y)
+                
+                # Draw GPS point as a colored circle
+                point_radius = 8.0
+                point_item = QGraphicsEllipseItem(x - point_radius, y_flipped - point_radius, 
+                                                  point_radius * 2, point_radius * 2)
+                point_pen = QPen(point_color)
+                point_pen.setWidth(2)
+                point_brush = QBrush(point_color)
+                point_item.setPen(point_pen)
+                point_item.setBrush(point_brush)
+                point_item.setZValue(2000)  # Draw on top
+                self.map_view.scene.addItem(point_item)
+                self._route_items.append(point_item)
+                
+                # Draw edges for this point
+                for edge_id, distance in candidates:
+                    base_edge_id = edge_id.split('#')[0]
+                    
+                    # Check if this edge is selected by multiple points
+                    selecting_points = edge_to_points.get(base_edge_id, [])
+                    is_multiple = len(selecting_points) > 1
+                    
+                    # For edges selected by multiple points, only draw once with all colors
+                    if is_multiple and base_edge_id in drawn_edges:
+                        continue  # Skip - will be drawn with multi-color pattern
+                    
+                    # Try to find edge in edges_dict
+                    edge_data = None
+                    if edge_id in edges_dict:
+                        edge_data = edges_dict[edge_id]
+                    else:
+                        # Try with lane suffix #0
+                        if f"{edge_id}#0" in edges_dict:
+                            edge_data = edges_dict[f"{edge_id}#0"]
+                        else:
+                            # Try base edge ID (without any suffix)
+                            base_edge_id = edge_id.split('#')[0]
+                            # Search for any variant of this base edge
+                            for eid, edata in edges_dict.items():
+                                if eid.split('#')[0] == base_edge_id:
+                                    edge_data = edata
+                                    break
+                    
+                    if not edge_data:
+                        # Log missing edge for debugging
+                        self.log(f"⚠️ Step 2: Edge {edge_id} (base: {base_edge_id}) not found in edges_dict")
+                        continue
+                    
+                    lanes = edge_data.get('lanes', [])
+                    if not lanes:
+                        continue
+                    
+                    # Use first lane's shape
+                    shape = lanes[0].get('shape', [])
+                    if len(shape) < 2:
+                        continue
+                    
+                    if is_multiple:
+                        # Draw edge with multi-color striped pattern
+                        # Get all colors from selecting points
+                        selecting_colors = [color for _, color in selecting_points]
+                        num_colors = len(selecting_colors)
+                        
+                        # Draw the edge as segments, alternating colors to create a striped pattern
+                        # This creates a clear blue-red-yellow (or however many colors) striped effect
+                        import math
+                        segment_length_pixels = 12  # Length of each color segment in pixels
+                        
+                        # Draw each shape segment, dividing it into color segments
+                        for seg_idx in range(len(shape) - 1):
+                            x1, y1 = shape[seg_idx]
+                            x2, y2 = shape[seg_idx + 1]
+                            
+                            # Flip Y coordinates
+                            y1_flipped = flip_y(y1)
+                            y2_flipped = flip_y(y2)
+                            
+                            # Calculate segment vector
+                            dx = x2 - x1
+                            dy = y2_flipped - y1_flipped
+                            segment_length = math.sqrt(dx * dx + dy * dy)
+                            
+                            if segment_length < 0.1:
+                                continue
+                            
+                            # Normalize direction vector
+                            unit_x = dx / segment_length
+                            unit_y = dy / segment_length
+                            
+                            # Draw segments with alternating colors
+                            current_pos = 0.0
+                            color_idx = 0
+                            
+                            while current_pos < segment_length:
+                                # Calculate segment end position
+                                segment_end = min(current_pos + segment_length_pixels, segment_length)
+                                
+                                # Get color for this segment (alternate through all colors)
+                                color = selecting_colors[color_idx % num_colors]
+                                
+                                # Calculate segment start and end points
+                                seg_x1 = x1 + current_pos * unit_x
+                                seg_y1 = y1_flipped + current_pos * unit_y
+                                seg_x2 = x1 + segment_end * unit_x
+                                seg_y2 = y1_flipped + segment_end * unit_y
+                                
+                                # Draw this color segment
+                                edge_pen = QPen(color)
+                                edge_pen.setWidth(3)  # Slightly thicker for visibility
+                                edge_pen.setStyle(Qt.SolidLine)
+                                
+                                line = QGraphicsLineItem(seg_x1, seg_y1, seg_x2, seg_y2)
+                                line.setPen(edge_pen)
+                                line.setZValue(1500)  # Draw above network but below GPS points
+                                self.map_view.scene.addItem(line)
+                                self._route_items.append(line)
+                                
+                                # Move to next segment
+                                current_pos = segment_end
+                                color_idx += 1
+                        
+                        drawn_edges.add(base_edge_id)
+                    else:
+                        # Draw edge with single color (solid line)
+                        edge_pen = QPen(point_color)
+                        edge_pen.setWidth(2)
+                        edge_pen.setStyle(Qt.SolidLine)
+                        
+                        # Draw line segments along the edge shape
+                        for i in range(len(shape) - 1):
+                            x1, y1 = shape[i]
+                            x2, y2 = shape[i + 1]
+                            
+                            # Flip Y coordinates
+                            y1_flipped = flip_y(y1)
+                            y2_flipped = flip_y(y2)
+                            
+                            line = QGraphicsLineItem(x1, y1_flipped, x2, y2_flipped)
+                            line.setPen(edge_pen)
+                            line.setZValue(1500)  # Draw above network but below GPS points
+                            self.map_view.scene.addItem(line)
+                            self._route_items.append(line)
+                
+                point_index += 1
+        
+        self.log(f"✅ Step 2: Drew {total_points} GPS points and their candidate edges (up to 10 regular edges within 300m + all Step 1 route edges) with distinct colors")
+    
+    def _draw_candidate_edges(self, candidate_edge_ids: List[str], color: QColor = None):
+        """
+        Draw candidate edges on the map in bright red (solid, not dashed).
+        
+        Args:
+            candidate_edge_ids: List of edge IDs to draw
+            color: QColor to use for drawing (default: bright red)
+        """
+        if not self.network_parser:
+            return
+        
+        if color is None:
+            color = QColor(255, 0, 0)  # Red
+        
+        edges_dict = self.network_parser.get_edges()
+        
+        # Get Y bounds for flipping
+        y_min = getattr(self.map_view, '_network_y_min', 0)
+        y_max = getattr(self.map_view, '_network_y_max', 0)
+        
+        def flip_y(y):
+            """Flip Y coordinate to match network display orientation."""
+            return y_max + y_min - y
+        
+        from PySide6.QtCore import Qt
+        from PySide6.QtGui import QPen
+        from PySide6.QtWidgets import QGraphicsLineItem
+
+        # Use bright red solid pen with thicker width for visibility
+        candidate_pen = QPen(color)
+        candidate_pen.setWidth(4)  # Thicker than route lines
+        candidate_pen.setStyle(Qt.SolidLine)  # Solid line (not dashed)
+        
+        for edge_id in candidate_edge_ids:
+            # Try base edge ID first, then with lane suffixes
+            edge_data = None
+            base_edge_id = edge_id.split('#')[0]  # Remove lane suffix if present
+            
+            if base_edge_id in edges_dict:
+                edge_data = edges_dict[base_edge_id]
+            else:
+                # Try with lane suffix #0
+                if f"{base_edge_id}#0" in edges_dict:
+                    edge_data = edges_dict[f"{base_edge_id}#0"]
+            
+            if not edge_data:
+                continue
+            
+            lanes = edge_data.get('lanes', [])
+            if not lanes:
+                continue
+            
+            # Use first lane's shape
+            shape = lanes[0].get('shape', [])
+            if len(shape) < 2:
+                continue
+            
+            # Draw line segments along the edge shape
+            for i in range(len(shape) - 1):
+                x1, y1 = shape[i]
+                x2, y2 = shape[i + 1]
+                
+                # Flip Y coordinates
+                y1_flipped = flip_y(y1)
+                y2_flipped = flip_y(y2)
+                
+                line = QGraphicsLineItem(x1, y1_flipped, x2, y2_flipped)
+                line.setPen(candidate_pen)
+                line.setZValue(1500)  # Draw above route (1000) but below stars (2000)
+                self.map_view.scene.addItem(line)
+                self._route_items.append(line)
+    
+    def _draw_sumo_route_overlay(self, segments: List[List[List[float]]]):
+        """
+        Draw SUMO route overlay as dashed white lines using GPS-guided routing.
+        Maps each GPS point to its nearest edge and builds route by following GPS trajectory.
+        
+        Args:
+            segments: List of polyline segments (each segment is a list of [lon, lat] points)
+        """
+        if not self.network_parser:
+            self.log("⚠️ Network parser not available")
+            return
+        
+        from PySide6.QtCore import Qt
+        from PySide6.QtGui import QPen
+        from PySide6.QtWidgets import QGraphicsLineItem
+
+        # Use cached sumolib network for gap filling (if available)
+        net = self.sumo_net if hasattr(self, 'sumo_net') and self.sumo_net else None
+        
+        # Get Y bounds for flipping
+        y_min = getattr(self.map_view, '_network_y_min', 0)
+        y_max = getattr(self.map_view, '_network_y_max', 0)
+        
+        def flip_y(y):
+            """Flip Y coordinate to match network display orientation."""
+            return y_max + y_min - y
+        
+        all_edges = []  # Collect all edges for logging
+        
+        # Process each segment separately (each is a new trip when split)
+        for seg_idx, segment in enumerate(segments):
+            if not segment or len(segment) < 2:
+                continue
+            
+            # Get start and destination edges from first and last GPS points
+            # (The new algorithm will find candidates in Step 1.1, but we need these for the fix)
+            start_lon, start_lat = segment[0]
+            dest_lon, dest_lat = segment[-1]
+            
+            # Find nearest edge for start GPS point
+            start_sumo_coords = self.network_parser.gps_to_sumo_coords(start_lon, start_lat)
+            if not start_sumo_coords:
+                self.log(f"⚠️ Segment {seg_idx + 1}: Cannot convert start GPS point to SUMO coordinates")
+                continue
+            
+            start_edge_result = self.network_parser.find_nearest_edge(
+                start_sumo_coords[0], start_sumo_coords[1], allow_passenger_only=True
+            )
+            if not start_edge_result:
+                self.log(f"⚠️ Segment {seg_idx + 1}: Cannot find nearest edge for start GPS point")
+                continue
+            
+            start_edge_id = start_edge_result[0]
+            
+            # Find nearest edge for destination GPS point
+            dest_sumo_coords = self.network_parser.gps_to_sumo_coords(dest_lon, dest_lat)
+            if not dest_sumo_coords:
+                self.log(f"⚠️ Segment {seg_idx + 1}: Cannot convert destination GPS point to SUMO coordinates")
+                continue
+            
+            dest_edge_result = self.network_parser.find_nearest_edge(
+                dest_sumo_coords[0], dest_sumo_coords[1], allow_passenger_only=True
+            )
+            if not dest_edge_result:
+                self.log(f"⚠️ Segment {seg_idx + 1}: Cannot find nearest edge for destination GPS point")
+                continue
+            
+            dest_edge_id = dest_edge_result[0]
+            
+            # Build route using Step 0 and Step 1 only (initial SUMO route calculation)
+            all_routes = self._build_gps_validated_sumo_route(
+                segment, start_edge_id, dest_edge_id, seg_idx
+            )
+            
+            if not all_routes:
+                self.log(f"⚠️ Segment {seg_idx + 1}: No valid route edges found")
+                continue
+            
+            # Define distinct colors for different routes
+            from PySide6.QtGui import QColor
+            route_colors = [
+                QColor(255, 200, 0),    # Fluorescent orange
+                QColor(0, 255, 255),    # Cyan
+                QColor(255, 0, 255),    # Magenta
+                QColor(0, 255, 0),      # Green
+                QColor(255, 165, 0),    # Orange
+                QColor(255, 0, 128),    # Pink
+                QColor(0, 128, 255),    # Blue
+                QColor(128, 0, 255),    # Purple
+                QColor(255, 128, 0),    # Red-orange
+            ]
+            
+            # Log route information
+            self.log(f"Segment {seg_idx + 1}: Found {len(all_routes)} route(s)")
+            
+            # Draw all routes with different colors
+            edges_dict = self.network_parser.get_edges()
+            for route_idx, route_edges in enumerate(all_routes):
+                # Get color for this route (cycle through colors if more routes than colors)
+                route_color = route_colors[route_idx % len(route_colors)]
+                
+                # Add edges to all_edges for summary
+                all_edges.extend(route_edges)
+                
+                # Log route information
+                edge_list_str = " → ".join(route_edges[:10])  # Show first 10 edges
+                if len(route_edges) > 10:
+                    edge_list_str += f" ... ({len(route_edges)} total)"
+                self.log(f"  Route {route_idx + 1} ({len(route_edges)} edges): {edge_list_str}")
+                
+                # Draw dashed line along each edge in the route
+                route_pen = QPen(route_color)
+                route_pen.setWidth(3)
+                route_pen.setStyle(Qt.DashLine)
+                route_pen.setDashPattern([5, 5])  # 5px dash, 5px gap
+                
+                for edge_id in route_edges:
+                    if edge_id not in edges_dict:
+                        continue
+                    
+                    edge_data = edges_dict[edge_id]
+                    lanes = edge_data.get('lanes', [])
+                    if not lanes:
+                        continue
+                    
+                    # Use first lane's shape
+                    shape = lanes[0].get('shape', [])
+                    if len(shape) < 2:
+                        continue
+                    
+                    # Draw line segments along the edge shape
+                    for i in range(len(shape) - 1):
+                        x1, y1 = shape[i]
+                        x2, y2 = shape[i + 1]
+                        
+                        # Flip Y coordinates
+                        y1_flipped = flip_y(y1)
+                        y2_flipped = flip_y(y2)
+                        
+                        line = QGraphicsLineItem(x1, y1_flipped, x2, y2_flipped)
+                        line.setPen(route_pen)
+                        line.setZValue(1000 + route_idx)  # Draw on top, with slight offset per route
+                        self.map_view.scene.addItem(line)
+                        self._route_items.append(line)
+        
+        # Log summary
+        if all_edges:
+            self.log(f"✅ SUMO route overlay (GPS-guided): {len(all_edges)} total edges mapped")
+    
+    def _find_parallel_edge(self, edge_id: str, edges_dict: dict) -> Optional[str]:
+        """
+        Find parallel edge (same junctions, opposite direction).
+        
+        Args:
+            edge_id: Edge ID to find parallel for
+            edges_dict: Dictionary of all edges
+        
+        Returns:
+            Parallel edge ID or None if not found
+        """
+        if edge_id not in edges_dict:
+            return None
+        
+        edge = edges_dict[edge_id]
+        from_node = edge['from']
+        to_node = edge['to']
+        
+        # Look for edge with reversed from/to nodes
+        parallel_edge_id = f"{to_node}_{from_node}"  # Common SUMO naming pattern
+        
+        # Try different naming patterns
+        candidates = [
+            parallel_edge_id,
+            f"{to_node}to{from_node}",
+            f"{to_node}-{from_node}",
+        ]
+        
+        # Also search by from/to nodes
+        for candidate_id, candidate_edge in edges_dict.items():
+            if (candidate_edge['from'] == to_node and 
+                candidate_edge['to'] == from_node and
+                candidate_id != edge_id):
+                return candidate_id
+        
+        return None
+    
+    def _get_route_distance(self, from_edge_id: str, to_edge_id: str) -> Optional[float]:
+        """
+        Get shortest path distance between two edges using SUMO routing.
+        
+        Args:
+            from_edge_id: Source edge ID
+            to_edge_id: Destination edge ID
+        
+        Returns:
+            Route distance in meters, or None if route not found
+        """
+        if not self.sumo_net:
+            return None
+        
+        try:
+            from_edge = self.sumo_net.getEdge(from_edge_id)
+            to_edge = self.sumo_net.getEdge(to_edge_id)
+            route_result = self.sumo_net.getShortestPath(from_edge, to_edge)
+            
+            if route_result and len(route_result) >= 2:
+                edges, cost = route_result
+                return cost  # Cost is typically distance in meters
+            return None
+        except Exception:
+            return None
+    
+    def _get_base_edge_id(self, edge_id: str) -> str:
+        """
+        Get the base edge ID without the # suffix.
+        
+        Examples:
+            '1016528107#1' -> '1016528107'
+            '1016528107#0' -> '1016528107'
+            '1016528107' -> '1016528107'
+            '-1016528107#1' -> '-1016528107'
+        
+        Args:
+            edge_id: Full edge ID (may include # suffix)
+        
+        Returns:
+            Base edge ID without # suffix
+        """
+        if '#' in edge_id:
+            return edge_id.split('#')[0]
+        return edge_id
+    
+    def _find_candidate_edges_in_radius(
+        self,
+        lon: float,
+        lat: float,
+        max_candidates: int = 3
+    ) -> List[Tuple[str, float]]:
+        """
+        Find candidate edges near GPS coordinates.
+        
+        Args:
+            lon: Longitude
+            lat: Latitude
+            max_candidates: Maximum number of candidates to return
+        
+        Returns:
+            List of (edge_id, distance) tuples sorted by distance
+        """
+        # TODO: Implement
+        return []
+    
+    def _build_gps_validated_sumo_route(
+        self,
+        segment: List[List[float]],
+        start_edge_id: str,
+        dest_edge_id: str,
+        seg_idx: int
+    ) -> List[List[str]]:
+        """
+        Build route using SUMO routing (Step 0 and Step 1 only).
+        
+        Step 0: Spatial index is already prepared when network loads.
+        Step 1: Calculate initial SUMO route from start to destination.
+    
+        Args:
+            segment: GPS polyline segment (list of [lon, lat] points)
+            start_edge_id: First edge ID (from first GPS point)
+            dest_edge_id: Last edge ID (from last GPS point)
+            seg_idx: Segment index for logging
+    
+        Returns:
+            List of routes (each route is a list of edge IDs). Routes are sorted by similarity score (highest similarity first).
+            The first route in the list has the highest similarity score and is the selected route.
+        """
+        if not self.sumo_net or not segment or len(segment) < 2:
+            return []
+        
+        # Step 1: Calculate initial SUMO route (with iterative shortening)
+        routes, start_candidates, dest_candidates, route_scores, final_segment = self._calculate_step1_route(segment, self.sumo_net, seg_idx)
+        
+        # Log similarity score of displayed route if available
+        if route_scores and len(route_scores) > 0:
+            best_score = route_scores[0]
+            self.log(f"📍 Displayed SUMO route similarity score: {best_score:.4f} (Rank 1 - Best Match)")
+        
+        # Return all routes (sorted by similarity score, highest similarity first)
+        # The first route is the selected one (highest similarity score)
+        # Note: final_segment is returned but not used here (used in visualization)
+        return routes if routes else []
+    
+    def _check_route_completeness(
+        self, 
+        segment: List[List[float]], 
+        edges: List[str], 
+        route_result
+    ) -> bool:
+        """
+        Check if the SUMO route is complete from start to destination.
+        
+        Args:
+            segment: GPS polyline segment
+            edges: List of edge IDs in the route
+            route_result: RouteMappingResult object
+        
+        Returns:
+            True if route is complete, False otherwise
+        """
+        if not segment or len(segment) < 2 or not edges:
+            return False
+        
+        if not route_result.edge_transitions:
+            return False
+        
+        # Check 1: Route should start at the first GPS point's edge
+        first_gps_point_edge = None
+        first_transition = route_result.edge_transitions[0]
+        if first_transition.gps_point_index == 0:
+            first_gps_point_edge = first_transition.edge_id
+        else:
+            # First GPS point wasn't mapped, route is incomplete
+            self.log(f"  ⚠️ First GPS point (index 0) was not mapped to an edge")
+            return False
+        
+        if edges[0] != first_gps_point_edge:
+            self.log(f"  ⚠️ Route does not start at first GPS point's edge. Expected: {first_gps_point_edge}, Got: {edges[0]}")
+            return False
+        
+        # Check 2: Route should end at the last GPS point's edge
+        last_gps_point_edge = None
+        last_transition = route_result.edge_transitions[-1]
+        if last_transition.gps_point_index == len(segment) - 1:
+            last_gps_point_edge = last_transition.edge_id
+        else:
+            # Last GPS point wasn't mapped, route is incomplete
+            self.log(f"  ⚠️ Last GPS point (index {len(segment) - 1}) was not mapped to an edge")
+            return False
+        
+        if edges[-1] != last_gps_point_edge:
+            self.log(f"  ⚠️ Route does not end at last GPS point's edge. Expected: {last_gps_point_edge}, Got: {edges[-1]}")
+            return False
+        
+        # Check 3: All edges should be connected (each edge's 'to' node connects to next edge's 'from' node)
+        edges_dict = self.network_parser.get_edges()
+        for i in range(len(edges) - 1):
+            current_edge_id = edges[i]
+            next_edge_id = edges[i + 1]
+            
+            if current_edge_id not in edges_dict or next_edge_id not in edges_dict:
+                self.log(f"  ⚠️ Edge not found in network: {current_edge_id if current_edge_id not in edges_dict else next_edge_id}")
+                return False
+            
+            current_edge = edges_dict[current_edge_id]
+            next_edge = edges_dict[next_edge_id]
+            
+            # Check if edges are connected
+            if current_edge['to'] != next_edge['from']:
+                self.log(f"  ⚠️ Edges not connected: {current_edge_id} (to: {current_edge['to']}) → {next_edge_id} (from: {next_edge['from']})")
+                return False
+        
+        # Check 4: All GPS points should be mapped (no invalid points)
+        if route_result.invalid_points:
+            self.log(f"  ⚠️ {len(route_result.invalid_points)} GPS points could not be mapped to edges")
+            return False
+        
+        return True
+    
+    def _on_show_sumo_step1_route_changed(self):
+        """Handle show SUMO Step 1 route checkbox state change."""
+        self.save_settings()
+        
+        # If we have current segments, redraw the route (with or without SUMO overlay)
+        if self._current_segments is not None:
+            self.show_selected_route()
+        else:
+            if self.show_sumo_step1_route_checkbox.isChecked():
+                # ignore if this is on loading
+                if not self._loading_settings:
+                    self.log("⚠️ No route loaded. Please select a route first.")
+    
+    def _on_show_sumo_step2_route_changed(self):
+        """Handle show SUMO Step 2 route checkbox state change."""
+        self.save_settings()
+        
+        # If we have current segments, redraw the route (with or without SUMO overlay)
+        if self._current_segments is not None:
+            self.show_selected_route()
+        else:
+            if self.show_sumo_step2_route_checkbox.isChecked():
+                # ignore if this is on loading
+                if not self._loading_settings:
+                    self.log("⚠️ No route loaded. Please select a route first.")
+    
+    def _on_draw_gps_points_path_changed(self):
+        """Handle draw GPS points path checkbox state change."""
+        self.save_settings()
+        
+        # If we have current segments, redraw the route (with or without GPS path)
+        if self._current_segments is not None:
+            self.show_selected_route()
+        else:
+            if not self._loading_settings and not self.draw_gps_points_path_checkbox.isChecked():
+                # Clear route display if unchecked and route was displayed
+                self.clear_route_display()
     
     def _detect_real_start_and_end(self, polyline: list) -> Tuple[int, int]:
         """
@@ -2736,8 +4992,8 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
                 self._route_items.append(line)
             
             # Point size and font settings
-            point_size = 60
-            font = QFont("Arial", 20, QFont.Bold)
+            point_size = 30  # Half of original size (60 -> 30)
+            font = QFont("Arial", 12, QFont.Bold)  # Smaller font for smaller circles
             
             # Draw points with numbers
             for i, (x, y) in enumerate(sumo_points):
@@ -2790,7 +5046,7 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
                 
                 point_counter += 1
         
-        # Zoom to fit all segments
+        # Auto-fit view to route initially, then user can zoom freely
         if all_sumo_points:
             xs = [p[0] for p in all_sumo_points]
             ys = [p[1] for p in all_sumo_points]
@@ -2801,6 +5057,8 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
                 max(xs) - min(xs) + 2*margin, max(ys) - min(ys) + 2*margin
             )
             self.map_view.fitInView(rect, Qt.KeepAspectRatio)
+            # Reset zoom tracking after fitInView, but allow unlimited zooming after
+            self.map_view.current_zoom = 1.0
         
         # Return validation result for UI updates (from first segment or combined)
         if segments:
@@ -2817,4 +5075,10 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
             if hasattr(self, 'invalid_segments_info_label'):
                 self.invalid_segments_info_label.setText("")
             self.log("Route display cleared")
+        
+        # Clear cached route data when route is cleared
+        self._cached_route_num = None
+        self._cached_original_polyline = None
+        self._cached_route_data = None
+
 
