@@ -35,12 +35,15 @@ class DebugTrajectoryPage(QWidget):
         self.sumo_net = None
         self._edge_spatial_index = None
         self._route_items = []
+        self._segment_items = []  # Store segment items separately for clearing
         self.train_csv_path = None  # To store the resolved train.csv path
         self._bounding_box_polygon = None  # Store bounding box polygon for edge intersection checks
+        self._bounding_box_params = None  # Store bounding box parameters (center_x, center_y, width, height, angle)
+        self._current_sumo_points = None  # Store current trajectory points (Y-flipped for display)
         
         self.init_ui()
         
-        # Auto-load network and trajectory
+        # Auto-load network (trajectory will be loaded via Show button)
         QTimer.singleShot(100, self.load_network_and_trajectory)
     
     def init_ui(self):
@@ -208,10 +211,148 @@ class DebugTrajectoryPage(QWidget):
         self.conv_scale_y_spinbox.valueChanged.connect(self.on_conv_adjust_changed)
         footer_layout.addWidget(self.conv_scale_y_spinbox)
         
+        footer_layout.addSpacing(15)
+        
+        # Trajectory selection controls
+        traj_label = QLabel("Trajectory:")
+        traj_label.setStyleSheet("color: #333; font-size: 11px; font-weight: bold;")
+        footer_layout.addWidget(traj_label)
+        
+        self.trajectory_spinbox = QDoubleSpinBox()
+        self.trajectory_spinbox.setRange(1, 1)  # Will be updated when CSV is loaded
+        self.trajectory_spinbox.setSingleStep(1)
+        self.trajectory_spinbox.setValue(1)
+        self.trajectory_spinbox.setDecimals(0)
+        self.trajectory_spinbox.setToolTip("Select trajectory number to display")
+        self.trajectory_spinbox.setStyleSheet("""
+            QDoubleSpinBox {
+                color: #333;
+                font-size: 11px;
+                padding: 3px;
+                border: 1px solid #999;
+                border-radius: 3px;
+                background-color: white;
+                min-width: 80px;
+            }
+        """)
+        footer_layout.addWidget(self.trajectory_spinbox)
+        
+        # Show button
+        self.show_btn = QPushButton("Show")
+        self.show_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #4CAF50;
+                color: white;
+                border: none;
+                padding: 6px 15px;
+                border-radius: 4px;
+                font-weight: bold;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: #45a049;
+            }
+            QPushButton:disabled {
+                background-color: #cccccc;
+                color: #666666;
+            }
+        """)
+        self.show_btn.clicked.connect(self.on_show_clicked)
+        self.show_btn.setEnabled(False)  # Disabled until network is loaded
+        footer_layout.addWidget(self.show_btn)
+        
+        # Clear button
+        self.clear_btn = QPushButton("Clear")
+        self.clear_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #f44336;
+                color: white;
+                border: none;
+                padding: 6px 15px;
+                border-radius: 4px;
+                font-weight: bold;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: #da190b;
+            }
+        """)
+        self.clear_btn.clicked.connect(self.on_clear_clicked)
+        footer_layout.addWidget(self.clear_btn)
+        
+        footer_layout.addSpacing(15)
+        
+        # Segment selection controls
+        segment_label = QLabel("Segment:")
+        segment_label.setStyleSheet("color: #333; font-size: 11px; font-weight: bold;")
+        footer_layout.addWidget(segment_label)
+        
+        self.segment_spinbox = QDoubleSpinBox()
+        self.segment_spinbox.setRange(1, 1)  # Will be updated when trajectory is loaded
+        self.segment_spinbox.setSingleStep(1)
+        self.segment_spinbox.setValue(1)
+        self.segment_spinbox.setDecimals(0)
+        self.segment_spinbox.setToolTip("Select segment number (1 = GPS points 1-2, 2 = GPS points 2-3, etc.)")
+        self.segment_spinbox.setStyleSheet("""
+            QDoubleSpinBox {
+                color: #333;
+                font-size: 11px;
+                padding: 3px;
+                border: 1px solid #999;
+                border-radius: 3px;
+                background-color: white;
+                min-width: 80px;
+            }
+        """)
+        footer_layout.addWidget(self.segment_spinbox)
+        
+        # Show Segment button
+        self.show_segment_btn = QPushButton("Show Segment")
+        self.show_segment_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #9C27B0;
+                color: white;
+                border: none;
+                padding: 6px 15px;
+                border-radius: 4px;
+                font-weight: bold;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: #7B1FA2;
+            }
+            QPushButton:disabled {
+                background-color: #cccccc;
+                color: #666666;
+            }
+        """)
+        self.show_segment_btn.clicked.connect(self.on_show_segment_clicked)
+        self.show_segment_btn.setEnabled(False)  # Disabled until trajectory is loaded
+        footer_layout.addWidget(self.show_segment_btn)
+        
+        # Clear Segment button
+        self.clear_segment_btn = QPushButton("Clear Segment")
+        self.clear_segment_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #E91E63;
+                color: white;
+                border: none;
+                padding: 6px 15px;
+                border-radius: 4px;
+                font-weight: bold;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: #C2185B;
+            }
+        """)
+        self.clear_segment_btn.clicked.connect(self.on_clear_segment_clicked)
+        footer_layout.addWidget(self.clear_segment_btn)
+        
         footer_layout.addStretch()
         
         # Status label
-        self.status_label = QLabel("Loading network and trajectory...")
+        self.status_label = QLabel("Loading network...")
         self.status_label.setStyleSheet("color: #333; font-size: 12px; padding: 5px;")
         footer_layout.addWidget(self.status_label)
         
@@ -393,14 +534,157 @@ class DebugTrajectoryPage(QWidget):
         # Store train_csv path for later use
         self.train_csv_path = train_csv
         
-        # Load first trajectory
-        QTimer.singleShot(500, self.load_first_trajectory)
+        # Count trajectories and update UI
+        if train_csv and train_csv.exists():
+            trajectory_count = self._count_trajectories(str(train_csv))
+            if trajectory_count > 0:
+                self.trajectory_spinbox.setRange(1, trajectory_count)
+                self.trajectory_spinbox.setValue(1)
+                self.show_btn.setEnabled(True)
+                self.log(f"✓ Found {trajectory_count} trajectories in CSV")
+            else:
+                self.log("⚠️ No trajectories found in CSV")
+                self.show_btn.setEnabled(False)
+        else:
+            self.log("⚠️ train.csv not found - trajectory selection disabled")
+            self.show_btn.setEnabled(False)
     
-    def load_first_trajectory(self):
-        """Load and display first trajectory with trimming."""
-        self.log("Loading first trajectory...")
+    def _count_trajectories(self, csv_path: str) -> int:
+        """Count the number of trajectories in the CSV file."""
+        try:
+            with open(csv_path, 'r', encoding='utf-8') as f:
+                # Count lines (excluding header)
+                return sum(1 for _ in f) - 1  # Subtract 1 for header
+        except Exception as e:
+            self.log(f"⚠️ Error counting trajectories: {e}")
+            return 0
+    
+    def on_show_clicked(self):
+        """Handle Show button click - load and display selected trajectory."""
+        trajectory_num = int(self.trajectory_spinbox.value())
+        self.load_trajectory(trajectory_num)
+    
+    def on_clear_clicked(self):
+        """Handle Clear button click - clear all drawn items."""
+        # Clear previous items
+        for item in self._route_items:
+            try:
+                self.map_view.scene.removeItem(item)
+            except RuntimeError:
+                # Item already removed, ignore
+                pass
+        self._route_items = []
+        self._bounding_box_polygon = None
+        self._current_sumo_points = None
+        # Also clear segments when clearing trajectory
+        self.on_clear_segment_clicked()
+        # Disable segment button when trajectory is cleared
+        self.show_segment_btn.setEnabled(False)
+        self.segment_spinbox.setRange(1, 1)
+        self.log("✓ Cleared all trajectory items")
+    
+    def on_show_segment_clicked(self):
+        """Handle Show Segment button click - draw selected segment in magenta."""
+        if not self._current_sumo_points or len(self._current_sumo_points) < 2:
+            self.log("⚠️ No trajectory loaded or not enough points")
+            return
         
-        # Use train_csv_path from project_info.json if available, otherwise find it
+        segment_num = int(self.segment_spinbox.value())
+        max_segments = len(self._current_sumo_points) - 1
+        
+        if segment_num < 1 or segment_num > max_segments:
+            self.log(f"⚠️ Invalid segment number: {segment_num} (must be 1-{max_segments})")
+            return
+        
+        # Clear previous segment
+        self.on_clear_segment_clicked()
+        
+        # Draw the selected segment
+        self._draw_segment(segment_num)
+    
+    def on_clear_segment_clicked(self):
+        """Handle Clear Segment button click - clear segment items."""
+        # Clear previous segment items
+        for item in self._segment_items:
+            try:
+                self.map_view.scene.removeItem(item)
+            except RuntimeError:
+                # Item already removed, ignore
+                pass
+        self._segment_items = []
+    
+    def _draw_segment(self, segment_num: int):
+        """Draw a specific segment (GPS points and connecting line) in magenta.
+        
+        Args:
+            segment_num: Segment number (1-indexed), where 1 = GPS points 1-2, 2 = GPS points 2-3, etc.
+        """
+        if not self._current_sumo_points or len(self._current_sumo_points) < 2:
+            return
+        
+        max_segments = len(self._current_sumo_points) - 1
+        if segment_num < 1 or segment_num > max_segments:
+            return
+        
+        # Segment N connects point N to point N+1 (0-indexed: point segment_num-1 to segment_num)
+        point_idx1 = segment_num - 1  # First point of segment (0-indexed)
+        point_idx2 = segment_num       # Second point of segment (0-indexed)
+        
+        if point_idx1 >= len(self._current_sumo_points) or point_idx2 >= len(self._current_sumo_points):
+            return
+        
+        x1, y1 = self._current_sumo_points[point_idx1]
+        x2, y2 = self._current_sumo_points[point_idx2]
+        
+        # Magenta color for segment
+        magenta_color = QColor(255, 0, 255)  # Magenta
+        magenta_pen = QPen(magenta_color, 5)  # Thicker line (5px) for visibility
+        magenta_pen.setStyle(Qt.SolidLine)
+        magenta_pen.setCapStyle(Qt.RoundCap)
+        magenta_pen.setJoinStyle(Qt.RoundJoin)
+        
+        # Draw connecting line
+        line = self.map_view.scene.addLine(x1, y1, x2, y2, magenta_pen)
+        line.setZValue(400)  # Very high Z-value to be above everything
+        self._segment_items.append(line)
+        
+        # Draw GPS points as circles (larger than stars for visibility)
+        point_radius = 12
+        point_pen = QPen(magenta_color, 3)
+        point_brush = QBrush(magenta_color)
+        
+        # Point 1
+        circle1 = self.map_view.scene.addEllipse(
+            x1 - point_radius/2, y1 - point_radius/2,
+            point_radius, point_radius,
+            point_pen, point_brush
+        )
+        circle1.setZValue(401)  # Above the line
+        self._segment_items.append(circle1)
+        
+        # Point 2
+        circle2 = self.map_view.scene.addEllipse(
+            x2 - point_radius/2, y2 - point_radius/2,
+            point_radius, point_radius,
+            point_pen, point_brush
+        )
+        circle2.setZValue(401)  # Above the line
+        self._segment_items.append(circle2)
+        
+        self.log(f"✓ Drew segment {segment_num} in magenta (GPS points {point_idx1+1}→{point_idx2+1})")
+    
+    def load_trajectory(self, trajectory_num: int):
+        """Load and display a specific trajectory with trimming.
+        
+        Args:
+            trajectory_num: The trajectory number (1-indexed) to load
+        """
+        # Validate trajectory number
+        if trajectory_num < 1:
+            self.log(f"❌ Invalid trajectory number: {trajectory_num} (must be >= 1)")
+            return
+        
+        # Get train_csv path
         train_csv = getattr(self, 'train_csv_path', None)
         
         if not train_csv or not train_csv.exists():
@@ -420,38 +704,54 @@ class DebugTrajectoryPage(QWidget):
                 porto_train = workspace_root / 'Porto' / 'dataset' / 'train.csv'
                 if porto_train.exists():
                     train_csv = porto_train
-                    self.log(f"Found train.csv in Porto/dataset: {train_csv}")
                 else:
                     # Also try parent.parent in case project is in a subdirectory
                     porto_train = project_path.parent.parent / 'Porto' / 'dataset' / 'train.csv'
                     if porto_train.exists():
                         train_csv = porto_train
-                        self.log(f"Found train.csv in Porto/dataset (via parent.parent): {train_csv}")
         
         if not train_csv or not train_csv.exists():
             self.log("❌ train.csv not found")
             self.log("  Checked: project_info.json, settings.json, train.csv, dataset/train.csv, Porto/dataset/train.csv")
             return
         
-        # Load first trajectory
+        # Validate trajectory number against available trajectories
+        max_trajectories = self._count_trajectories(str(train_csv))
+        if trajectory_num > max_trajectories:
+            self.log(f"❌ Trajectory number {trajectory_num} exceeds available trajectories ({max_trajectories})")
+            return
+        
+        self.log(f"Loading trajectory {trajectory_num}...")
+        
+        # Load trajectory
         try:
-            polyline = self._load_trip_polyline(str(train_csv), 1)
+            polyline = self._load_trip_polyline(str(train_csv), trajectory_num)
             if not polyline:
-                self.log("❌ Failed to load trajectory")
+                self.log(f"❌ Failed to load trajectory {trajectory_num}")
                 return
             
-            self.log(f"✓ Loaded trajectory with {len(polyline)} GPS points")
+            self.log(f"✓ Loaded trajectory {trajectory_num} with {len(polyline)} GPS points")
             
             # Apply trimming
             trimmed_polyline = self._apply_trimming(polyline)
             self.log(f"✓ After trimming: {len(trimmed_polyline)} GPS points")
             
+            # Clear previous items before drawing new trajectory
+            for item in self._route_items:
+                try:
+                    self.map_view.scene.removeItem(item)
+                except RuntimeError:
+                    # Item already removed, ignore
+                    pass
+            self._route_items = []
+            self._bounding_box_polygon = None
+            
             # Draw trajectory
             self._draw_trajectory(trimmed_polyline)
-            self.log("✓ Trajectory drawn on map")
+            self.log(f"✓ Trajectory {trajectory_num} drawn on map")
             
         except Exception as e:
-            self.log(f"❌ Error loading trajectory: {e}")
+            self.log(f"❌ Error loading trajectory {trajectory_num}: {e}")
             import traceback
             traceback.print_exc()
     
@@ -699,6 +999,23 @@ class DebugTrajectoryPage(QWidget):
         # Then Y-flip for display
         self._draw_bounding_box(sumo_points_original, sumo_points)
         
+        # Calculate and log normalized coordinates relative to bounding box
+        # if self._bounding_box_params:
+        #     self._calculate_and_log_normalized_coordinates(sumo_points_original)
+        
+        # Store current trajectory points for segment selection
+        self._current_sumo_points = sumo_points
+        
+        # Update segment spinbox range (number of segments = number of points - 1)
+        if len(sumo_points) > 1:
+            max_segments = len(sumo_points) - 1
+            self.segment_spinbox.setRange(1, max_segments)
+            self.segment_spinbox.setValue(1)
+            self.show_segment_btn.setEnabled(True)
+            self.log(f"  Segment selection enabled: {max_segments} segments available")
+        else:
+            self.show_segment_btn.setEnabled(False)
+        
         # Fit view to show entire trajectory
         if sumo_points:
             from PySide6.QtCore import QRectF
@@ -736,6 +1053,15 @@ class DebugTrajectoryPage(QWidget):
         
         # Extract box parameters
         center_x, center_y, width, height, angle = min_box
+        
+        # Store bounding box parameters for normalized coordinate calculation
+        self._bounding_box_params = {
+            'center_x': center_x,
+            'center_y': center_y,
+            'width': width,
+            'height': height,
+            'angle': angle
+        }
         
         self.log(f"📦 Bounding box: center=({center_x:.1f}, {center_y:.1f}), size=({width:.1f}, {height:.1f}), angle={math.degrees(angle):.1f}°")
         
@@ -907,6 +1233,90 @@ class DebugTrajectoryPage(QWidget):
                 self._route_items.append(line)
         
         self.log(f"✓ Drew {len(edges_in_box)} vehicle edges in red inside bounding box")
+    
+    def _calculate_and_log_normalized_coordinates(self, sumo_points_original: List[Tuple[float, float]]):
+        """Calculate and log normalized coordinates of polyline relative to bounding box.
+        
+        The transformation formula:
+        1. Translate: (x', y') = (x - center_x, y - center_y)
+        2. Rotate by -angle: (x'', y'') = (x'*cos(-angle) - y'*sin(-angle), x'*sin(-angle) + y'*cos(-angle))
+        3. Normalize: (x_norm, y_norm) = (x'' / (width/2), y'' / (height/2))
+        
+        Result: Normalized coordinates in range [-1, 1] relative to bounding box
+        where (-1, -1) is bottom-left, (1, 1) is top-right, (0, 0) is center.
+        """
+        if not self._bounding_box_params:
+            return
+        
+        params = self._bounding_box_params
+        center_x = params['center_x']
+        center_y = params['center_y']
+        width = params['width']
+        height = params['height']
+        angle = params['angle']
+        
+        # Log the transformation formula
+        self.log("=" * 60)
+        self.log("📐 NORMALIZED COORDINATES FORMULA (relative to bounding box)")
+        self.log("=" * 60)
+        self.log(f"Bounding box parameters:")
+        self.log(f"  Center: ({center_x:.3f}, {center_y:.3f})")
+        self.log(f"  Size: {width:.3f} x {height:.3f}")
+        self.log(f"  Angle: {math.degrees(angle):.3f}° ({angle:.6f} radians)")
+        self.log("")
+        self.log("Transformation steps:")
+        self.log("  1. Translate: (x', y') = (x - {:.3f}, y - {:.3f})".format(center_x, center_y))
+        self.log("  2. Rotate by -{:.3f}°: (x'', y'') = (x'*cos(-θ) - y'*sin(-θ), x'*sin(-θ) + y'*cos(-θ))".format(math.degrees(angle)))
+        self.log("  3. Normalize: (x_norm, y_norm) = (x'' / {:.3f}, y'' / {:.3f})".format(width/2, height/2))
+        self.log("")
+        self.log("Normalized coordinates range: [-1, 1]")
+        self.log("  (-1, -1) = bottom-left corner")
+        self.log("  (1, 1) = top-right corner")
+        self.log("  (0, 0) = center")
+        self.log("")
+        
+        # Calculate normalized coordinates for each point
+        cos_neg_angle = math.cos(-angle)
+        sin_neg_angle = math.sin(-angle)
+        half_width = width / 2
+        half_height = height / 2
+        
+        normalized_points = []
+        self.log("Normalized polyline coordinates:")
+        self.log("  [")
+        
+        for idx, (x, y) in enumerate(sumo_points_original):
+            # Step 1: Translate to center at origin
+            x_translated = x - center_x
+            y_translated = y - center_y
+            
+            # Step 2: Rotate by -angle
+            x_rotated = x_translated * cos_neg_angle - y_translated * sin_neg_angle
+            y_rotated = x_translated * sin_neg_angle + y_translated * cos_neg_angle
+            
+            # Step 3: Normalize by box dimensions
+            x_norm = x_rotated / half_width
+            y_norm = y_rotated / half_height
+            
+            normalized_points.append((x_norm, y_norm))
+            
+            # Log first 5 and last 5 points, plus every 10th point in between
+            if idx < 5 or idx >= len(sumo_points_original) - 5 or idx % 10 == 0:
+                self.log(f"    [{x_norm:.6f}, {y_norm:.6f}],  # Point {idx+1}: original=({x:.2f}, {y:.2f})")
+        
+        if len(sumo_points_original) > 10:
+            self.log(f"    ... ({len(sumo_points_original) - 10} more points) ...")
+        
+        self.log("  ]")
+        self.log("")
+        self.log(f"Total points: {len(normalized_points)}")
+        
+        # Log coordinate ranges
+        x_norms = [p[0] for p in normalized_points]
+        y_norms = [p[1] for p in normalized_points]
+        self.log(f"Normalized X range: [{min(x_norms):.6f}, {max(x_norms):.6f}]")
+        self.log(f"Normalized Y range: [{min(y_norms):.6f}, {max(y_norms):.6f}]")
+        self.log("=" * 60)
     
     def _line_intersects_polygon(self, p1: QPointF, p2: QPointF, polygon) -> bool:
         """Check if a line segment intersects a polygon."""
