@@ -36,6 +36,8 @@ class DebugTrajectoryPage(QWidget):
         self._edge_spatial_index = None
         self._route_items = []
         self._segment_items = []  # Store segment items separately for clearing
+        self._green_edge_items = []  # Store green edge items for clearing
+        self._red_edges_data = []  # Store red edges data: list of (edge_id, edge_data, shape_points) tuples
         self.train_csv_path = None  # To store the resolved train.csv path
         self._bounding_box_polygon = None  # Store bounding box polygon for edge intersection checks
         self._bounding_box_params = None  # Store bounding box parameters (center_x, center_y, width, height, angle)
@@ -576,6 +578,7 @@ class DebugTrajectoryPage(QWidget):
         self._route_items = []
         self._bounding_box_polygon = None
         self._current_sumo_points = None
+        self._red_edges_data = []  # Clear red edges data
         # Also clear segments when clearing trajectory
         self.on_clear_segment_clicked()
         # Disable segment button when trajectory is cleared
@@ -603,7 +606,7 @@ class DebugTrajectoryPage(QWidget):
         self._draw_segment(segment_num)
     
     def on_clear_segment_clicked(self):
-        """Handle Clear Segment button click - clear segment items."""
+        """Handle Clear Segment button click - clear segment items and green edges."""
         # Clear previous segment items
         for item in self._segment_items:
             try:
@@ -612,6 +615,15 @@ class DebugTrajectoryPage(QWidget):
                 # Item already removed, ignore
                 pass
         self._segment_items = []
+        
+        # Clear green edge items
+        for item in self._green_edge_items:
+            try:
+                self.map_view.scene.removeItem(item)
+            except RuntimeError:
+                # Item already removed, ignore
+                pass
+        self._green_edge_items = []
     
     def _draw_segment(self, segment_num: int):
         """Draw a specific segment (GPS points and connecting line) in magenta.
@@ -672,6 +684,336 @@ class DebugTrajectoryPage(QWidget):
         self._segment_items.append(circle2)
         
         self.log(f"✓ Drew segment {segment_num} in magenta (GPS points {point_idx1+1}→{point_idx2+1})")
+        
+        # Find and color closest edges with matching direction
+        # For first segment: also check closest edge to point 1
+        # For last segment: also check closest edge to point 2 (last point)
+        is_first_segment = (segment_num == 1)
+        is_last_segment = (segment_num == max_segments)
+        self._find_and_color_matching_edges(x1, y1, x2, y2, is_first_segment, is_last_segment)
+    
+    def _point_to_polyline_distance(self, point_x: float, point_y: float, polyline: List[List[float]]) -> float:
+        """Calculate minimum distance from a point to a polyline.
+        
+        Args:
+            point_x, point_y: Point coordinates
+            polyline: List of [x, y] points forming the polyline
+        
+        Returns:
+            Minimum distance from point to any segment of the polyline
+        """
+        if len(polyline) < 2:
+            # If polyline has less than 2 points, calculate distance to the single point
+            if len(polyline) == 1:
+                dx = point_x - polyline[0][0]
+                dy = point_y - polyline[0][1]
+                return math.sqrt(dx * dx + dy * dy)
+            return float('inf')
+        
+        min_distance = float('inf')
+        
+        # Check distance to each segment of the polyline
+        for i in range(len(polyline) - 1):
+            x1, y1 = polyline[i][0], polyline[i][1]
+            x2, y2 = polyline[i+1][0], polyline[i+1][1]
+            
+            # Calculate distance from point to line segment
+            # Vector from segment start to end
+            seg_dx = x2 - x1
+            seg_dy = y2 - y1
+            seg_length_sq = seg_dx * seg_dx + seg_dy * seg_dy
+            
+            if seg_length_sq == 0:
+                # Degenerate segment (start == end), use point-to-point distance
+                dx = point_x - x1
+                dy = point_y - y1
+                dist = math.sqrt(dx * dx + dy * dy)
+            else:
+                # Vector from segment start to point
+                point_dx = point_x - x1
+                point_dy = point_y - y1
+                
+                # Project point onto segment line
+                t = (point_dx * seg_dx + point_dy * seg_dy) / seg_length_sq
+                
+                # Clamp t to [0, 1] to stay on segment
+                t = max(0.0, min(1.0, t))
+                
+                # Find closest point on segment
+                closest_x = x1 + t * seg_dx
+                closest_y = y1 + t * seg_dy
+                
+                # Calculate distance
+                dx = point_x - closest_x
+                dy = point_y - closest_y
+                dist = math.sqrt(dx * dx + dy * dy)
+            
+            min_distance = min(min_distance, dist)
+        
+        return min_distance
+    
+    def _find_and_color_matching_edges(self, seg_x1: float, seg_y1: float, seg_x2: float, seg_y2: float,
+                                       is_first_segment: bool = False, is_last_segment: bool = False):
+        """Find and color the closest edges with matching traffic direction.
+        
+        Args:
+            seg_x1, seg_y1: First GPS point of segment (Y-flipped for display)
+            seg_x2, seg_y2: Second GPS point of segment (Y-flipped for display)
+            is_first_segment: If True, also find closest edge to point 1
+            is_last_segment: If True, also find closest edge to point 2 (last point)
+        """
+        if not self._red_edges_data:
+            self.log("⚠️ No red edges available (bounding box not drawn yet)")
+            return
+        
+        # Get Y-flip function for coordinate conversion
+        y_min = getattr(self.map_view, '_network_y_min', 0)
+        y_max = getattr(self.map_view, '_network_y_max', 0)
+        
+        def flip_y(y):
+            """Flip Y coordinate to match network display orientation."""
+            return y_max + y_min - y
+        
+        # Calculate segment direction (already in Y-flipped coordinates)
+        dx_seg = seg_x2 - seg_x1
+        dy_seg = seg_y2 - seg_y1
+        segment_angle = math.atan2(dy_seg, dx_seg)  # Range: [-π, π]
+        
+        # Calculate segment midpoint (Y-flipped coordinates)
+        seg_mid_x = (seg_x1 + seg_x2) / 2
+        seg_mid_y = (seg_y1 + seg_y2) / 2
+        
+        # Direction threshold: 45 degrees (π/4 radians)
+        direction_threshold = math.pi / 4
+        
+        matching_edges = []
+        
+        # Check each red edge
+        for edge_id, edge_data, shape_points in self._red_edges_data:
+            # shape_points are in ORIGINAL SUMO coordinates
+            if len(shape_points) < 2:
+                continue
+            
+            # Calculate edge direction using first and last points
+            # Get points in ORIGINAL SUMO coordinates
+            x_start_sumo, y_start_sumo = shape_points[0][0], shape_points[0][1]
+            x_end_sumo, y_end_sumo = shape_points[-1][0], shape_points[-1][1]
+            
+            # Y-flip for direction calculation to match segment coordinate system
+            y_start_flipped = flip_y(y_start_sumo)
+            y_end_flipped = flip_y(y_end_sumo)
+            
+            # Calculate edge direction
+            dx_edge = x_end_sumo - x_start_sumo
+            dy_edge = y_end_flipped - y_start_flipped
+            edge_angle = math.atan2(dy_edge, dx_edge)  # Range: [-π, π]
+            
+            # Calculate angular difference (handle wrap-around)
+            angle_diff = abs(segment_angle - edge_angle)
+            if angle_diff > math.pi:
+                angle_diff = 2 * math.pi - angle_diff
+            
+            # Check if direction matches (within threshold)
+            if angle_diff > direction_threshold:
+                continue
+            
+            # Convert GPS segment points from Y-flipped display coordinates to original SUMO coordinates
+            # seg_x1, seg_y1, seg_x2, seg_y2 are in Y-flipped coordinates
+            # Unflip Y coordinates to get original SUMO coordinates
+            seg_y1_sumo = flip_y(seg_y1)  # Unflip: flip_y(flip_y(y)) = y
+            seg_y2_sumo = flip_y(seg_y2)
+            # X coordinates don't need flipping
+            seg_x1_sumo = seg_x1
+            seg_x2_sumo = seg_x2
+            
+            # Calculate minimum distance from GPS segment points to edge
+            # Distance from point 1 to edge
+            dist1 = self._point_to_polyline_distance(seg_x1_sumo, seg_y1_sumo, shape_points)
+            # Distance from point 2 to edge
+            dist2 = self._point_to_polyline_distance(seg_x2_sumo, seg_y2_sumo, shape_points)
+            
+            # Take the minimum distance
+            distance = min(dist1, dist2)
+            
+            # Calculate combined score: distance + weighted angle difference
+            # Weight factor: 20 meters per radian (so 1 radian ≈ 57° difference is equivalent to 20m distance)
+            # Lower weight gives more importance to distance
+            angle_weight = 5.0  # meters per radian
+            combined_score = distance + angle_weight * angle_diff
+            
+            matching_edges.append((edge_id, edge_data, shape_points, distance, angle_diff, combined_score))
+        
+        # Sort segment-matching edges by combined score
+        matching_edges.sort(key=lambda x: x[5])  # Sort by combined_score (index 5)
+        segment_top_5 = matching_edges[:5] if len(matching_edges) >= 5 else matching_edges
+        best_segment_edge = segment_top_5[0] if segment_top_5 else None
+        
+        # For first segment: also find closest edge to point 1 only
+        best_point1_edge = None
+        if is_first_segment:
+            seg_y1_sumo = flip_y(seg_y1)
+            seg_x1_sumo = seg_x1
+            
+            point1_edges = []
+            for edge_id, edge_data, shape_points in self._red_edges_data:
+                if len(shape_points) < 2:
+                    continue
+                
+                # Calculate distance from point 1 to edge
+                distance = self._point_to_polyline_distance(seg_x1_sumo, seg_y1_sumo, shape_points)
+                
+                # Calculate edge direction for angle check
+                x_start_sumo, y_start_sumo = shape_points[0][0], shape_points[0][1]
+                x_end_sumo, y_end_sumo = shape_points[-1][0], shape_points[-1][1]
+                y_start_flipped = flip_y(y_start_sumo)
+                y_end_flipped = flip_y(y_end_sumo)
+                dx_edge = x_end_sumo - x_start_sumo
+                dy_edge = y_end_flipped - y_start_flipped
+                edge_angle = math.atan2(dy_edge, dx_edge)
+                
+                # Calculate angular difference with segment direction
+                angle_diff = abs(segment_angle - edge_angle)
+                if angle_diff > math.pi:
+                    angle_diff = 2 * math.pi - angle_diff
+                
+                # Check direction match
+                if angle_diff <= direction_threshold:
+                    angle_weight = 5.0
+                    combined_score = distance + angle_weight * angle_diff
+                    point1_edges.append((edge_id, edge_data, shape_points, distance, angle_diff, combined_score))
+            
+            # Sort and take closest
+            if point1_edges:
+                point1_edges.sort(key=lambda x: x[5])
+                best_point1_edge = point1_edges[0]
+                # Add to segment matches (will be deduplicated later)
+                segment_top_5.append(best_point1_edge)
+                self.log(f"📍 First segment: Found closest edge to point 1: {best_point1_edge[0]} (distance={best_point1_edge[3]:.1f}m)")
+        
+        # For last segment: also find closest edge to point 2 only (last point)
+        best_point2_edge = None
+        if is_last_segment:
+            seg_y2_sumo = flip_y(seg_y2)
+            seg_x2_sumo = seg_x2
+            
+            point2_edges = []
+            for edge_id, edge_data, shape_points in self._red_edges_data:
+                if len(shape_points) < 2:
+                    continue
+                
+                # Calculate distance from point 2 to edge
+                distance = self._point_to_polyline_distance(seg_x2_sumo, seg_y2_sumo, shape_points)
+                
+                # Calculate edge direction for angle check
+                x_start_sumo, y_start_sumo = shape_points[0][0], shape_points[0][1]
+                x_end_sumo, y_end_sumo = shape_points[-1][0], shape_points[-1][1]
+                y_start_flipped = flip_y(y_start_sumo)
+                y_end_flipped = flip_y(y_end_sumo)
+                dx_edge = x_end_sumo - x_start_sumo
+                dy_edge = y_end_flipped - y_start_flipped
+                edge_angle = math.atan2(dy_edge, dx_edge)
+                
+                # Calculate angular difference with segment direction
+                angle_diff = abs(segment_angle - edge_angle)
+                if angle_diff > math.pi:
+                    angle_diff = 2 * math.pi - angle_diff
+                
+                # Check direction match
+                if angle_diff <= direction_threshold:
+                    angle_weight = 5.0
+                    combined_score = distance + angle_weight * angle_diff
+                    point2_edges.append((edge_id, edge_data, shape_points, distance, angle_diff, combined_score))
+            
+            # Sort and take closest
+            if point2_edges:
+                point2_edges.sort(key=lambda x: x[5])
+                best_point2_edge = point2_edges[0]
+                # Add to segment matches (will be deduplicated later)
+                segment_top_5.append(best_point2_edge)
+                self.log(f"📍 Last segment: Found closest edge to point 2 (last point): {best_point2_edge[0]} (distance={best_point2_edge[3]:.1f}m)")
+        
+        # Remove duplicates by edge_id (keep the one with better score)
+        edge_dict = {}
+        for edge_tuple in segment_top_5:
+            edge_id = edge_tuple[0]
+            if edge_id not in edge_dict or edge_tuple[5] < edge_dict[edge_id][5]:
+                edge_dict[edge_id] = edge_tuple
+        
+        # Convert back to list and sort by combined score
+        unique_edges = list(edge_dict.values())
+        unique_edges.sort(key=lambda x: x[5])  # Sort by combined_score (index 5)
+        
+        # Take all unique edges (may be more than 5 if point-specific edges were added)
+        top_edges = unique_edges
+        
+        if not top_edges:
+            self.log("⚠️ No edges found with matching direction")
+            return
+        
+        # Determine which edges should be orange
+        orange_edges = set()
+        
+        # Best segment edge is always orange
+        if best_segment_edge:
+            orange_edges.add(best_segment_edge[0])  # edge_id
+            self.log(f"🟠 Best segment edge: {best_segment_edge[0]} (distance={best_segment_edge[3]:.1f}m, angle_diff={math.degrees(best_segment_edge[4]):.1f}°, score={best_segment_edge[5]:.2f})")
+        
+        # For first segment: also mark best point 1 edge as orange (if different)
+        if is_first_segment and best_point1_edge:
+            if best_point1_edge[0] not in orange_edges:
+                orange_edges.add(best_point1_edge[0])
+                self.log(f"🟠 Best point 1 edge: {best_point1_edge[0]} (distance={best_point1_edge[3]:.1f}m, angle_diff={math.degrees(best_point1_edge[4]):.1f}°, score={best_point1_edge[5]:.2f})")
+            else:
+                self.log(f"🟠 Best point 1 edge is same as segment edge: {best_point1_edge[0]}")
+        
+        # For last segment: also mark best point 2 edge as orange (if different)
+        if is_last_segment and best_point2_edge:
+            if best_point2_edge[0] not in orange_edges:
+                orange_edges.add(best_point2_edge[0])
+                self.log(f"🟠 Best point 2 edge: {best_point2_edge[0]} (distance={best_point2_edge[3]:.1f}m, angle_diff={math.degrees(best_point2_edge[4]):.1f}°, score={best_point2_edge[5]:.2f})")
+            else:
+                self.log(f"🟠 Best point 2 edge is same as segment edge: {best_point2_edge[0]}")
+        
+        self.log(f"🟢 Found {len(top_edges)} closest edges with matching direction (threshold: {math.degrees(direction_threshold):.1f}°)")
+        self.log(f"🟠 {len(orange_edges)} edge(s) marked as orange")
+        
+        # Color edges (Y-flip for display)
+        orange_pen = QPen(QColor(255, 165, 0), 5)  # Orange, 5px width (thicker for visibility)
+        orange_pen.setStyle(Qt.SolidLine)
+        green_pen = QPen(QColor(0, 255, 0), 4)  # Green, 4px width
+        green_pen.setStyle(Qt.SolidLine)
+        
+        orange_count = 0
+        green_count = 0
+        
+        for edge_id, edge_data, shape_points, distance, angle_diff, combined_score in top_edges:
+            # Determine color based on whether edge is in orange set
+            is_orange = edge_id in orange_edges
+            pen = orange_pen if is_orange else green_pen
+            z_value = 21 if is_orange else 20
+            
+            # shape_points are in ORIGINAL SUMO coordinates
+            for i in range(len(shape_points) - 1):
+                x1_sumo, y1_sumo = shape_points[i][0], shape_points[i][1]  # ORIGINAL SUMO
+                x2_sumo, y2_sumo = shape_points[i+1][0], shape_points[i+1][1]  # ORIGINAL SUMO
+                
+                # Y-flip ONLY for display
+                y1 = flip_y(y1_sumo)
+                y2 = flip_y(y2_sumo)
+                
+                line = self.map_view.scene.addLine(x1_sumo, y1, x2_sumo, y2, pen)
+                line.setZValue(z_value)
+                self._green_edge_items.append(line)  # Store for clearing later
+            
+            color_label = "🟠 ORANGE" if is_orange else "🟢 green"
+            self.log(f"  {color_label} Edge {edge_id}: distance={distance:.1f}m, angle_diff={math.degrees(angle_diff):.1f}°, score={combined_score:.2f}")
+            
+            if is_orange:
+                orange_count += 1
+            else:
+                green_count += 1
+        
+        self.log(f"✓ Drew {orange_count} edge(s) in orange and {green_count} edge(s) in green")
     
     def load_trajectory(self, trajectory_num: int):
         """Load and display a specific trajectory with trimming.
@@ -734,7 +1076,7 @@ class DebugTrajectoryPage(QWidget):
             
             # Apply trimming
             trimmed_polyline = self._apply_trimming(polyline)
-            self.log(f"✓ After trimming: {len(trimmed_polyline)} GPS points")
+            self.log(f"✓ After trimming: {len(trimmed_polyline)} GPS points (original had {len(polyline)} points)")
             
             # Clear previous items before drawing new trajectory
             for item in self._route_items:
@@ -746,8 +1088,8 @@ class DebugTrajectoryPage(QWidget):
             self._route_items = []
             self._bounding_box_polygon = None
             
-            # Draw trajectory
-            self._draw_trajectory(trimmed_polyline)
+            # Draw trajectory (trimmed for display, but use original for bounding box)
+            self._draw_trajectory(trimmed_polyline, original_polyline=polyline)
             self.log(f"✓ Trajectory {trajectory_num} drawn on map")
             
         except Exception as e:
@@ -863,10 +1205,19 @@ class DebugTrajectoryPage(QWidget):
         self.log(f"  Trimmed: removed {real_start_idx} from start, {len(polyline) - real_end_idx - 1} from end")
         return trimmed
     
-    def _draw_trajectory(self, polyline: List[List[float]]):
-        """Draw GPS points and connecting line on map."""
+    def _draw_trajectory(self, polyline: List[List[float]], original_polyline: List[List[float]] = None):
+        """Draw GPS points and connecting line on map.
+        
+        Args:
+            polyline: Trimmed polyline to draw (for display)
+            original_polyline: Optional original (untrimmed) polyline for bounding box calculation.
+                              If None, uses polyline for both drawing and bounding box.
+        """
         if not polyline or len(polyline) < 2:
             return
+        
+        # Use original polyline for bounding box if provided, otherwise use trimmed polyline
+        bounding_box_polyline = original_polyline if original_polyline and len(original_polyline) >= 2 else polyline
         
         # Clear previous items
         for item in self._route_items:
@@ -883,7 +1234,7 @@ class DebugTrajectoryPage(QWidget):
         
         # Convert GPS to SUMO coordinates (ORIGINAL SUMO coordinates, NOT Y-flipped)
         # We'll only Y-flip when drawing, not for calculations
-        sumo_points_original = []  # Store in ORIGINAL SUMO coordinates
+        sumo_points_original = []  # Store in ORIGINAL SUMO coordinates (for trimmed polyline - display)
         for idx, (lon, lat) in enumerate(polyline):
             sumo_coords = self.network_parser.gps_to_sumo_coords(lon, lat)
             if sumo_coords:
@@ -893,6 +1244,29 @@ class DebugTrajectoryPage(QWidget):
                 # Debug: Log first 2 GPS points conversion
                 if idx < 2:
                     self.log(f"  [GPS Conversion] Point {idx+1}: GPS=({lon:.6f}, {lat:.6f}) -> SUMO=({x:.1f}, {y:.1f}) [ORIGINAL, not Y-flipped]")
+        
+        # Convert bounding box polyline (original untrimmed) to SUMO coordinates for bounding box calculation
+        sumo_points_original_for_bbox = []  # Store in ORIGINAL SUMO coordinates (for bounding box)
+        if bounding_box_polyline != polyline:
+            self.log(f"  Using original polyline ({len(bounding_box_polyline)} points) for bounding box calculation")
+            failed_conversions = []
+            for idx, (lon, lat) in enumerate(bounding_box_polyline):
+                sumo_coords = self.network_parser.gps_to_sumo_coords(lon, lat)
+                if sumo_coords:
+                    x, y = sumo_coords  # ORIGINAL SUMO coordinates
+                    sumo_points_original_for_bbox.append((x, y))
+                    # Log first 2 and last 2 points for debugging
+                    if idx < 2 or idx >= len(bounding_box_polyline) - 2:
+                        self.log(f"  [BBox] Point {idx+1}/{len(bounding_box_polyline)}: GPS=({lon:.6f}, {lat:.6f}) -> SUMO=({x:.1f}, {y:.1f})")
+                else:
+                    failed_conversions.append(idx + 1)
+                    self.log(f"  ⚠️ [BBox] Point {idx+1}/{len(bounding_box_polyline)}: GPS=({lon:.6f}, {lat:.6f}) -> FAILED to convert")
+            if failed_conversions:
+                self.log(f"  ⚠️ Warning: {len(failed_conversions)} points failed to convert (indices: {failed_conversions})")
+            self.log(f"  Successfully converted {len(sumo_points_original_for_bbox)}/{len(bounding_box_polyline)} points for bounding box")
+        else:
+            # Use same points if no original polyline provided
+            sumo_points_original_for_bbox = sumo_points_original
         
         # Convert to Y-flipped coordinates ONLY for drawing
         sumo_points = [(x, flip_y(y)) for x, y in sumo_points_original]
@@ -996,8 +1370,10 @@ class DebugTrajectoryPage(QWidget):
         
         # Draw minimum bounding box with padding
         # Create bounding box from ORIGINAL SUMO coordinates (for calculations)
+        # Use original (untrimmed) polyline points for bounding box to include all GPS points
         # Then Y-flip for display
-        self._draw_bounding_box(sumo_points_original, sumo_points)
+        sumo_points_flipped_for_bbox = [(x, flip_y(y)) for x, y in sumo_points_original_for_bbox]
+        self._draw_bounding_box(sumo_points_original_for_bbox, sumo_points_flipped_for_bbox)
         
         # Calculate and log normalized coordinates relative to bounding box
         # if self._bounding_box_params:
@@ -1089,6 +1465,70 @@ class DebugTrajectoryPage(QWidget):
             ry = dx * sin_a + dy * cos_a
             # Translate to center
             rotated_corners.append(QPointF(center_x + rx, center_y + ry))
+        
+        # CRITICAL: Ensure ALL points are inside the bounding box
+        # Expand box if necessary to guarantee inclusion
+        from PySide6.QtGui import QPolygonF
+        polygon_check = QPolygonF(rotated_corners)
+        outside_points_list = []
+        for idx, (x, y) in enumerate(sumo_points_original):
+            point = QPointF(x, y)
+            if not polygon_check.containsPoint(point, Qt.OddEvenFill):
+                outside_points_list.append((idx, x, y))
+        
+        # If ANY points are outside, expand the box to include them
+        if outside_points_list:
+            self.log(f"⚠️ {len(outside_points_list)} points are outside initial bounding box - expanding to include ALL points")
+            # Log which points are outside (especially first 2)
+            for idx, x, y in outside_points_list[:5]:
+                self.log(f"  Outside point #{idx+1} (index {idx}): ({x:.1f}, {y:.1f})")
+            
+            # Expand box to guarantee all points are inside
+            center_x, center_y, width, height, angle = self._expand_box_to_include_all_points(
+                sumo_points_original, center_x, center_y, width, height, angle, safety_margin=100.0
+            )
+            
+            # Recalculate corners with expanded box
+            half_width = width / 2
+            half_height = height / 2
+            corners = [
+                (-half_width, -half_height),
+                (half_width, -half_height),
+                (half_width, half_height),
+                (-half_width, half_height)
+            ]
+            cos_a = math.cos(-angle)
+            sin_a = math.sin(-angle)
+            rotated_corners = []
+            for dx, dy in corners:
+                rx = dx * cos_a - dy * sin_a
+                ry = dx * sin_a + dy * cos_a
+                rotated_corners.append(QPointF(center_x + rx, center_y + ry))
+            
+            # Update stored bounding box parameters
+            self._bounding_box_params = {
+                'center_x': center_x,
+                'center_y': center_y,
+                'width': width,
+                'height': height,
+                'angle': angle
+            }
+            self.log(f"📦 Expanded bounding box: center=({center_x:.1f}, {center_y:.1f}), size=({width:.1f}, {height:.1f}), angle={math.degrees(angle):.1f}°")
+            
+            # Verify again that all points are now inside
+            polygon_check = QPolygonF(rotated_corners)
+            still_outside = []
+            for idx, (x, y) in enumerate(sumo_points_original):
+                point = QPointF(x, y)
+                if not polygon_check.containsPoint(point, Qt.OddEvenFill):
+                    still_outside.append((idx, x, y))
+            
+            if still_outside:
+                self.log(f"❌ ERROR: {len(still_outside)} points are STILL outside after expansion!")
+                for idx, x, y in still_outside[:5]:
+                    self.log(f"  Still outside point #{idx+1} (index {idx}): ({x:.1f}, {y:.1f})")
+            else:
+                self.log(f"✓ All {len(sumo_points_original)} points are now inside the expanded bounding box")
         
         # Verify all points are inside the box using point-in-polygon test (ORIGINAL SUMO)
         self._verify_points_in_box(sumo_points_original, rotated_corners)
@@ -1214,12 +1654,16 @@ class DebugTrajectoryPage(QWidget):
                         break
             
             if edge_in_box:
-                edges_in_box.append((edge_id, shape_points))
+                # Store edge_id, full edge_data, and shape_points (ORIGINAL SUMO coordinates)
+                edges_in_box.append((edge_id, edge_data, shape_points))
+        
+        # Store red edges data for later use in segment matching
+        self._red_edges_data = edges_in_box.copy()
         
         self.log(f"🔴 Found {len(edges_in_box)} vehicle edges inside bounding box (checked {edges_checked} edges)")
         
         # Draw edges in red (Y-flip for display)
-        for edge_id, shape_points in edges_in_box:
+        for edge_id, edge_data, shape_points in edges_in_box:
             for i in range(len(shape_points) - 1):
                 x1, y1_sumo = shape_points[i][0], shape_points[i][1]  # ORIGINAL SUMO
                 x2, y2_sumo = shape_points[i+1][0], shape_points[i+1][1]  # ORIGINAL SUMO
@@ -1345,6 +1789,71 @@ class DebugTrajectoryPage(QWidget):
         return (ccw(p1, p3, p4) != ccw(p2, p3, p4) and 
                 ccw(p1, p2, p3) != ccw(p1, p2, p4))
     
+    def _expand_box_to_include_all_points(self, points: List[Tuple[float, float]], center_x: float, center_y: float, 
+                                         width: float, height: float, angle: float, 
+                                         safety_margin: float = 50.0) -> Tuple[float, float, float, float, float]:
+        """
+        Expand bounding box to guarantee all points are inside.
+        
+        Args:
+            points: List of (x, y) tuples
+            center_x, center_y, width, height, angle: Current bounding box parameters
+            safety_margin: Additional margin to add (in SUMO coordinate units)
+        
+        Returns:
+            Updated (center_x, center_y, width, height, angle) that includes all points
+        """
+        if not points:
+            return (center_x, center_y, width, height, angle)
+        
+        # Transform all points to the rotated coordinate system (aligned with box)
+        cos_neg_angle = math.cos(-angle)
+        sin_neg_angle = math.sin(-angle)
+        
+        # Transform points to rotated coordinate system
+        rotated_points = []
+        for x, y in points:
+            # Translate to center
+            dx = x - center_x
+            dy = y - center_y
+            # Rotate by -angle (to align with box axes)
+            rx = dx * cos_neg_angle - dy * sin_neg_angle
+            ry = dx * sin_neg_angle + dy * cos_neg_angle
+            rotated_points.append((rx, ry))
+        
+        # Find the axis-aligned bounding box of rotated points
+        if not rotated_points:
+            return (center_x, center_y, width, height, angle)
+        
+        rxs = [p[0] for p in rotated_points]
+        rys = [p[1] for p in rotated_points]
+        
+        min_rx = min(rxs)
+        max_rx = max(rxs)
+        min_ry = min(rys)
+        max_ry = max(rys)
+        
+        # Calculate required width and height (with safety margin)
+        required_width = (max_rx - min_rx) + 2 * safety_margin
+        required_height = (max_ry - min_ry) + 2 * safety_margin
+        
+        # Calculate new center in rotated coordinates (centered on the points)
+        center_rx = (min_rx + max_rx) / 2
+        center_ry = (min_ry + max_ry) / 2
+        
+        # Transform center back to original coordinates
+        # We rotated by -angle, so to go back we rotate by +angle
+        cos_angle = math.cos(angle)
+        sin_angle = math.sin(angle)
+        new_center_x = center_x + center_rx * cos_angle - center_ry * sin_angle
+        new_center_y = center_y + center_rx * sin_angle + center_ry * cos_angle
+        
+        # Use the larger of current or required dimensions
+        final_width = max(width, required_width)
+        final_height = max(height, required_height)
+        
+        return (new_center_x, new_center_y, final_width, final_height, angle)
+    
     def _verify_points_in_box(self, points: List[Tuple[float, float]], box_corners: List[QPointF]):
         """Verify that all points are inside the bounding box."""
         if len(box_corners) < 4:
@@ -1352,24 +1861,27 @@ class DebugTrajectoryPage(QWidget):
         
         # Check if points are inside using point-in-polygon test
         outside_points = []
-        for x, y in points:
+        outside_indices = []
+        for idx, (x, y) in enumerate(points):
             point = QPointF(x, y)
-            # Simple point-in-polygon test (ray casting)
-            inside = False
-            j = len(box_corners) - 1
-            for i in range(len(box_corners)):
-                xi, yi = box_corners[i].x(), box_corners[i].y()
-                xj, yj = box_corners[j].x(), box_corners[j].y()
-                if ((yi > y) != (yj > y)) and (x < (xj - xi) * (y - yi) / (yj - yi) + xi):
-                    inside = not inside
-                j = i
+            # Use Qt's built-in point-in-polygon test
+            from PySide6.QtGui import QPolygonF
+            polygon = QPolygonF(box_corners)
+            inside = polygon.containsPoint(point, Qt.OddEvenFill)
             
             if not inside:
                 outside_points.append((x, y))
+                outside_indices.append(idx)
         
         if outside_points:
             self.log(f"⚠️ Warning: {len(outside_points)} points are outside the bounding box!")
-            self.log(f"  First few outside points: {outside_points[:3]}")
+            # Log first 5 and last 5 outside points with their indices
+            for i, (idx, (x, y)) in enumerate(zip(outside_indices[:5], outside_points[:5])):
+                self.log(f"  Outside point #{idx+1} (index {idx}): ({x:.1f}, {y:.1f})")
+            if len(outside_points) > 5:
+                self.log(f"  ... and {len(outside_points) - 5} more outside points")
+                for idx, (x, y) in zip(outside_indices[-5:], outside_points[-5:]):
+                    self.log(f"  Outside point #{idx+1} (index {idx}): ({x:.1f}, {y:.1f})")
         else:
             self.log(f"✓ All {len(points)} points are inside the bounding box")
     
