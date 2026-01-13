@@ -351,6 +351,32 @@ class DebugTrajectoryPage(QWidget):
         self.clear_segment_btn.clicked.connect(self.on_clear_segment_clicked)
         footer_layout.addWidget(self.clear_segment_btn)
         
+        footer_layout.addSpacing(10)
+        
+        # Process All Segments button
+        self.process_all_segments_btn = QPushButton("Process All Segments")
+        self.process_all_segments_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #FF9800;
+                color: white;
+                border: none;
+                padding: 6px 15px;
+                border-radius: 4px;
+                font-weight: bold;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: #F57C00;
+            }
+            QPushButton:disabled {
+                background-color: #cccccc;
+                color: #666666;
+            }
+        """)
+        self.process_all_segments_btn.clicked.connect(self.on_process_all_segments_clicked)
+        self.process_all_segments_btn.setEnabled(False)  # Disabled until trajectory is loaded
+        footer_layout.addWidget(self.process_all_segments_btn)
+        
         footer_layout.addStretch()
         
         # Status label
@@ -581,8 +607,9 @@ class DebugTrajectoryPage(QWidget):
         self._red_edges_data = []  # Clear red edges data
         # Also clear segments when clearing trajectory
         self.on_clear_segment_clicked()
-        # Disable segment button when trajectory is cleared
+        # Disable segment buttons when trajectory is cleared
         self.show_segment_btn.setEnabled(False)
+        self.process_all_segments_btn.setEnabled(False)
         self.segment_spinbox.setRange(1, 1)
         self.log("✓ Cleared all trajectory items")
     
@@ -616,7 +643,7 @@ class DebugTrajectoryPage(QWidget):
                 pass
         self._segment_items = []
         
-        # Clear green edge items
+        # Clear green edge items (orange and green edges, but NOT red edges)
         for item in self._green_edge_items:
             try:
                 self.map_view.scene.removeItem(item)
@@ -624,6 +651,72 @@ class DebugTrajectoryPage(QWidget):
                 # Item already removed, ignore
                 pass
         self._green_edge_items = []
+    
+    def on_process_all_segments_clicked(self):
+        """Handle Process All Segments button click - find and draw orange edges for all segments."""
+        if not self._current_sumo_points or len(self._current_sumo_points) < 2:
+            self.log("⚠️ No trajectory loaded or not enough points")
+            return
+        
+        if not self._red_edges_data:
+            self.log("⚠️ No red edges available (bounding box not drawn yet)")
+            return
+        
+        # Clear existing green/orange edge items (but keep red edges)
+        for item in self._green_edge_items:
+            try:
+                self.map_view.scene.removeItem(item)
+            except RuntimeError:
+                pass
+        self._green_edge_items = []
+        
+        # Get Y-flip function for coordinate conversion
+        y_min = getattr(self.map_view, '_network_y_min', 0)
+        y_max = getattr(self.map_view, '_network_y_max', 0)
+        
+        def flip_y(y):
+            """Flip Y coordinate to match network display orientation."""
+            return y_max + y_min - y
+        
+        max_segments = len(self._current_sumo_points) - 1
+        min_segment_length = 5.0  # meters
+        processed_count = 0
+        skipped_count = 0
+        
+        self.log(f"🔄 Processing all {max_segments} segments (min length: {min_segment_length}m)...")
+        
+        # Process each segment
+        for segment_num in range(1, max_segments + 1):
+            point_idx1 = segment_num - 1
+            point_idx2 = segment_num
+            
+            if point_idx1 >= len(self._current_sumo_points) or point_idx2 >= len(self._current_sumo_points):
+                continue
+            
+            x1, y1 = self._current_sumo_points[point_idx1]
+            x2, y2 = self._current_sumo_points[point_idx2]
+            
+            # Calculate segment length
+            y1_sumo = flip_y(y1)
+            y2_sumo = flip_y(y2)
+            dx = x2 - x1
+            dy = y2_sumo - y1_sumo
+            segment_length = math.sqrt(dx * dx + dy * dy)
+            
+            # Skip very short segments (< 5m) - likely lane changes or GPS noise
+            if segment_length < min_segment_length:
+                skipped_count += 1
+                continue
+            
+            # Find and draw edges for this segment (without drawing magenta segment visualization)
+            is_first_segment = (segment_num == 1)
+            is_last_segment = (segment_num == max_segments)
+            
+            # Call the edge matching function (only draw orange edges, not green)
+            self._find_and_color_matching_edges(x1, y1, x2, y2, is_first_segment, is_last_segment, show_green_edges=False)
+            processed_count += 1
+        
+        self.log(f"✓ Processed {processed_count} segments (skipped {skipped_count} segments < {min_segment_length}m)")
     
     def _draw_segment(self, segment_num: int):
         """Draw a specific segment (GPS points and connecting line) in magenta.
@@ -683,7 +776,33 @@ class DebugTrajectoryPage(QWidget):
         circle2.setZValue(401)  # Above the line
         self._segment_items.append(circle2)
         
-        self.log(f"✓ Drew segment {segment_num} in magenta (GPS points {point_idx1+1}→{point_idx2+1})")
+        # Calculate segment length in meters
+        # Convert from Y-flipped display coordinates to original SUMO coordinates
+        y_min = getattr(self.map_view, '_network_y_min', 0)
+        y_max = getattr(self.map_view, '_network_y_max', 0)
+        
+        def flip_y(y):
+            """Flip Y coordinate to match network display orientation."""
+            return y_max + y_min - y
+        
+        # Unflip Y coordinates to get original SUMO coordinates
+        y1_sumo = flip_y(y1)
+        y2_sumo = flip_y(y2)
+        x1_sumo = x1  # X doesn't need flipping
+        x2_sumo = x2  # X doesn't need flipping
+        
+        # Calculate Euclidean distance in SUMO coordinates (assumed to be in meters)
+        dx = x2_sumo - x1_sumo
+        dy = y2_sumo - y1_sumo  # Use unflipped coordinates for distance
+        segment_length = math.sqrt(dx * dx + dy * dy)
+        
+        self.log(f"✓ Drew segment {segment_num} in magenta (GPS points {point_idx1+1}→{point_idx2+1}, length={segment_length:.2f}m)")
+        
+        # Skip edge matching for very short segments (< 5m) - likely lane changes or GPS noise
+        min_segment_length = 5.0  # meters
+        if segment_length < min_segment_length:
+            self.log(f"⏭️  Skipping edge matching for segment {segment_num} (length {segment_length:.2f}m < {min_segment_length}m threshold)")
+            return
         
         # Find and color closest edges with matching direction
         # For first segment: also check closest edge to point 1
@@ -753,14 +872,22 @@ class DebugTrajectoryPage(QWidget):
         return min_distance
     
     def _find_and_color_matching_edges(self, seg_x1: float, seg_y1: float, seg_x2: float, seg_y2: float,
-                                       is_first_segment: bool = False, is_last_segment: bool = False):
-        """Find and color the closest edges with matching traffic direction.
+                                       is_first_segment: bool = False, is_last_segment: bool = False,
+                                       show_green_edges: bool = True):
+        """Find and color the closest edges to segment start and end points.
+        
+        For each segment, finds:
+        - The closest edge to the start point (point 1)
+        - The closest edge to the end point (point 2)
+        Both edges are colored orange (can be the same edge).
+        Optionally displays top 5 segment-matching edges in green (excluding orange ones).
         
         Args:
             seg_x1, seg_y1: First GPS point of segment (Y-flipped for display)
             seg_x2, seg_y2: Second GPS point of segment (Y-flipped for display)
-            is_first_segment: If True, also find closest edge to point 1
-            is_last_segment: If True, also find closest edge to point 2 (last point)
+            is_first_segment: Unused (kept for compatibility)
+            is_last_segment: Unused (kept for compatibility)
+            show_green_edges: If True, also draw green edges (top 5 matches). Default True.
         """
         if not self._red_edges_data:
             self.log("⚠️ No red edges available (bounding box not drawn yet)")
@@ -843,156 +970,86 @@ class DebugTrajectoryPage(QWidget):
             
             matching_edges.append((edge_id, edge_data, shape_points, distance, angle_diff, combined_score))
         
-        # Sort segment-matching edges by combined score
-        matching_edges.sort(key=lambda x: x[5])  # Sort by combined_score (index 5)
-        segment_top_5 = matching_edges[:5] if len(matching_edges) >= 5 else matching_edges
-        best_segment_edge = segment_top_5[0] if segment_top_5 else None
+        # Convert GPS segment points from Y-flipped display coordinates to original SUMO coordinates
+        seg_y1_sumo = flip_y(seg_y1)
+        seg_y2_sumo = flip_y(seg_y2)
+        seg_x1_sumo = seg_x1
+        seg_x2_sumo = seg_x2
         
-        # For first segment: also find closest edge to point 1 only
-        best_point1_edge = None
-        if is_first_segment:
-            seg_y1_sumo = flip_y(seg_y1)
-            seg_x1_sumo = seg_x1
+        # Find closest edge to start point (point 1)
+        closest_to_point1 = None
+        closest_to_point1_distance = float('inf')
+        
+        # Find closest edge to end point (point 2)
+        closest_to_point2 = None
+        closest_to_point2_distance = float('inf')
+        
+        # Check each red edge for closest to both points
+        for edge_id, edge_data, shape_points in self._red_edges_data:
+            if len(shape_points) < 2:
+                continue
             
-            point1_edges = []
-            for edge_id, edge_data, shape_points in self._red_edges_data:
-                if len(shape_points) < 2:
-                    continue
-                
-                # Calculate distance from point 1 to edge
-                distance = self._point_to_polyline_distance(seg_x1_sumo, seg_y1_sumo, shape_points)
-                
-                # Calculate edge direction for angle check
-                x_start_sumo, y_start_sumo = shape_points[0][0], shape_points[0][1]
-                x_end_sumo, y_end_sumo = shape_points[-1][0], shape_points[-1][1]
-                y_start_flipped = flip_y(y_start_sumo)
-                y_end_flipped = flip_y(y_end_sumo)
-                dx_edge = x_end_sumo - x_start_sumo
-                dy_edge = y_end_flipped - y_start_flipped
-                edge_angle = math.atan2(dy_edge, dx_edge)
-                
-                # Calculate angular difference with segment direction
-                angle_diff = abs(segment_angle - edge_angle)
-                if angle_diff > math.pi:
-                    angle_diff = 2 * math.pi - angle_diff
-                
-                # Check direction match
-                if angle_diff <= direction_threshold:
-                    angle_weight = 5.0
-                    combined_score = distance + angle_weight * angle_diff
-                    point1_edges.append((edge_id, edge_data, shape_points, distance, angle_diff, combined_score))
+            # Calculate edge direction for angle check
+            x_start_sumo, y_start_sumo = shape_points[0][0], shape_points[0][1]
+            x_end_sumo, y_end_sumo = shape_points[-1][0], shape_points[-1][1]
+            y_start_flipped = flip_y(y_start_sumo)
+            y_end_flipped = flip_y(y_end_sumo)
+            dx_edge = x_end_sumo - x_start_sumo
+            dy_edge = y_end_flipped - y_start_flipped
+            edge_angle = math.atan2(dy_edge, dx_edge)
             
-            # Sort and take closest
-            if point1_edges:
-                point1_edges.sort(key=lambda x: x[5])
-                best_point1_edge = point1_edges[0]
-                # Add to segment matches (will be deduplicated later)
-                segment_top_5.append(best_point1_edge)
-                self.log(f"📍 First segment: Found closest edge to point 1: {best_point1_edge[0]} (distance={best_point1_edge[3]:.1f}m)")
-        
-        # For last segment: also find closest edge to point 2 only (last point)
-        best_point2_edge = None
-        if is_last_segment:
-            seg_y2_sumo = flip_y(seg_y2)
-            seg_x2_sumo = seg_x2
+            # Calculate angular difference with segment direction
+            angle_diff = abs(segment_angle - edge_angle)
+            if angle_diff > math.pi:
+                angle_diff = 2 * math.pi - angle_diff
             
-            point2_edges = []
-            for edge_id, edge_data, shape_points in self._red_edges_data:
-                if len(shape_points) < 2:
-                    continue
-                
-                # Calculate distance from point 2 to edge
-                distance = self._point_to_polyline_distance(seg_x2_sumo, seg_y2_sumo, shape_points)
-                
-                # Calculate edge direction for angle check
-                x_start_sumo, y_start_sumo = shape_points[0][0], shape_points[0][1]
-                x_end_sumo, y_end_sumo = shape_points[-1][0], shape_points[-1][1]
-                y_start_flipped = flip_y(y_start_sumo)
-                y_end_flipped = flip_y(y_end_sumo)
-                dx_edge = x_end_sumo - x_start_sumo
-                dy_edge = y_end_flipped - y_start_flipped
-                edge_angle = math.atan2(dy_edge, dx_edge)
-                
-                # Calculate angular difference with segment direction
-                angle_diff = abs(segment_angle - edge_angle)
-                if angle_diff > math.pi:
-                    angle_diff = 2 * math.pi - angle_diff
-                
-                # Check direction match
-                if angle_diff <= direction_threshold:
-                    angle_weight = 5.0
-                    combined_score = distance + angle_weight * angle_diff
-                    point2_edges.append((edge_id, edge_data, shape_points, distance, angle_diff, combined_score))
+            # Check direction match (must be within threshold)
+            if angle_diff > direction_threshold:
+                continue
             
-            # Sort and take closest
-            if point2_edges:
-                point2_edges.sort(key=lambda x: x[5])
-                best_point2_edge = point2_edges[0]
-                # Add to segment matches (will be deduplicated later)
-                segment_top_5.append(best_point2_edge)
-                self.log(f"📍 Last segment: Found closest edge to point 2 (last point): {best_point2_edge[0]} (distance={best_point2_edge[3]:.1f}m)")
+            # Calculate distance from point 1 to edge
+            dist1 = self._point_to_polyline_distance(seg_x1_sumo, seg_y1_sumo, shape_points)
+            if dist1 < closest_to_point1_distance:
+                closest_to_point1_distance = dist1
+                closest_to_point1 = (edge_id, edge_data, shape_points, dist1, angle_diff)
+            
+            # Calculate distance from point 2 to edge
+            dist2 = self._point_to_polyline_distance(seg_x2_sumo, seg_y2_sumo, shape_points)
+            if dist2 < closest_to_point2_distance:
+                closest_to_point2_distance = dist2
+                closest_to_point2 = (edge_id, edge_data, shape_points, dist2, angle_diff)
         
-        # Remove duplicates by edge_id (keep the one with better score)
-        edge_dict = {}
-        for edge_tuple in segment_top_5:
-            edge_id = edge_tuple[0]
-            if edge_id not in edge_dict or edge_tuple[5] < edge_dict[edge_id][5]:
-                edge_dict[edge_id] = edge_tuple
-        
-        # Convert back to list and sort by combined score
-        unique_edges = list(edge_dict.values())
-        unique_edges.sort(key=lambda x: x[5])  # Sort by combined_score (index 5)
-        
-        # Take all unique edges (may be more than 5 if point-specific edges were added)
-        top_edges = unique_edges
-        
-        if not top_edges:
-            self.log("⚠️ No edges found with matching direction")
-            return
-        
-        # Determine which edges should be orange
+        # Determine orange edges (closest to point 1 and point 2)
         orange_edges = set()
+        orange_edge_data = {}  # Store full edge data for drawing
         
-        # Best segment edge is always orange
-        if best_segment_edge:
-            orange_edges.add(best_segment_edge[0])  # edge_id
-            self.log(f"🟠 Best segment edge: {best_segment_edge[0]} (distance={best_segment_edge[3]:.1f}m, angle_diff={math.degrees(best_segment_edge[4]):.1f}°, score={best_segment_edge[5]:.2f})")
+        if closest_to_point1:
+            edge_id, edge_data, shape_points, distance, angle_diff = closest_to_point1
+            orange_edges.add(edge_id)
+            orange_edge_data[edge_id] = (edge_data, shape_points, distance, angle_diff, "point 1")
+            self.log(f"🟠 Closest edge to start point (point 1): {edge_id} (distance={distance:.1f}m, angle_diff={math.degrees(angle_diff):.1f}°)")
         
-        # For first segment: also mark best point 1 edge as orange (if different)
-        if is_first_segment and best_point1_edge:
-            if best_point1_edge[0] not in orange_edges:
-                orange_edges.add(best_point1_edge[0])
-                self.log(f"🟠 Best point 1 edge: {best_point1_edge[0]} (distance={best_point1_edge[3]:.1f}m, angle_diff={math.degrees(best_point1_edge[4]):.1f}°, score={best_point1_edge[5]:.2f})")
+        if closest_to_point2:
+            edge_id, edge_data, shape_points, distance, angle_diff = closest_to_point2
+            orange_edges.add(edge_id)
+            if edge_id in orange_edge_data:
+                # Same edge for both points
+                self.log(f"🟠 Closest edge to end point (point 2): {edge_id} (distance={distance:.1f}m, angle_diff={math.degrees(angle_diff):.1f}°) - SAME as point 1")
             else:
-                self.log(f"🟠 Best point 1 edge is same as segment edge: {best_point1_edge[0]}")
+                orange_edge_data[edge_id] = (edge_data, shape_points, distance, angle_diff, "point 2")
+                self.log(f"🟠 Closest edge to end point (point 2): {edge_id} (distance={distance:.1f}m, angle_diff={math.degrees(angle_diff):.1f}°)")
         
-        # For last segment: also mark best point 2 edge as orange (if different)
-        if is_last_segment and best_point2_edge:
-            if best_point2_edge[0] not in orange_edges:
-                orange_edges.add(best_point2_edge[0])
-                self.log(f"🟠 Best point 2 edge: {best_point2_edge[0]} (distance={best_point2_edge[3]:.1f}m, angle_diff={math.degrees(best_point2_edge[4]):.1f}°, score={best_point2_edge[5]:.2f})")
-            else:
-                self.log(f"🟠 Best point 2 edge is same as segment edge: {best_point2_edge[0]}")
-        
-        self.log(f"🟢 Found {len(top_edges)} closest edges with matching direction (threshold: {math.degrees(direction_threshold):.1f}°)")
-        self.log(f"🟠 {len(orange_edges)} edge(s) marked as orange")
+        if not orange_edges:
+            self.log("⚠️ No edges found with matching direction for either point")
+            return
         
         # Color edges (Y-flip for display)
         orange_pen = QPen(QColor(255, 165, 0), 5)  # Orange, 5px width (thicker for visibility)
         orange_pen.setStyle(Qt.SolidLine)
-        green_pen = QPen(QColor(0, 255, 0), 4)  # Green, 4px width
-        green_pen.setStyle(Qt.SolidLine)
         
+        # Draw orange edges (closest to point 1 and point 2)
         orange_count = 0
-        green_count = 0
-        
-        for edge_id, edge_data, shape_points, distance, angle_diff, combined_score in top_edges:
-            # Determine color based on whether edge is in orange set
-            is_orange = edge_id in orange_edges
-            pen = orange_pen if is_orange else green_pen
-            z_value = 21 if is_orange else 20
-            
-            # shape_points are in ORIGINAL SUMO coordinates
+        for edge_id, (edge_data, shape_points, distance, angle_diff, point_label) in orange_edge_data.items():
             for i in range(len(shape_points) - 1):
                 x1_sumo, y1_sumo = shape_points[i][0], shape_points[i][1]  # ORIGINAL SUMO
                 x2_sumo, y2_sumo = shape_points[i+1][0], shape_points[i+1][1]  # ORIGINAL SUMO
@@ -1001,19 +1058,50 @@ class DebugTrajectoryPage(QWidget):
                 y1 = flip_y(y1_sumo)
                 y2 = flip_y(y2_sumo)
                 
-                line = self.map_view.scene.addLine(x1_sumo, y1, x2_sumo, y2, pen)
-                line.setZValue(z_value)
+                line = self.map_view.scene.addLine(x1_sumo, y1, x2_sumo, y2, orange_pen)
+                line.setZValue(21)  # Above green edges (20) but below segment (400)
                 self._green_edge_items.append(line)  # Store for clearing later
             
-            color_label = "🟠 ORANGE" if is_orange else "🟢 green"
-            self.log(f"  {color_label} Edge {edge_id}: distance={distance:.1f}m, angle_diff={math.degrees(angle_diff):.1f}°, score={combined_score:.2f}")
+            self.log(f"  🟠 ORANGE Edge {edge_id} (closest to {point_label}): distance={distance:.1f}m, angle_diff={math.degrees(angle_diff):.1f}°")
+            orange_count += 1
+        
+        # Draw green edges only if requested (top 5 segment matches, excluding orange ones)
+        green_count = 0
+        if show_green_edges:
+            # Sort segment-matching edges by combined score for green edges display
+            matching_edges.sort(key=lambda x: x[5])  # Sort by combined_score (index 5)
+            top_5_edges = matching_edges[:5] if len(matching_edges) >= 5 else matching_edges
             
-            if is_orange:
-                orange_count += 1
-            else:
+            # Filter out orange edges from green edges list
+            green_edges = [edge for edge in top_5_edges if edge[0] not in orange_edges]
+            
+            green_pen = QPen(QColor(0, 255, 0), 4)  # Green, 4px width
+            green_pen.setStyle(Qt.SolidLine)
+            
+            for edge_id, edge_data, shape_points, distance, angle_diff, combined_score in green_edges:
+                for i in range(len(shape_points) - 1):
+                    x1_sumo, y1_sumo = shape_points[i][0], shape_points[i][1]  # ORIGINAL SUMO
+                    x2_sumo, y2_sumo = shape_points[i+1][0], shape_points[i+1][1]  # ORIGINAL SUMO
+                    
+                    # Y-flip ONLY for display
+                    y1 = flip_y(y1_sumo)
+                    y2 = flip_y(y2_sumo)
+                    
+                    line = self.map_view.scene.addLine(x1_sumo, y1, x2_sumo, y2, green_pen)
+                    line.setZValue(20)  # Above red edges (15) but below orange (21)
+                    self._green_edge_items.append(line)
+                
+                self.log(f"  🟢 green Edge {edge_id}: distance={distance:.1f}m, angle_diff={math.degrees(angle_diff):.1f}°, score={combined_score:.2f}")
                 green_count += 1
         
-        self.log(f"✓ Drew {orange_count} edge(s) in orange and {green_count} edge(s) in green")
+        # Log summary
+        if show_green_edges:
+            self.log(f"🟢 Found {len(matching_edges)} edges with matching direction (threshold: {math.degrees(direction_threshold):.1f}°)")
+            self.log(f"🟠 {len(orange_edges)} edge(s) marked as orange (closest to start/end points)")
+            self.log(f"✓ Drew {orange_count} edge(s) in orange and {green_count} edge(s) in green")
+        else:
+            self.log(f"🟠 {len(orange_edges)} edge(s) marked as orange (closest to start/end points)")
+            self.log(f"✓ Drew {orange_count} edge(s) in orange")
     
     def load_trajectory(self, trajectory_num: int):
         """Load and display a specific trajectory with trimming.
@@ -1161,7 +1249,11 @@ class DebugTrajectoryPage(QWidget):
             c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
             
             return R * c
-        
+        for i in range(len(polyline) - 1):
+            distance = haversine_distance(polyline[i], polyline[i + 1])
+            # print the segment and distance
+            self.log(f"  Segment {i+1} from {i+1} to {i+2}: distance={distance:.1f}m")
+
         # Threshold for considering points as "static" (in meters)
         STATIC_THRESHOLD = 15.0  # Points within 15 meters are considered static
         
@@ -1388,9 +1480,11 @@ class DebugTrajectoryPage(QWidget):
             self.segment_spinbox.setRange(1, max_segments)
             self.segment_spinbox.setValue(1)
             self.show_segment_btn.setEnabled(True)
+            self.process_all_segments_btn.setEnabled(True)
             self.log(f"  Segment selection enabled: {max_segments} segments available")
         else:
             self.show_segment_btn.setEnabled(False)
+            self.process_all_segments_btn.setEnabled(False)
         
         # Fit view to show entire trajectory
         if sumo_points:
