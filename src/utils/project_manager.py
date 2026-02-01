@@ -232,7 +232,12 @@ class ProjectManager:
         if name not in registry:
             return False
         
-        project_path = Path(registry[name])
+        data = registry[name]
+        # Handle both old format (string path) and new format (dict with path and type)
+        if isinstance(data, str):
+            project_path = Path(data)
+        else:
+            project_path = Path(data.get('path', ''))
         
         # Remove from registry
         del registry[name]
