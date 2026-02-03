@@ -178,9 +178,12 @@ def _build_edges_data(network_parser):
 
 
 def draw_green_edges_for_segments(view, network_parser, sumo_points_flipped, top_per_segment=5):
-    """For each trajectory segment, find matching network edges; draw top N in green. Returns (orange_edge_ids, green_edge_ids, start_edge_id, end_edge_id)."""
+    """For each trajectory segment, find matching network edges; draw top N in green.
+    Returns (orange_edge_ids, green_edge_ids, start_edge_id, end_edge_id, start_edge_candidates).
+    start_edge_candidates: up to 5 best start-edge IDs (best first) for fallback when no route found.
+    """
     if not sumo_points_flipped or len(sumo_points_flipped) < 2:
-        return (set(), set(), None, None)
+        return (set(), set(), None, None, [])
     y_min = getattr(view, "_network_y_min", 0)
     y_max = getattr(view, "_network_y_max", 0)
 
@@ -189,7 +192,9 @@ def draw_green_edges_for_segments(view, network_parser, sumo_points_flipped, top
 
     edges_data = _build_edges_data(network_parser)
     if not edges_data:
-        return (set(), set(), None, None)
+        return (set(), set(), None, None, [])
+
+    start_edge_candidates = []
 
     from PySide6.QtCore import Qt
     from PySide6.QtGui import QColor, QPen
@@ -266,6 +271,8 @@ def draw_green_edges_for_segments(view, network_parser, sumo_points_flipped, top
             draw_edge_shape(sp, orange_pen, 6)
             if seg_idx == 0:
                 start_edge_id = eid
+                # Top 5 start candidates by d1 (distance from first GPS point to edge)
+                start_edge_candidates = [m[1] for m in sorted(matching, key=lambda m: m[4])[:5]]
         if closest_to_p2:
             eid, ed, sp = closest_to_p2
             all_orange_ids.add(eid)
@@ -281,12 +288,13 @@ def draw_green_edges_for_segments(view, network_parser, sumo_points_flipped, top
 
     if start_edge_id is None and sumo_points_flipped:
         px, py = sumo_points_flipped[0][0], flip_y(sumo_points_flipped[0][1])
-        best_dist = float("inf")
+        by_dist = []
         for edge_id, _, shape_points in edges_data:
             d = _point_to_polyline_distance(px, py, shape_points)
-            if d < best_dist:
-                best_dist = d
-                start_edge_id = edge_id
+            by_dist.append((d, edge_id))
+        by_dist.sort(key=lambda x: x[0])
+        start_edge_candidates = [eid for _, eid in by_dist[:5]]
+        start_edge_id = start_edge_candidates[0] if start_edge_candidates else None
     if end_edge_id is None and len(sumo_points_flipped) >= 2:
         px, py = sumo_points_flipped[-1][0], flip_y(sumo_points_flipped[-1][1])
         best_dist = float("inf")
@@ -296,11 +304,54 @@ def draw_green_edges_for_segments(view, network_parser, sumo_points_flipped, top
                 best_dist = d
                 end_edge_id = edge_id
 
-    return (all_orange_ids, all_green_ids, start_edge_id, end_edge_id)
+    if start_edge_id and not start_edge_candidates:
+        start_edge_candidates = [start_edge_id]
+    return (all_orange_ids, all_green_ids, start_edge_id, end_edge_id, start_edge_candidates)
 
 
-def shortest_path_dijkstra(network_parser, start_edge_id, end_edge_id, orange_ids, green_ids, roads_junctions_only=False):
-    """Shortest path from start edge to end edge. Edge weights: orange=1, green=10, other=100. Returns list of edge_ids."""
+def _build_node_positions(network_parser):
+    """Build node_id -> (x, y) in same coords as trajectory (flip_y applied). For A* heuristic."""
+    conv = network_parser.conv_boundary
+    bounds = network_parser.get_bounds()
+    if conv:
+        y_min, y_max = conv["y_min"], conv["y_max"]
+    elif bounds:
+        y_min, y_max = bounds["y_min"], bounds["y_max"]
+    else:
+        y_min, y_max = 0.0, 0.0
+
+    def flip_y(y):
+        return y_max + y_min - y
+
+    junctions = network_parser.get_junctions()
+    nodes_dict = network_parser.get_nodes()
+    edges_dict = network_parser.get_edges()
+    node_positions = {}
+    for jid, j in junctions.items():
+        node_positions[jid] = (j["x"], flip_y(j["y"]))
+    for nid, n in nodes_dict.items():
+        if nid not in node_positions:
+            node_positions[nid] = (n["x"], flip_y(n["y"]))
+    for eid, ed in edges_dict.items():
+        from_id, to_id = ed.get("from"), ed.get("to")
+        lanes = ed.get("lanes", [])
+        if not lanes:
+            continue
+        shape = lanes[0].get("shape", [])
+        if len(shape) < 2:
+            continue
+        if from_id and from_id not in node_positions:
+            node_positions[from_id] = (shape[0][0], flip_y(shape[0][1]))
+        if to_id and to_id not in node_positions:
+            node_positions[to_id] = (shape[-1][0], flip_y(shape[-1][1]))
+    return node_positions
+
+
+def shortest_path_dijkstra(network_parser, start_edge_id, end_edge_id, orange_ids, green_ids, roads_junctions_only=False, node_positions=None, goal_xy=None):
+    """Shortest path from start edge to end edge. Edge weights: orange=1, green=10, other=100.
+    If node_positions and goal_xy are provided, uses A* with heuristic = distance to goal (admissible).
+    Returns list of edge_ids.
+    """
     import heapq
 
     edges_dict = network_parser.get_edges()
@@ -332,10 +383,39 @@ def shortest_path_dijkstra(network_parser, start_edge_id, end_edge_id, orange_id
     if start_to is None or end_from is None:
         return []
 
-    heap = [(0, start_to, [])]
+    use_astar = node_positions is not None and goal_xy is not None and len(node_positions) > 0
+    max_edge_length = 1.0
+    if use_astar:
+        for eid, ed in edges_dict.items():
+            fp = node_positions.get(ed.get("from"))
+            tp = node_positions.get(ed.get("to"))
+            if fp and tp:
+                d = math.hypot(tp[0] - fp[0], tp[1] - fp[1])
+                if d > max_edge_length:
+                    max_edge_length = d
+        max_edge_length = max(max_edge_length, 1.0)
+        min_cost_per_meter = 1.0 / max_edge_length
+
+        def heuristic(nid):
+            pos = node_positions.get(nid)
+            if pos is None:
+                return 0.0
+            d = math.hypot(goal_xy[0] - pos[0], goal_xy[1] - pos[1])
+            return d * min_cost_per_meter
+
+    if use_astar:
+        h0 = heuristic(start_to)
+        heap = [(0 + h0, 0, start_to, [])]
+    else:
+        heap = [(0, start_to, [])]
+
     seen = set()
     while heap:
-        cost, node, path_edges = heapq.heappop(heap)
+        if use_astar:
+            f, g, node, path_edges = heapq.heappop(heap)
+        else:
+            cost, node, path_edges = heapq.heappop(heap)
+            g = cost
         if node in seen:
             continue
         seen.add(node)
@@ -343,21 +423,24 @@ def shortest_path_dijkstra(network_parser, start_edge_id, end_edge_id, orange_id
             return [start_edge_id] + path_edges + [end_edge_id]
         for neighbor, eid, w in adj.get(node, []):
             if neighbor not in seen:
-                heapq.heappush(heap, (cost + w, neighbor, path_edges + [eid]))
+                g_new = g + w
+                if use_astar:
+                    h_new = heuristic(neighbor)
+                    f_new = g_new + h_new
+                    heapq.heappush(heap, (f_new, g_new, neighbor, path_edges + [eid]))
+                else:
+                    heapq.heappush(heap, (g_new, neighbor, path_edges + [eid]))
     return []
 
 
 def build_directed_graph_scene(network_parser, roads_junctions_only=False, green_edge_ids=None, orange_edge_ids=None, path_edge_ids=None, trajectory_points=None):
     """Build a QGraphicsScene with the network as a directed graph. path_edge_ids: undashed red. trajectory_points: projected orange stars with red numbers (black bg)."""
-    from PySide6.QtCore import Qt, QPointF, QRectF
-    from PySide6.QtGui import QBrush, QColor, QFont, QPen, QPainterPath, QPolygonF
-    from PySide6.QtWidgets import (
-        QGraphicsScene,
-        QGraphicsEllipseItem,
-        QGraphicsPathItem,
-        QGraphicsLineItem,
-        QGraphicsTextItem,
-    )
+    from PySide6.QtCore import QPointF, QRectF, Qt
+    from PySide6.QtGui import (QBrush, QColor, QFont, QPainterPath, QPen,
+                               QPolygonF)
+    from PySide6.QtWidgets import (QGraphicsEllipseItem, QGraphicsLineItem,
+                                   QGraphicsPathItem, QGraphicsScene,
+                                   QGraphicsTextItem)
 
     scene = QGraphicsScene()
     scene.setBackgroundBrush(QBrush(QColor(240, 242, 248)))
@@ -645,7 +728,7 @@ def build_directed_graph_scene(network_parser, roads_junctions_only=False, green
     return scene, view_rect
 
 
-def open_graph_window(network_parser, net_basename, roads_junctions_only=False, green_edge_ids=None, orange_edge_ids=None, path_edge_ids=None, trajectory_points=None, main_window=None):
+def open_graph_window(network_parser, net_basename, roads_junctions_only=False, green_edge_ids=None, orange_edge_ids=None, path_edge_ids=None, trajectory_points=None, main_window=None, title_suffix=""):
     from PySide6.QtCore import Qt, QTimer
     from PySide6.QtGui import QBrush, QColor, QWheelEvent
     from PySide6.QtWidgets import QApplication, QGraphicsView, QMainWindow
@@ -697,7 +780,7 @@ def open_graph_window(network_parser, net_basename, roads_junctions_only=False, 
             pass  # window already closed
 
     graph_window = QMainWindow()
-    graph_window.setWindowTitle(f"Directed graph — {net_basename}")
+    graph_window.setWindowTitle(f"Directed graph — {net_basename}{title_suffix}")
     graph_window.setCentralWidget(graph_view)
     graph_window.resize(800, 600)
     # Position to the right of the map window so both are visible
@@ -741,7 +824,7 @@ def draw_trajectory_on_view(view, network_parser, polyline, trim=True, show_labe
         return None
 
     from PySide6.QtCore import Qt
-    from PySide6.QtGui import QBrush, QColor, QFont, QPen, QPainterPath
+    from PySide6.QtGui import QBrush, QColor, QFont, QPainterPath, QPen
     from PySide6.QtWidgets import QGraphicsPathItem, QGraphicsTextItem
 
     line_color = QColor(0, 100, 255)
@@ -846,8 +929,11 @@ def main():
         os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
     from PySide6.QtWidgets import QApplication, QMainWindow
-    from src.utils.network_parser import NetworkParser
+
     from src.gui.simulation_view import SimulationView
+    from src.utils.network_parser import NetworkParser
+    from src.utils.trip_validator import (DEFAULT_MAX_SEGMENT_DISTANCE,
+                                          split_at_invalid_segments)
 
     app = QApplication.instance()
     if app is None:
@@ -856,15 +942,9 @@ def main():
     title = f"Network viewer — {os.path.basename(net_path)}"
     if args.trajectory_csv:
         title += f" (trajectory {args.trajectory_num})"
-    window = QMainWindow()
-    window.setWindowTitle(title)
-    view = SimulationView()
-    window.setCentralWidget(view)
 
     try:
         network_parser = NetworkParser(net_path)
-        view.load_network(network_parser, roads_junctions_only=args.roads_only)
-        view.set_osm_map_visible(False)
         edges = network_parser.get_edges()
         nodes = network_parser.get_nodes()
         junctions = network_parser.get_junctions()
@@ -875,41 +955,163 @@ def main():
         traceback.print_exc()
         sys.exit(1)
 
-    orange_ids, green_ids = set(), set()
-    path_edges = []
-    sumo_points = []
-    if args.trajectory_csv:
-        polyline = load_trip_polyline(os.path.abspath(args.trajectory_csv), args.trajectory_num)
-        if not polyline:
-            print(f"Error: No trajectory found at row {args.trajectory_num}", file=sys.stderr)
-        else:
-            sumo_points = draw_trajectory_on_view(view, network_parser, polyline, trim=not args.no_trim, show_labels=not args.no_labels)
-            if sumo_points:
-                orange_ids, green_ids, start_edge_id, end_edge_id = draw_green_edges_for_segments(view, network_parser, sumo_points)
-                if start_edge_id and end_edge_id:
-                    path_edges = shortest_path_dijkstra(network_parser, start_edge_id, end_edge_id, orange_ids, green_ids, roads_junctions_only=args.roads_only)
+    net_basename = os.path.basename(net_path)
+
+    if not args.trajectory_csv:
+        # No trajectory: single map window + graph window
+        window = QMainWindow()
+        window.setWindowTitle(title)
+        view = SimulationView()
+        window.setCentralWidget(view)
+        view.load_network(network_parser, roads_junctions_only=args.roads_only)
+        view.set_osm_map_visible(False)
+        window.resize(1000, 700)
+        window.show()
+        graph_window = open_graph_window(
+            network_parser,
+            net_basename,
+            roads_junctions_only=args.roads_only,
+            green_edge_ids=set(),
+            orange_edge_ids=set(),
+            path_edge_ids=[],
+            trajectory_points=None,
+            main_window=window,
+        )
+        sys.exit(app.exec())
+
+    polyline = load_trip_polyline(os.path.abspath(args.trajectory_csv), args.trajectory_num)
+    if not polyline:
+        print(f"Error: No trajectory found at row {args.trajectory_num}", file=sys.stderr)
+        sys.exit(1)
+
+    segments = split_at_invalid_segments(polyline, DEFAULT_MAX_SEGMENT_DISTANCE)
+    if len(segments) > 1:
+        print(
+            f"Trajectory split into {len(segments)} segments due to invalid GPS jumps "
+            f"(max {DEFAULT_MAX_SEGMENT_DISTANCE:.0f}m between points). Opening one window per segment.",
+            file=sys.stderr,
+        )
+
+    if len(segments) == 1:
+        # Single segment: one map window + one graph window (point numbers 1..N)
+        window = QMainWindow()
+        window.setWindowTitle(title)
+        view = SimulationView()
+        window.setCentralWidget(view)
+        view.load_network(network_parser, roads_junctions_only=args.roads_only)
+        view.set_osm_map_visible(False)
+        segment = segments[0]
+        seg_sumo = draw_trajectory_on_view(
+            view, network_parser, segment, trim=not args.no_trim, show_labels=not args.no_labels
+        )
+        orange_ids, green_ids = set(), set()
+        path_edges = []
+        if seg_sumo:
+            seg_orange, seg_green, start_edge_id, end_edge_id, start_edge_candidates = draw_green_edges_for_segments(
+                view, network_parser, seg_sumo
+            )
+            orange_ids, green_ids = seg_orange, seg_green
+            if start_edge_id and end_edge_id:
+                node_positions = _build_node_positions(network_parser)
+                goal_xy = seg_sumo[-1]
+                max_start_tries = min(5, len(start_edge_candidates or []))
+                for try_idx in range(max_start_tries):
+                    cand = start_edge_candidates[try_idx]
+                    path_edges = shortest_path_dijkstra(
+                        network_parser,
+                        cand,
+                        end_edge_id,
+                        orange_ids,
+                        green_ids,
+                        roads_junctions_only=args.roads_only,
+                        node_positions=node_positions,
+                        goal_xy=goal_xy,
+                    )
                     if path_edges:
-                        print(f"Shortest path: {len(path_edges)} edges")
-                    else:
-                        print("No route found from start edge to end edge.", file=sys.stderr)
+                        if try_idx > 0:
+                            print(f"Route found using start candidate {try_idx + 1}/{max_start_tries}.", file=sys.stderr)
+                        break
+                if path_edges:
+                    print(f"Shortest path: {len(path_edges)} edges")
                 else:
-                    print("Shortest path skipped: no start/end edge from trajectory.", file=sys.stderr)
+                    print("No route found from start edge to end edge (tried up to 5 start candidates).", file=sys.stderr)
+        window.resize(1000, 700)
+        window.show()
+        graph_window = open_graph_window(
+            network_parser,
+            net_basename,
+            roads_junctions_only=args.roads_only,
+            green_edge_ids=green_ids,
+            orange_edge_ids=orange_ids,
+            path_edge_ids=path_edges,
+            trajectory_points=seg_sumo if (seg_sumo and path_edges) else None,
+            main_window=window,
+        )
+        sys.exit(app.exec())
 
-    window.resize(1000, 700)
-    window.show()
-
-    # Keep reference so graph window is not garbage-collected
-    graph_window = open_graph_window(
-        network_parser,
-        os.path.basename(net_path),
-        roads_junctions_only=args.roads_only,
-        green_edge_ids=green_ids,
-        orange_edge_ids=orange_ids,
-        path_edge_ids=path_edges,
-        trajectory_points=sumo_points if (args.trajectory_csv and path_edges) else None,
-        main_window=window,
-    )
-
+    # Multiple segments: one map window + one graph window per segment (point numbers 1..N per window)
+    node_positions = _build_node_positions(network_parser)
+    segment_windows = []
+    graph_windows = []
+    for seg_idx, segment in enumerate(segments):
+        if len(segment) < 2:
+            continue
+        window = QMainWindow()
+        window.setWindowTitle(f"{title} — segment {seg_idx + 1}/{len(segments)}")
+        view = SimulationView()
+        window.setCentralWidget(view)
+        view.load_network(network_parser, roads_junctions_only=args.roads_only)
+        view.set_osm_map_visible(False)
+        seg_sumo = draw_trajectory_on_view(
+            view, network_parser, segment, trim=not args.no_trim, show_labels=not args.no_labels
+        )
+        if not seg_sumo:
+            continue
+        seg_orange, seg_green, start_edge_id, end_edge_id, start_edge_candidates = draw_green_edges_for_segments(
+            view, network_parser, seg_sumo
+        )
+        if not start_edge_id or not end_edge_id:
+            print(f"Segment {seg_idx + 1}: no start/end edge from trajectory.", file=sys.stderr)
+            continue
+        goal_xy = seg_sumo[-1]
+        seg_path = []
+        max_start_tries = min(5, len(start_edge_candidates or []))
+        for try_idx in range(max_start_tries):
+            cand = start_edge_candidates[try_idx]
+            seg_path = shortest_path_dijkstra(
+                network_parser,
+                cand,
+                end_edge_id,
+                seg_orange,
+                seg_green,
+                roads_junctions_only=args.roads_only,
+                node_positions=node_positions,
+                goal_xy=goal_xy,
+            )
+            if seg_path:
+                if try_idx > 0:
+                    print(f"Segment {seg_idx + 1}: route found using start candidate {try_idx + 1}/{max_start_tries}.", file=sys.stderr)
+                break
+        if seg_path:
+            print(f"Segment {seg_idx + 1}: shortest path {len(seg_path)} edges")
+        else:
+            print(f"Segment {seg_idx + 1}: no route (tried up to 5 start candidates).", file=sys.stderr)
+        window.resize(1000, 700)
+        window.move(80 + seg_idx * 50, 40 + seg_idx * 40)
+        window.show()
+        gw = open_graph_window(
+            network_parser,
+            net_basename,
+            roads_junctions_only=args.roads_only,
+            green_edge_ids=seg_green,
+            orange_edge_ids=seg_orange,
+            path_edge_ids=seg_path,
+            trajectory_points=seg_sumo if seg_path else None,
+            main_window=window,
+            title_suffix=f" — segment {seg_idx + 1}/{len(segments)}",
+        )
+        segment_windows.append(window)
+        graph_windows.append(gw)
     sys.exit(app.exec())
 
 
