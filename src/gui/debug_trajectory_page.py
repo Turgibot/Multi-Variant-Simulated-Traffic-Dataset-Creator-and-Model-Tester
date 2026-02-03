@@ -3,10 +3,13 @@ Debug page for visualizing the first trajectory with trimming applied.
 Simple page with just map, network, GPS points, and connecting line.
 """
 
+import copy
 import csv
+import gzip
 import math
+import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QBrush, QColor, QFont, QPen
@@ -18,7 +21,14 @@ from PySide6.QtWidgets import (QDoubleSpinBox, QGraphicsEllipseItem,
 from src.gui.simulation_view import SimulationView
 from src.utils.network_parser import NetworkParser
 from src.utils.project_manager import _get_project_root
-from src.utils.trip_validator import (TripValidationResult,
+from src.utils.route_finding import apply_trimming as route_apply_trimming
+from src.utils.route_finding import (build_edges_data, build_node_positions,
+                                     compute_green_orange_edges,
+                                     project_point_onto_polyline,
+                                     shortest_path_dijkstra)
+from src.utils.trip_validator import (DEFAULT_MAX_SEGMENT_DISTANCE,
+                                      TripValidationResult,
+                                      split_at_invalid_segments,
                                       validate_trip_segments)
 
 
@@ -38,11 +48,13 @@ class DebugTrajectoryPage(QWidget):
         self._segment_items = []  # Store segment items separately for clearing
         self._green_edge_items = []  # Store green edge items for clearing
         self._red_edges_data = []  # Store red edges data: list of (edge_id, edge_data, shape_points) tuples
+        self._route_path_items = []  # Computed shortest path lines (red) for clearing
         self.train_csv_path = None  # To store the resolved train.csv path
         self._bounding_box_polygon = None  # Store bounding box polygon for edge intersection checks
         self._bounding_box_params = None  # Store bounding box parameters (center_x, center_y, width, height, angle)
         self._current_sumo_points = None  # Store current trajectory points (Y-flipped for display)
-        
+        self._current_sumo_segments = []  # Per-segment sumo points (Y-flipped) for route finding
+        self._network_file_path = None  # Path to loaded .net.xml for export
         self.init_ui()
         
         # Auto-load network (trajectory will be loaded via Show button)
@@ -100,120 +112,6 @@ class DebugTrajectoryPage(QWidget):
         footer_layout = QHBoxLayout()
         footer_layout.setContentsMargins(10, 5, 10, 5)
         footer_layout.setSpacing(10)
-        
-        # Coordinate conversion adjustment controls
-        conv_adjust_label = QLabel("Conv adjust:")
-        conv_adjust_label.setStyleSheet("color: #333; font-size: 11px; font-weight: bold;")
-        footer_layout.addWidget(conv_adjust_label)
-        
-        # X adjustment
-        x_adj_label = QLabel("X:")
-        x_adj_label.setStyleSheet("color: #333; font-size: 10px;")
-        footer_layout.addWidget(x_adj_label)
-        
-        self.conv_adjust_x_spinbox = QDoubleSpinBox()
-        self.conv_adjust_x_spinbox.setRange(-0.1, 0.1)
-        self.conv_adjust_x_spinbox.setSingleStep(0.001)
-        self.conv_adjust_x_spinbox.setValue(0.0)
-        self.conv_adjust_x_spinbox.setDecimals(4)
-        self.conv_adjust_x_spinbox.setToolTip("Adjust X coordinate conversion (normalized offset)")
-        self.conv_adjust_x_spinbox.setStyleSheet("""
-            QDoubleSpinBox {
-                color: #333;
-                font-size: 10px;
-                padding: 2px;
-                border: 1px solid #999;
-                border-radius: 3px;
-                background-color: white;
-                min-width: 70px;
-            }
-        """)
-        self.conv_adjust_x_spinbox.valueChanged.connect(self.on_conv_adjust_changed)
-        footer_layout.addWidget(self.conv_adjust_x_spinbox)
-        
-        # Y adjustment
-        y_adj_label = QLabel("Y:")
-        y_adj_label.setStyleSheet("color: #333; font-size: 10px;")
-        footer_layout.addWidget(y_adj_label)
-        
-        self.conv_adjust_y_spinbox = QDoubleSpinBox()
-        self.conv_adjust_y_spinbox.setRange(-0.1, 0.1)
-        self.conv_adjust_y_spinbox.setSingleStep(0.001)
-        self.conv_adjust_y_spinbox.setValue(0.0)
-        self.conv_adjust_y_spinbox.setDecimals(4)
-        self.conv_adjust_y_spinbox.setToolTip("Adjust Y coordinate conversion (normalized offset)")
-        self.conv_adjust_y_spinbox.setStyleSheet("""
-            QDoubleSpinBox {
-                color: #333;
-                font-size: 10px;
-                padding: 2px;
-                border: 1px solid #999;
-                border-radius: 3px;
-                background-color: white;
-                min-width: 70px;
-            }
-        """)
-        self.conv_adjust_y_spinbox.valueChanged.connect(self.on_conv_adjust_changed)
-        footer_layout.addWidget(self.conv_adjust_y_spinbox)
-        
-        footer_layout.addSpacing(15)
-        
-        # Scale factors
-        conv_scale_label = QLabel("Scale:")
-        conv_scale_label.setStyleSheet("color: #333; font-size: 11px; font-weight: bold;")
-        footer_layout.addWidget(conv_scale_label)
-        
-        # X scale
-        x_scale_label = QLabel("X:")
-        x_scale_label.setStyleSheet("color: #333; font-size: 10px;")
-        footer_layout.addWidget(x_scale_label)
-        
-        self.conv_scale_x_spinbox = QDoubleSpinBox()
-        self.conv_scale_x_spinbox.setRange(0.9, 1.1)
-        self.conv_scale_x_spinbox.setSingleStep(0.001)
-        self.conv_scale_x_spinbox.setValue(1.0)
-        self.conv_scale_x_spinbox.setDecimals(4)
-        self.conv_scale_x_spinbox.setToolTip("Scale X coordinate conversion")
-        self.conv_scale_x_spinbox.setStyleSheet("""
-            QDoubleSpinBox {
-                color: #333;
-                font-size: 10px;
-                padding: 2px;
-                border: 1px solid #999;
-                border-radius: 3px;
-                background-color: white;
-                min-width: 70px;
-            }
-        """)
-        self.conv_scale_x_spinbox.valueChanged.connect(self.on_conv_adjust_changed)
-        footer_layout.addWidget(self.conv_scale_x_spinbox)
-        
-        # Y scale
-        y_scale_label = QLabel("Y:")
-        y_scale_label.setStyleSheet("color: #333; font-size: 10px;")
-        footer_layout.addWidget(y_scale_label)
-        
-        self.conv_scale_y_spinbox = QDoubleSpinBox()
-        self.conv_scale_y_spinbox.setRange(0.9, 1.1)
-        self.conv_scale_y_spinbox.setSingleStep(0.001)
-        self.conv_scale_y_spinbox.setValue(1.0)
-        self.conv_scale_y_spinbox.setDecimals(4)
-        self.conv_scale_y_spinbox.setToolTip("Scale Y coordinate conversion")
-        self.conv_scale_y_spinbox.setStyleSheet("""
-            QDoubleSpinBox {
-                color: #333;
-                font-size: 10px;
-                padding: 2px;
-                border: 1px solid #999;
-                border-radius: 3px;
-                background-color: white;
-                min-width: 70px;
-            }
-        """)
-        self.conv_scale_y_spinbox.valueChanged.connect(self.on_conv_adjust_changed)
-        footer_layout.addWidget(self.conv_scale_y_spinbox)
-        
-        footer_layout.addSpacing(15)
         
         # Trajectory selection controls
         traj_label = QLabel("Trajectory:")
@@ -377,6 +275,31 @@ class DebugTrajectoryPage(QWidget):
         self.process_all_segments_btn.setEnabled(False)  # Disabled until trajectory is loaded
         footer_layout.addWidget(self.process_all_segments_btn)
         
+        # Export Bounding Box Network button
+        self.export_bbox_network_btn = QPushButton("Export Bounding Box Network")
+        self.export_bbox_network_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2196F3;
+                color: white;
+                border: none;
+                padding: 6px 15px;
+                border-radius: 4px;
+                font-weight: bold;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: #1976D2;
+            }
+            QPushButton:disabled {
+                background-color: #cccccc;
+                color: #666666;
+            }
+        """)
+        self.export_bbox_network_btn.setToolTip("Export edges inside the bounding box to trajectory_<N>.net.xml (loadable SUMO network)")
+        self.export_bbox_network_btn.clicked.connect(self.on_export_bbox_network_clicked)
+        self.export_bbox_network_btn.setEnabled(False)
+        footer_layout.addWidget(self.export_bbox_network_btn)
+        
         footer_layout.addStretch()
         
         # Status label
@@ -392,25 +315,6 @@ class DebugTrajectoryPage(QWidget):
         """Simple log to status label and console."""
         print(f"[DEBUG] {message}")  # Also print to console for debugging
         self.status_label.setText(message)
-    
-    def on_conv_adjust_changed(self, value: float):
-        """Handle coordinate conversion adjustment change."""
-        if self.network_parser:
-            adjust_x = self.conv_adjust_x_spinbox.value()
-            adjust_y = self.conv_adjust_y_spinbox.value()
-            scale_x = self.conv_scale_x_spinbox.value()
-            scale_y = self.conv_scale_y_spinbox.value()
-            
-            self.network_parser.conv_adjust_x = adjust_x
-            self.network_parser.conv_adjust_y = adjust_y
-            self.network_parser.conv_scale_x = scale_x
-            self.network_parser.conv_scale_y = scale_y
-            
-            # Reload OSM tiles to apply new conversion
-            if self.map_view and self.map_view.show_osm_map:
-                self.map_view._load_osm_tiles()
-            
-            self.log(f"Conv adjust: X={adjust_x:.4f}, Y={adjust_y:.4f}, Scale X={scale_x:.4f}, Y={scale_y:.4f}")
     
     def load_network_and_trajectory(self):
         """Load network and first trajectory using paths from project_info.json and settings.json."""
@@ -496,18 +400,12 @@ class DebugTrajectoryPage(QWidget):
             return
         
         self.log(f"Found network: {network_file}")
+        self._network_file_path = Path(network_file)
         
         # Load network parser
         try:
             self.network_parser = NetworkParser(str(network_file))
             self.map_view.load_network(self.network_parser, roads_junctions_only=False)
-            
-            # Initialize coordinate conversion adjustments from current spinbox values
-            if self.network_parser:
-                self.network_parser.conv_adjust_x = self.conv_adjust_x_spinbox.value()
-                self.network_parser.conv_adjust_y = self.conv_adjust_y_spinbox.value()
-                self.network_parser.conv_scale_x = self.conv_scale_x_spinbox.value()
-                self.network_parser.conv_scale_y = self.conv_scale_y_spinbox.value()
             
             # Load SUMO network for route calculation
             try:
@@ -534,7 +432,8 @@ class DebugTrajectoryPage(QWidget):
             return
         
         # Enable OSM map
-        self.map_view.set_osm_map_visible(True)
+        # No OSM map tiles - network only
+        self.map_view.set_osm_map_visible(False)
         
         # Fallback for train_csv if not found in JSON files
         if not train_csv or not train_csv.exists():
@@ -607,9 +506,11 @@ class DebugTrajectoryPage(QWidget):
         self._red_edges_data = []  # Clear red edges data
         # Also clear segments when clearing trajectory
         self.on_clear_segment_clicked()
-        # Disable segment buttons when trajectory is cleared
+        # Disable segment and export buttons when trajectory is cleared
         self.show_segment_btn.setEnabled(False)
         self.process_all_segments_btn.setEnabled(False)
+        if getattr(self, 'export_bbox_network_btn', None) is not None:
+            self.export_bbox_network_btn.setEnabled(False)
         self.segment_spinbox.setRange(1, 1)
         self.log("✓ Cleared all trajectory items")
     
@@ -653,70 +554,111 @@ class DebugTrajectoryPage(QWidget):
         self._green_edge_items = []
     
     def on_process_all_segments_clicked(self):
-        """Handle Process All Segments button click - find and draw orange edges for all segments."""
-        if not self._current_sumo_points or len(self._current_sumo_points) < 2:
-            self.log("⚠️ No trajectory loaded or not enough points")
+        """Handle Process All Segments button click - run route finding (all edges, green/orange + Dijkstra/A*)."""
+        if not self._current_sumo_segments:
+            self.log("⚠️ No trajectory loaded or no segments (load trajectory first)")
             return
-        
+        if not self.network_parser:
+            self.log("⚠️ Network not loaded")
+            return
+        self.log("🔄 Running route finding (all edges, same logic as view_network)...")
+        self._run_route_finding()
+    
+    def on_export_bbox_network_clicked(self):
+        """Export the network inside the bounding box to trajectory_<N>.net.xml (loadable SUMO network)."""
         if not self._red_edges_data:
-            self.log("⚠️ No red edges available (bounding box not drawn yet)")
+            self.log("⚠️ No edges in bounding box. Draw trajectory and bounding box first.")
+            return
+        if not getattr(self, '_network_file_path', None) or not self._network_file_path.exists():
+            self.log("⚠️ No source network file path. Reload the page.")
+            return
+        trajectory_num = int(self.trajectory_spinbox.value())
+        project_path = Path(self.project_path)
+        out_dir = project_path / "config"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_file = out_dir / f"trajectory_{trajectory_num}.net.xml"
+        
+        # Edge base IDs and node IDs (from/to) for edges in box
+        edge_base_ids: Set[str] = set()
+        node_ids: Set[str] = set()
+        for edge_id, edge_data, _ in self._red_edges_data:
+            base_id = edge_id.split("#")[0] if "#" in edge_id else edge_id
+            edge_base_ids.add(base_id)
+            fn, tn = edge_data.get("from"), edge_data.get("to")
+            if fn:
+                node_ids.add(fn)
+            if tn:
+                node_ids.add(tn)
+        
+        # Parse source .net.xml (support gzip)
+        try:
+            if str(self._network_file_path).endswith(".gz") or self._network_file_path.suffix == ".gz":
+                with gzip.open(self._network_file_path, "rb") as f:
+                    tree = ET.parse(f)
+            else:
+                tree = ET.parse(self._network_file_path)
+            root = tree.getroot()
+        except Exception as e:
+            self.log(f"❌ Failed to read source network: {e}")
             return
         
-        # Clear existing green/orange edge items (but keep red edges)
-        for item in self._green_edge_items:
+        # Build new net: same root tag/attrib, location, then edges, then junctions
+        ns = root.tag.split("}")[0] + "}" if "}" in root.tag else ""
+        new_root = ET.Element(root.tag, root.attrib)
+        location = root.find("location")
+        if location is not None:
+            new_root.append(copy.deepcopy(location))
+        for edge in root.findall("edge"):
+            eid = edge.get("id")
+            base_id = eid.split("#")[0] if eid and "#" in eid else (eid or "")
+            if base_id in edge_base_ids:
+                new_root.append(copy.deepcopy(edge))
+        for junction in root.findall("junction"):
+            jid = junction.get("id")
+            if jid in node_ids:
+                new_root.append(copy.deepcopy(junction))
+        
+        # Write output
+        try:
             try:
-                self.map_view.scene.removeItem(item)
-            except RuntimeError:
-                pass
-        self._green_edge_items = []
+                ET.indent(new_root, space="  ")
+            except AttributeError:
+                pass  # Python < 3.9
+            out_tree = ET.ElementTree(new_root)
+            out_tree.write(
+                out_file,
+                encoding="utf-8",
+                default_namespace=None,
+                xml_declaration=True,
+                method="xml",
+            )
+        except Exception as e:
+            self.log(f"❌ Failed to write {out_file.name}: {e}")
+            return
         
-        # Get Y-flip function for coordinate conversion
-        y_min = getattr(self.map_view, '_network_y_min', 0)
-        y_max = getattr(self.map_view, '_network_y_max', 0)
+        self.log(f"✓ Exported to {out_file}")
         
-        def flip_y(y):
-            """Flip Y coordinate to match network display orientation."""
-            return y_max + y_min - y
-        
-        max_segments = len(self._current_sumo_points) - 1
-        min_segment_length = 5.0  # meters
-        processed_count = 0
-        skipped_count = 0
-        
-        self.log(f"🔄 Processing all {max_segments} segments (min length: {min_segment_length}m)...")
-        
-        # Process each segment
-        for segment_num in range(1, max_segments + 1):
-            point_idx1 = segment_num - 1
-            point_idx2 = segment_num
-            
-            if point_idx1 >= len(self._current_sumo_points) or point_idx2 >= len(self._current_sumo_points):
-                continue
-            
-            x1, y1 = self._current_sumo_points[point_idx1]
-            x2, y2 = self._current_sumo_points[point_idx2]
-            
-            # Calculate segment length
-            y1_sumo = flip_y(y1)
-            y2_sumo = flip_y(y2)
-            dx = x2 - x1
-            dy = y2_sumo - y1_sumo
-            segment_length = math.sqrt(dx * dx + dy * dy)
-            
-            # Skip very short segments (< 5m) - likely lane changes or GPS noise
-            if segment_length < min_segment_length:
-                skipped_count += 1
-                continue
-            
-            # Find and draw edges for this segment (without drawing magenta segment visualization)
-            is_first_segment = (segment_num == 1)
-            is_last_segment = (segment_num == max_segments)
-            
-            # Call the edge matching function (only draw orange edges, not green)
-            self._find_and_color_matching_edges(x1, y1, x2, y2, is_first_segment, is_last_segment, show_green_edges=False)
-            processed_count += 1
-        
-        self.log(f"✓ Processed {processed_count} segments (skipped {skipped_count} segments < {min_segment_length}m)")
+        # Validate: no missing data (every edge has from/to and lanes)
+        try:
+            parser = NetworkParser(str(out_file))
+            exp_edges = parser.get_edges()
+            missing_from_to = []
+            missing_lanes = []
+            for eid, ed in exp_edges.items():
+                if not ed.get("from") or not ed.get("to"):
+                    missing_from_to.append(eid)
+                if not ed.get("lanes") or len(ed.get("lanes", [])) < 1:
+                    missing_lanes.append(eid)
+            if missing_from_to or missing_lanes:
+                self.log(f"⚠️ Validation: {len(missing_from_to)} edge(s) missing from/to, {len(missing_lanes)} missing lanes")
+                if missing_from_to:
+                    self.log(f"   Missing from/to: {missing_from_to[:5]}{'...' if len(missing_from_to) > 5 else ''}")
+                if missing_lanes:
+                    self.log(f"   Missing lanes: {missing_lanes[:5]}{'...' if len(missing_lanes) > 5 else ''}")
+            else:
+                self.log(f"✓ Validation: {len(exp_edges)} edges, all have from/to and lanes (no missing data)")
+        except Exception as e:
+            self.log(f"⚠️ Could not validate exported file: {e}")
     
     def _draw_segment(self, segment_num: int):
         """Draw a specific segment (GPS points and connecting line) in magenta.
@@ -1102,7 +1044,167 @@ class DebugTrajectoryPage(QWidget):
         else:
             self.log(f"🟠 {len(orange_edges)} edge(s) marked as orange (closest to start/end points)")
             self.log(f"✓ Drew {orange_count} edge(s) in orange")
-    
+
+    def _run_route_finding(self) -> None:
+        """Run route finding (all edges, same green/orange + Dijkstra/A* as view_network).
+        Draws orange edges, green edges, and computed path(s) on the map.
+        """
+        if not self.network_parser or not self._current_sumo_segments:
+            return
+
+        # Clear previous orange/green/path overlay
+        for item in self._green_edge_items:
+            try:
+                self.map_view.scene.removeItem(item)
+            except RuntimeError:
+                pass
+        self._green_edge_items = []
+        for item in self._route_path_items:
+            try:
+                self.map_view.scene.removeItem(item)
+            except RuntimeError:
+                pass
+        self._route_path_items = []
+
+        y_min = getattr(self.map_view, "_network_y_min", 0)
+        y_max = getattr(self.map_view, "_network_y_max", 0)
+
+        def flip_y(y: float) -> float:
+            return y_max + y_min - y
+
+        # All edges (same as view_network)
+        edges_data = build_edges_data(self.network_parser)
+        edge_shapes: Dict[str, List[List[float]]] = {
+            eid: shape for eid, _ed, shape in edges_data
+        }
+        node_positions = build_node_positions(self.network_parser)
+
+        orange_pen = QPen(QColor(255, 165, 0), 5)
+        orange_pen.setStyle(Qt.SolidLine)
+        green_pen = QPen(QColor(0, 255, 0), 4)
+        green_pen.setStyle(Qt.SolidLine)
+        path_pen = QPen(QColor(128, 0, 128), 5)  # Purple (same idea as view_network path)
+        path_pen.setStyle(Qt.SolidLine)
+
+        def draw_edge_lines(edge_ids: Set[str], pen: QPen, z_value: int, store_in: List) -> None:
+            for eid in edge_ids:
+                shape_points = edge_shapes.get(eid)
+                if not shape_points or len(shape_points) < 2:
+                    continue
+                for i in range(len(shape_points) - 1):
+                    x1, y1_sumo = shape_points[i][0], shape_points[i][1]
+                    x2, y2_sumo = shape_points[i + 1][0], shape_points[i + 1][1]
+                    y1, y2 = flip_y(y1_sumo), flip_y(y2_sumo)
+                    line = self.map_view.scene.addLine(x1, y1, x2, y2, pen)
+                    line.setZValue(z_value)
+                    store_in.append(line)
+
+        for seg_idx, seg_sumo in enumerate(self._current_sumo_segments):
+            orange_ids, green_ids, start_id, end_id, candidates = compute_green_orange_edges(
+                edges_data, seg_sumo, y_min, y_max, top_per_segment=5
+            )
+            if not start_id or not end_id:
+                self.log(f"Segment {seg_idx + 1}: no start/end edge from trajectory")
+                continue
+            goal_xy = seg_sumo[-1]
+            path_edges: List[str] = []
+            max_tries = min(5, len(candidates or []))
+            for try_idx in range(max_tries):
+                cand = (candidates or [])[try_idx]
+                path_edges = shortest_path_dijkstra(
+                    self.network_parser,
+                    cand,
+                    end_id,
+                    orange_ids=orange_ids,
+                    green_ids=green_ids,
+                    node_positions=node_positions,
+                    goal_xy=goal_xy,
+                )
+                if path_edges:
+                    if try_idx > 0:
+                        self.log(
+                            f"Segment {seg_idx + 1}: route found using start candidate {try_idx + 1}/{max_tries}"
+                        )
+                    break
+            if path_edges:
+                self.log(f"Segment {seg_idx + 1}: shortest path {len(path_edges)} edges")
+                draw_edge_lines(
+                    set(path_edges), path_pen, 25, self._route_path_items
+                )
+                # Build path polyline in display coords (same as seg_sumo) for projection
+                path_points: List[Tuple[float, float]] = []
+                for eid in path_edges:
+                    shape_points = edge_shapes.get(eid)
+                    if not shape_points:
+                        continue
+                    for x_s, y_s in shape_points:
+                        path_points.append((x_s, flip_y(y_s)))
+                # Draw stars on path: project each trajectory point onto path (like view_network)
+                if path_points and seg_sumo:
+                    from PySide6.QtGui import QPainterPath
+                    from PySide6.QtWidgets import QGraphicsPathItem
+
+                    def create_star_path(cx: float, cy: float, radius: float) -> QPainterPath:
+                        path = QPainterPath()
+                        num_points = 5
+                        outer, inner = radius, radius * 0.4
+                        for i in range(num_points * 2):
+                            angle = (i * math.pi) / num_points - math.pi / 2
+                            r = outer if i % 2 == 0 else inner
+                            x = cx + r * math.cos(angle)
+                            y = cy + r * math.sin(angle)
+                            if i == 0:
+                                path.moveTo(x, y)
+                            else:
+                                path.lineTo(x, y)
+                        path.closeSubpath()
+                        return path
+
+                    star_radius = 7.2
+                    star_brush = QBrush(QColor(255, 165, 0))
+                    star_pen = QPen(QColor(255, 165, 0), 1.8)
+                    font = QFont()
+                    font.setPointSize(7)
+                    font.setBold(True)
+                    red_number_color = QColor(200, 0, 0)
+                    path_points_flat = [[p[0], p[1]] for p in path_points]
+                    for idx, (px, py) in enumerate(seg_sumo):
+                        proj_x, proj_y = project_point_onto_polyline(px, py, path_points_flat)
+                        star_path = create_star_path(proj_x, proj_y, star_radius)
+                        star_item = QGraphicsPathItem(star_path)
+                        star_item.setBrush(star_brush)
+                        star_item.setPen(star_pen)
+                        star_item.setZValue(30)
+                        self.map_view.scene.addItem(star_item)
+                        self._route_path_items.append(star_item)
+                        text_str = str(idx + 1)
+                        label_offset = star_radius
+                        tx, ty = proj_x + label_offset, proj_y - label_offset
+                        outline_offset = 0.5
+                        for dx, dy in [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]:
+                            outline_item = QGraphicsTextItem(text_str)
+                            outline_item.setDefaultTextColor(QColor(0, 0, 0))
+                            outline_item.setFont(font)
+                            outline_item.setPos(tx + dx * outline_offset, ty + dy * outline_offset)
+                            outline_item.setZValue(31)
+                            self.map_view.scene.addItem(outline_item)
+                            self._route_path_items.append(outline_item)
+                        text_item = QGraphicsTextItem(text_str)
+                        text_item.setDefaultTextColor(red_number_color)
+                        text_item.setFont(font)
+                        text_item.setPos(tx, ty)
+                        text_item.setZValue(32)
+                        self.map_view.scene.addItem(text_item)
+                        self._route_path_items.append(text_item)
+            else:
+                self.log(
+                    f"Segment {seg_idx + 1}: no route (tried up to {max_tries} start candidates)"
+                )
+            draw_edge_lines(orange_ids, orange_pen, 22, self._green_edge_items)
+            draw_edge_lines(green_ids, green_pen, 21, self._green_edge_items)
+
+        self.log("✓ Route finding complete (orange/green/path from all edges, Dijkstra/A*)")
+
     def load_trajectory(self, trajectory_num: int):
         """Load and display a specific trajectory with trimming.
         
@@ -1161,24 +1263,78 @@ class DebugTrajectoryPage(QWidget):
                 return
             
             self.log(f"✓ Loaded trajectory {trajectory_num} with {len(polyline)} GPS points")
-            
-            # Apply trimming
-            trimmed_polyline = self._apply_trimming(polyline)
-            self.log(f"✓ After trimming: {len(trimmed_polyline)} GPS points (original had {len(polyline)} points)")
-            
+
             # Clear previous items before drawing new trajectory
             for item in self._route_items:
                 try:
                     self.map_view.scene.removeItem(item)
                 except RuntimeError:
-                    # Item already removed, ignore
                     pass
             self._route_items = []
+            for item in self._green_edge_items:
+                try:
+                    self.map_view.scene.removeItem(item)
+                except RuntimeError:
+                    pass
+            self._green_edge_items = []
+            for item in self._route_path_items:
+                try:
+                    self.map_view.scene.removeItem(item)
+                except RuntimeError:
+                    pass
+            self._route_path_items = []
             self._bounding_box_polygon = None
-            
-            # Draw trajectory (trimmed for display, but use original for bounding box)
-            self._draw_trajectory(trimmed_polyline, original_polyline=polyline)
+
+            # Split at invalid GPS jumps (same as view_network)
+            segments = split_at_invalid_segments(polyline, DEFAULT_MAX_SEGMENT_DISTANCE)
+            if len(segments) > 1:
+                self.log(
+                    f"Trajectory split into {len(segments)} segments "
+                    f"(max {DEFAULT_MAX_SEGMENT_DISTANCE:.0f}m between points)"
+                )
+            # Trim each segment (same logic as view_network: 15m static threshold)
+            segments_trimmed = []
+            for seg in segments:
+                trimmed = route_apply_trimming(seg)
+                if len(trimmed) >= 2:
+                    segments_trimmed.append(trimmed)
+            if not segments_trimmed:
+                self.log("❌ No valid segments after splitting and trimming")
+                return
+
+            # Convert each segment to SUMO (display coords) for route finding
+            y_min = getattr(self.map_view, "_network_y_min", 0)
+            y_max = getattr(self.map_view, "_network_y_max", 0)
+
+            def flip_y(y):
+                return y_max + y_min - y
+
+            seg_sumos: List[List[Tuple[float, float]]] = []
+            for seg in segments_trimmed:
+                pts: List[Tuple[float, float]] = []
+                for lon, lat in seg:
+                    coords = self.network_parser.gps_to_sumo_coords(lon, lat)
+                    if coords:
+                        x, y = coords
+                        pts.append((x, flip_y(y)))
+                if len(pts) >= 2:
+                    seg_sumos.append(pts)
+            self._current_sumo_segments = seg_sumos
+
+            # Concatenate polylines for display (one trajectory with all segments)
+            all_polyline: List[List[float]] = []
+            for seg in segments_trimmed:
+                all_polyline.extend(seg)
+            self.log(
+                f"✓ After trimming: {len(all_polyline)} points in {len(seg_sumos)} segment(s)"
+            )
+
+            # Draw trajectory (use concatenated polyline; bounding box from original)
+            self._draw_trajectory(all_polyline, original_polyline=polyline)
             self.log(f"✓ Trajectory {trajectory_num} drawn on map")
+
+            # Run route finding (all edges, same green/orange + Dijkstra/A* as view_network)
+            self._run_route_finding()
             
         except Exception as e:
             self.log(f"❌ Error loading trajectory {trajectory_num}: {e}")
@@ -1685,7 +1841,7 @@ class DebugTrajectoryPage(QWidget):
         self._color_edges_in_box()
     
     def _color_edges_in_box(self):
-        """Color vehicle-allowed edges inside the bounding box polygon in red."""
+        """Color edges inside the bounding box polygon in red (all edge types)."""
         if not self._bounding_box_polygon:
             self.log("⚠️ Bounding box polygon not set, cannot color edges")
             return
@@ -1704,7 +1860,7 @@ class DebugTrajectoryPage(QWidget):
             """Flip Y coordinate to match network display orientation."""
             return y_max + y_min - y
         
-        # Red pen for vehicle edges inside bounding box
+        # Red pen for edges inside bounding box
         red_pen = QPen(QColor(255, 0, 0), 3)  # Red, 3px width
         red_pen.setStyle(Qt.SolidLine)
         
@@ -1712,10 +1868,6 @@ class DebugTrajectoryPage(QWidget):
         edges_checked = 0
         
         for edge_id, edge_data in edges.items():
-            # Only check vehicle-allowed edges
-            if not edge_data.get('allows_passenger', True):
-                continue
-            
             if not edge_data.get('lanes'):
                 continue
             
@@ -1753,8 +1905,11 @@ class DebugTrajectoryPage(QWidget):
         
         # Store red edges data for later use in segment matching
         self._red_edges_data = edges_in_box.copy()
+        # Enable export bounding box network when we have edges in box
+        if getattr(self, 'export_bbox_network_btn', None) is not None:
+            self.export_bbox_network_btn.setEnabled(len(edges_in_box) > 0)
         
-        self.log(f"🔴 Found {len(edges_in_box)} vehicle edges inside bounding box (checked {edges_checked} edges)")
+        self.log(f"🔴 Found {len(edges_in_box)} edges inside bounding box (checked {edges_checked} edges)")
         
         # Draw edges in red (Y-flip for display)
         for edge_id, edge_data, shape_points in edges_in_box:
@@ -1770,7 +1925,7 @@ class DebugTrajectoryPage(QWidget):
                 line.setZValue(15)  # Above network edges (0) but below other overlays
                 self._route_items.append(line)
         
-        self.log(f"✓ Drew {len(edges_in_box)} vehicle edges in red inside bounding box")
+        self.log(f"✓ Drew {len(edges_in_box)} edges in red inside bounding box")
     
     def _calculate_and_log_normalized_coordinates(self, sumo_points_original: List[Tuple[float, float]]):
         """Calculate and log normalized coordinates of polyline relative to bounding box.

@@ -98,8 +98,6 @@ class NetworkParser:
                         wgs84 = pyproj.CRS('EPSG:4326')  # WGS84 (GPS coordinates)
                         network_proj = pyproj.CRS.from_string(self.proj_parameter)
                         self.transformer = pyproj.Transformer.from_crs(wgs84, network_proj, always_xy=True)
-                        print(f"✓ Pyproj transformer initialized: {self.proj_parameter}")
-                        print(f"  Using projection-aware conversion (handles distortion at edges)")
                     except Exception as e:
                         print(f"⚠️ Failed to initialize pyproj transformer: {e}")
                         print(f"   Proj parameter: {self.proj_parameter}")
