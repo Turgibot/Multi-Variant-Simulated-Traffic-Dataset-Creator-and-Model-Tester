@@ -10,11 +10,12 @@ import subprocess
 import urllib.request
 from collections import defaultdict
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional, Set, Tuple
 
-from PySide6.QtCore import QRectF, Qt, QThread, Signal
-from PySide6.QtGui import QColor, QFont
+from PySide6.QtCore import QPointF, QRectF, Qt, QThread, Signal
+from PySide6.QtGui import QBrush, QColor, QFont, QPen, QPolygonF
 from PySide6.QtWidgets import (QCheckBox, QFileDialog, QFrame,
+                               QGraphicsPolygonItem,
                                QGraphicsDropShadowEffect, QGroupBox,
                                QHBoxLayout, QLabel, QLineEdit, QMessageBox,
                                QProgressBar, QPushButton, QScrollArea,
@@ -22,6 +23,11 @@ from PySide6.QtWidgets import (QCheckBox, QFileDialog, QFrame,
 
 from src.gui.simulation_view import SimulationView
 from src.utils.network_parser import NetworkParser
+from src.utils.route_finding import (build_edges_data, build_node_positions,
+                                     compute_green_orange_edges,
+                                     project_point_onto_polyline,
+                                     project_point_onto_polyline_with_segment,
+                                     shortest_path_dijkstra)
 from src.utils.trip_validator import (TripValidationResult,
                                       validate_trip_segments)
 
@@ -415,8 +421,11 @@ class DatasetConversionPage(QWidget):
         self._loading_settings = False  # Flag to prevent save during load
         self._train_trip_count = None  # Cached trip count
         self._route_items = []  # Graphics items for current route display
+        self._candidate_edge_items = []  # Green/orange edge items (separate for fast toggle)
+        self._sumo_route_items = []  # SUMO path lines and stars (separate for fast toggle)
         self._current_polyline = None  # Store current polyline for SUMO route mapping
         self._current_segments = None  # Store current segments for SUMO route mapping
+        self._cached_edges_data = None  # Cached for fast candidate edge drawing
         
         # Cache for prepared route data (computed only once per route selection)
         self._cached_route_num = None
@@ -1386,7 +1395,7 @@ class DatasetConversionPage(QWidget):
                 background-color: #b71c1c;
             }
         """)
-        self.clear_route_btn.clicked.connect(self.clear_route_display)
+        self.clear_route_btn.clicked.connect(lambda: self.clear_route_display(hide_subsections=True))
         route_input_layout.addWidget(self.clear_route_btn)
         
         route_group_layout.addLayout(route_input_layout)
@@ -1440,6 +1449,11 @@ class DatasetConversionPage(QWidget):
         self.fix_invalid_segments_checkbox.stateChanged.connect(self._on_fix_invalid_segments_changed)
         repair_line1_layout.addWidget(self.fix_invalid_segments_checkbox)
         
+        # New number of segments (shown when fix is applied)
+        self.new_segments_count_label = QLabel("")
+        self.new_segments_count_label.setStyleSheet("color: #333; font-size: 10px; font-weight: bold;")
+        repair_line1_layout.addWidget(self.new_segments_count_label)
+        
         # Invalid segments fix info label
         self.invalid_segments_info_label = QLabel("")
         self.invalid_segments_info_label.setStyleSheet("color: #333; font-size: 10px;")
@@ -1481,53 +1495,53 @@ class DatasetConversionPage(QWidget):
         repair_line2_layout.addStretch()
         route_group_layout.addLayout(repair_line2_layout)
         
-        # Line 3: Show SUMO Step 1 route checkbox
+        # Line 3: Show Polygon checkbox (polygon around trajectory, inner edges in red)
         repair_line3_layout = QHBoxLayout()
         repair_line3_layout.setSpacing(8)
-        
-        self.show_sumo_step1_route_checkbox = QCheckBox("Show SUMO Step 1 route")
-        self.show_sumo_step1_route_checkbox.setToolTip("Display the Step 1 SUMO route as a dashed line (magenta) for visual validation (requires both 'Fix invalid segments' and 'Trim Start/End' to be enabled)")
-        self.show_sumo_step1_route_checkbox.setEnabled(False)  # Initially disabled
-        self.show_sumo_step1_route_checkbox.setStyleSheet("""
+        self.show_polygon_checkbox = QCheckBox("Show Polygon")
+        self.show_polygon_checkbox.setToolTip("Draw polygon around trajectory and color edges inside in red")
+        self.show_polygon_checkbox.setChecked(True)
+        self.show_polygon_checkbox.setStyleSheet("""
             QCheckBox {
                 color: #333;
                 font-size: 10px;
-            }
-            QCheckBox:disabled {
-                color: #999;
             }
             QCheckBox::indicator {
                 width: 16px;
                 height: 16px;
             }
         """)
-        self.show_sumo_step1_route_checkbox.stateChanged.connect(self._on_show_sumo_step1_route_changed)
-        repair_line3_layout.addWidget(self.show_sumo_step1_route_checkbox)
-        
-        # Line 3: Show SUMO Step 2 route checkbox
-        self.show_sumo_step2_route_checkbox = QCheckBox("Show SUMO Step 2 route")
-        self.show_sumo_step2_route_checkbox.setToolTip("Display the Step 2 SUMO route as a dashed line for visual validation (requires both 'Fix invalid segments' and 'Trim Start/End' to be enabled)")
-        self.show_sumo_step2_route_checkbox.setEnabled(False)  # Initially disabled
-        self.show_sumo_step2_route_checkbox.setStyleSheet("""
-            QCheckBox {
-                color: #333;
-                font-size: 10px;
-            }
-            QCheckBox:disabled {
-                color: #999;
-            }
-            QCheckBox::indicator {
-                width: 16px;
-                height: 16px;
-            }
-        """)
-        self.show_sumo_step2_route_checkbox.stateChanged.connect(self._on_show_sumo_step2_route_changed)
-        repair_line3_layout.addWidget(self.show_sumo_step2_route_checkbox)
+        self.show_polygon_checkbox.stateChanged.connect(self._on_show_polygon_changed)
+        repair_line3_layout.addWidget(self.show_polygon_checkbox)
         repair_line3_layout.addStretch()
         route_group_layout.addLayout(repair_line3_layout)
         
-        # Initialize show SUMO route checkboxes state
-        self._update_show_sumo_route_enabled()
+        # ---- Trajectory subsets (one subsection per segment, including single segment) ----
+        self.segment_subsections_group = QGroupBox("Trajectory subsets")
+        self.segment_subsections_group.setStyleSheet("""
+            QGroupBox {
+                font-weight: bold;
+                font-size: 10px;
+                color: #333;
+                border: 1px solid #ddd;
+                border-radius: 4px;
+                margin-top: 8px;
+                padding-top: 12px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 6px;
+            }
+        """)
+        self.segment_subsections_layout = QVBoxLayout()
+        self.segment_subsections_layout.setSpacing(6)
+        self.segment_subsections_group.setLayout(self.segment_subsections_layout)
+        self.segment_subsections_group.setVisible(False)
+        self._segment_show_candidate_checkboxes = []
+        self._segment_show_sumo_route_checkboxes = []
+        self._segment_sumo_route_status_labels = []
+        route_group_layout.addWidget(self.segment_subsections_group)
         
         self.route_group.setLayout(route_group_layout)
         self.route_group.setVisible(False)  # Hidden until map and dataset ready
@@ -2439,8 +2453,7 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
             'map_offset_y': self.map_offset_y_spinbox.value(),
             'fix_route': self.fix_route_checkbox.isChecked(),
             'fix_invalid_segments': self.fix_invalid_segments_checkbox.isChecked(),
-            'show_sumo_step1_route': self.show_sumo_step1_route_checkbox.isChecked(),
-            'show_sumo_step2_route': self.show_sumo_step2_route_checkbox.isChecked(),
+            'show_polygon': self.show_polygon_checkbox.isChecked(),
             'draw_gps_points_path': self.draw_gps_points_path_checkbox.isChecked(),
         }
         
@@ -2519,19 +2532,11 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
                 if 'fix_invalid_segments' in settings:
                     self.fix_invalid_segments_checkbox.setChecked(settings['fix_invalid_segments'])
                 
-                if 'show_sumo_step1_route' in settings:
-                    self.show_sumo_step1_route_checkbox.setChecked(settings['show_sumo_step1_route'])
-                if 'show_sumo_step2_route' in settings:
-                    self.show_sumo_step2_route_checkbox.setChecked(settings['show_sumo_step2_route'])
-                # Backward compatibility: migrate old 'show_sumo_route' to 'show_sumo_step1_route'
-                elif 'show_sumo_route' in settings:
-                    self.show_sumo_step1_route_checkbox.setChecked(settings['show_sumo_route'])
+                if 'show_polygon' in settings:
+                    self.show_polygon_checkbox.setChecked(settings['show_polygon'])
                 
                 if 'draw_gps_points_path' in settings:
                     self.draw_gps_points_path_checkbox.setChecked(settings['draw_gps_points_path'])
-                
-                # Update show SUMO route enabled state after loading settings
-                self._update_show_sumo_route_enabled()
                 
                 self.log("Settings loaded from config")
         except Exception as e:
@@ -2595,27 +2600,9 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
         self.route_spinbox.setMaximum(count if count > 0 else 1)
         self.route_info_label.setText(f"Select a route from 1 to {count:,}")
     
-    def _update_show_sumo_route_enabled(self):
-        """Update the enabled state of 'Show SUMO route' checkboxes."""
-        # Enable only if both checkboxes are checked
-        both_checked = (
-            self.fix_route_checkbox.isChecked() and 
-            self.fix_invalid_segments_checkbox.isChecked()
-        )
-        self.show_sumo_step1_route_checkbox.setEnabled(both_checked)
-        self.show_sumo_step2_route_checkbox.setEnabled(both_checked)
-        
-        # If disabled, uncheck them
-        if not both_checked:
-            if self.show_sumo_step1_route_checkbox.isChecked():
-                self.show_sumo_step1_route_checkbox.setChecked(False)
-            if self.show_sumo_step2_route_checkbox.isChecked():
-                self.show_sumo_step2_route_checkbox.setChecked(False)
-    
     def _on_fix_invalid_segments_changed(self):
         """Handle fix invalid segments checkbox change."""
         self.save_settings()
-        self._update_show_sumo_route_enabled()
         # Refresh the route display if a route is currently shown
         if hasattr(self, '_route_items') and self._route_items:
             self.show_selected_route()
@@ -2623,10 +2610,104 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
     def _on_fix_route_changed(self):
         """Handle fix route checkbox change."""
         self.save_settings()
-        self._update_show_sumo_route_enabled()
         # Refresh the route display if a route is currently shown
         if hasattr(self, '_route_items') and self._route_items:
             self.show_selected_route()
+
+    def _on_show_polygon_changed(self):
+        """Handle Show Polygon checkbox change."""
+        self.save_settings()
+        if hasattr(self, '_route_items') and self._route_items:
+            self.show_selected_route()
+
+    def _update_segment_subsections_ui(self, segments: List[List[List[float]]]) -> None:
+        """Update trajectory subsets UI: show one subsection per segment (including single segment)."""
+        if len(segments) < 1:
+            self.segment_subsections_group.setVisible(False)
+            # Clear widgets when no segments
+            while self.segment_subsections_layout.count():
+                item = self.segment_subsections_layout.takeAt(0)
+                if item.widget():
+                    item.widget().deleteLater()
+            self._segment_show_candidate_checkboxes.clear()
+            self._segment_show_sumo_route_checkboxes.clear()
+            self._segment_sumo_route_status_labels.clear()
+            return
+        # Only recreate widgets when segment count changed (preserve checkbox states on redraw)
+        if len(self._segment_show_candidate_checkboxes) != len(segments):
+            while self.segment_subsections_layout.count():
+                item = self.segment_subsections_layout.takeAt(0)
+                if item.widget():
+                    item.widget().deleteLater()
+            self._segment_show_candidate_checkboxes.clear()
+            self._segment_show_sumo_route_checkboxes.clear()
+            self._segment_sumo_route_status_labels.clear()
+            for i, segment in enumerate(segments):
+                subsection = QFrame()
+                subsection.setStyleSheet("QFrame { background-color: #f8f9fa; border-radius: 4px; padding: 6px; }")
+                sub_layout = QVBoxLayout()
+                sub_layout.setSpacing(4)
+                sub_layout.setContentsMargins(8, 6, 8, 6)
+                seg_label = QLabel(f"Segment {i + 1}")
+                seg_label.setStyleSheet("font-weight: bold; font-size: 10px; color: #333;")
+                sub_layout.addWidget(seg_label)
+                sumo_row = QHBoxLayout()
+                cb_sumo = QCheckBox("Show SUMO route")
+                cb_sumo.setToolTip("Display the SUMO shortest path (purple) for this subset (view_network logic)")
+                cb_sumo.setStyleSheet("font-size: 9px; color: #333;")
+                has_route = self._segment_has_sumo_route(segment, seg_idx=i)
+                if has_route:
+                    cb_sumo.setChecked(True)
+                    cb_sumo.setEnabled(True)
+                    status_label = QLabel("")
+                else:
+                    cb_sumo.setChecked(False)
+                    cb_sumo.setEnabled(False)
+                    status_label = QLabel("No route found")
+                    status_label.setStyleSheet("font-size: 9px; color: #999;")
+                cb_sumo.stateChanged.connect(self._on_segment_checkbox_changed)
+                sumo_row.addWidget(cb_sumo)
+                sumo_row.addWidget(status_label)
+                sumo_row.addStretch()
+                sub_layout.addLayout(sumo_row)
+                self._segment_show_sumo_route_checkboxes.append(cb_sumo)
+                self._segment_sumo_route_status_labels.append(status_label)
+                cb_candidate = QCheckBox("Show candidate edges (green/orange)")
+                cb_candidate.setToolTip("Display the orange (closest to start/end) and green (top matching) edges for this subset")
+                cb_candidate.setStyleSheet("font-size: 9px; color: #333;")
+                cb_candidate.setChecked(False)
+                cb_candidate.stateChanged.connect(self._on_segment_checkbox_changed)
+                sub_layout.addWidget(cb_candidate)
+                self._segment_show_candidate_checkboxes.append(cb_candidate)
+                subsection.setLayout(sub_layout)
+                self.segment_subsections_layout.addWidget(subsection)
+        self.segment_subsections_group.setVisible(True)
+
+    def _on_segment_checkbox_changed(self):
+        """When segment 'Show candidate edges' or 'Show SUMO route' checkbox changes, update only overlay layers (fast path)."""
+        if not self._current_segments:
+            return
+        # Remove candidate and sumo route items
+        for item in self._candidate_edge_items:
+            try:
+                self.map_view.scene.removeItem(item)
+            except RuntimeError:
+                pass
+        self._candidate_edge_items = []
+        for item in self._sumo_route_items:
+            try:
+                self.map_view.scene.removeItem(item)
+            except RuntimeError:
+                pass
+        self._sumo_route_items = []
+        # Redraw for checked segments
+        for i, segment in enumerate(self._current_segments):
+            if i >= len(self._segment_show_candidate_checkboxes) or i >= len(self._segment_show_sumo_route_checkboxes):
+                continue
+            if self._segment_show_candidate_checkboxes[i].isChecked():
+                self._draw_segment_candidate_edges(segment)
+            if self._segment_show_sumo_route_checkboxes[i].isChecked():
+                self._draw_segment_sumo_route(segment)
     
     def _prepare_route_data(self, original_polyline: List[List[float]]):
         """
@@ -2753,8 +2834,6 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
             # Determine what to display based on checkbox states
             fix_invalid = self.fix_invalid_segments_checkbox.isChecked()
             trim_start_end = self.fix_route_checkbox.isChecked()
-            show_sumo_step1 = self.show_sumo_step1_route_checkbox.isChecked()
-            show_sumo_step2 = self.show_sumo_step2_route_checkbox.isChecked()
             
             # Build segments to display
             if fix_invalid and invalid_segments.invalid_segment_count > 0:
@@ -2782,10 +2861,18 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
             # Store current segments for SUMO route mapping
             self._current_segments = segments
             
+            # Update segment subsections UI (visible when 2+ segments)
+            self._update_segment_subsections_ui(segments)
+            
             # Clear previous route
             self.clear_route_display()
             
-            # Update invalid segments info label
+            # Update new segments count and invalid segments info label
+            if fix_invalid and len(segments) > 0:
+                n = len(segments)
+                self.new_segments_count_label.setText(f"{n} segment" + ("s" if n != 1 else ""))
+            else:
+                self.new_segments_count_label.setText("")
             if fix_invalid and invalid_segments.invalid_segment_count > 0:
                 invalid_count = invalid_segments.invalid_segment_count
                 if len(segments) > 1:
@@ -2814,35 +2901,16 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
                     show_invalid_in_red=show_invalid_in_red,
                     original_polyline=original_polyline if show_invalid_in_red else None
                 )
-            
-            # Draw SUMO Step 1 route overlay if checkbox is checked
-            if show_sumo_step1 and fix_invalid and trim_start_end:
-                # Use the cached sumolib network (loaded in on_network_load_finished)
-                if not self.sumo_net:
-                    self.log("⚠️ SUMO network not loaded. Please wait for network to finish loading.")
-                else:
-                    self._draw_sumo_route_overlay_placeholder(
-                        segments, 
-                        invalid_segments, 
-                        real_start_idx, 
-                        real_end_idx, 
-                        segment_trim_data,
-                        self.sumo_net
-                    )
-            
-            # Draw SUMO Step 2 visualization if checkbox is checked
-            if show_sumo_step2 and fix_invalid and trim_start_end:
-                # Use the cached sumolib network (loaded in on_network_load_finished)
-                if not self.sumo_net:
-                    self.log("⚠️ SUMO network not loaded. Please wait for network to finish loading.")
-                else:
-                    # Step 2: Draw GPS points and their 3 closest edges with distinct colors
-                    # Use the same final_segments that Step 1 used (after iterative shortening)
-                    # This ensures Step 2 checks the same GPS points that Step 1 route covers
-                    step2_segments = getattr(self, '_step1_final_segments', segments)
-                    if not step2_segments:
-                        step2_segments = segments  # Fallback to original segments
-                    self._draw_step2_gps_points_and_edges(step2_segments)
+                # Draw polygon around trajectory and red inner edges if Show Polygon is checked
+                if self.show_polygon_checkbox.isChecked():
+                    self._draw_route_polygon_and_red_edges(segments)
+                # Draw candidate edges and SUMO route for each segment subset if checkbox checked
+                if self._segment_show_candidate_checkboxes and self._segment_show_sumo_route_checkboxes:
+                    for i, segment in enumerate(segments):
+                        if i < len(self._segment_show_candidate_checkboxes) and self._segment_show_candidate_checkboxes[i].isChecked():
+                            self._draw_segment_candidate_edges(segment)
+                        if i < len(self._segment_show_sumo_route_checkboxes) and self._segment_show_sumo_route_checkboxes[i].isChecked():
+                            self._draw_segment_sumo_route(segment)
             
             # Build route info text
             display_polyline = segments[0] if segments else []
@@ -4699,32 +4767,6 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
         
         return True
     
-    def _on_show_sumo_step1_route_changed(self):
-        """Handle show SUMO Step 1 route checkbox state change."""
-        self.save_settings()
-        
-        # If we have current segments, redraw the route (with or without SUMO overlay)
-        if self._current_segments is not None:
-            self.show_selected_route()
-        else:
-            if self.show_sumo_step1_route_checkbox.isChecked():
-                # ignore if this is on loading
-                if not self._loading_settings:
-                    self.log("⚠️ No route loaded. Please select a route first.")
-    
-    def _on_show_sumo_step2_route_changed(self):
-        """Handle show SUMO Step 2 route checkbox state change."""
-        self.save_settings()
-        
-        # If we have current segments, redraw the route (with or without SUMO overlay)
-        if self._current_segments is not None:
-            self.show_selected_route()
-        else:
-            if self.show_sumo_step2_route_checkbox.isChecked():
-                # ignore if this is on loading
-                if not self._loading_settings:
-                    self.log("⚠️ No route loaded. Please select a route first.")
-    
     def _on_draw_gps_points_path_changed(self):
         """Handle draw GPS points path checkbox state change."""
         self.save_settings()
@@ -4869,6 +4911,517 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
                         return []
         return []
     
+    def _draw_segment_candidate_edges(self, segment_polyline: List[List[float]]) -> None:
+        """Draw green and orange candidate edges for a single trajectory segment."""
+        if not self.network_parser or not segment_polyline or len(segment_polyline) < 2:
+            return
+        y_min = getattr(self.map_view, '_network_y_min', 0)
+        y_max = getattr(self.map_view, '_network_y_max', 0)
+
+        def flip_y(y: float) -> float:
+            return y_max + y_min - y
+
+        sumo_points_flipped = []
+        for lon, lat in segment_polyline:
+            coords = self.network_parser.gps_to_sumo_coords(lon, lat)
+            if coords:
+                x, y = coords
+                sumo_points_flipped.append((x, flip_y(y)))
+        if len(sumo_points_flipped) < 2:
+            return
+        # Cache edges_data (expensive - iterates all network edges)
+        if self._cached_edges_data is None:
+            self._cached_edges_data = build_edges_data(self.network_parser)
+        edges_data = self._cached_edges_data
+        orange_ids, green_ids, _start, _end, _candidates = compute_green_orange_edges(
+            edges_data, sumo_points_flipped, y_min, y_max, top_per_segment=5
+        )
+        edge_shapes = {eid: shape for eid, _ed, shape in edges_data}
+        orange_pen = QPen(QColor(255, 165, 0), 5)
+        orange_pen.setStyle(Qt.SolidLine)
+        green_pen = QPen(QColor(0, 255, 0), 4)
+        green_pen.setStyle(Qt.SolidLine)
+        for eid in orange_ids:
+            shape_points = edge_shapes.get(eid)
+            if not shape_points or len(shape_points) < 2:
+                continue
+            for j in range(len(shape_points) - 1):
+                x1, y1 = shape_points[j][0], shape_points[j][1]
+                x2, y2 = shape_points[j + 1][0], shape_points[j + 1][1]
+                line = self.map_view.scene.addLine(x1, flip_y(y1), x2, flip_y(y2), orange_pen)
+                line.setZValue(21)
+                self._candidate_edge_items.append(line)
+        for eid in green_ids:
+            shape_points = edge_shapes.get(eid)
+            if not shape_points or len(shape_points) < 2:
+                continue
+            for j in range(len(shape_points) - 1):
+                x1, y1 = shape_points[j][0], shape_points[j][1]
+                x2, y2 = shape_points[j + 1][0], shape_points[j + 1][1]
+                line = self.map_view.scene.addLine(x1, flip_y(y1), x2, flip_y(y2), green_pen)
+                line.setZValue(20)
+                self._candidate_edge_items.append(line)
+
+    def _compute_edges_in_polygon(self, segments: List[List[List[float]]]) -> Optional[Set[str]]:
+        """Compute set of edge IDs inside the trajectory polygon. Returns None if polygon cannot be built."""
+        if not self.network_parser or not segments:
+            return None
+        all_gps = []
+        for seg in segments:
+            if seg and isinstance(seg[0], (list, tuple)) and len(seg[0]) >= 2:
+                for pt in seg:
+                    all_gps.append((pt[0], pt[1]))
+        if len(all_gps) < 2:
+            return None
+        sumo_points_original = []
+        for lon, lat in all_gps:
+            coords = self.network_parser.gps_to_sumo_coords(lon, lat)
+            if coords:
+                sumo_points_original.append(coords)
+        if len(sumo_points_original) < 2:
+            return None
+        min_box = self._find_minimum_bounding_box_route(sumo_points_original, padding_meters=200.0)
+        if not min_box:
+            return None
+        center_x, center_y, width, height, angle = min_box
+        half_w, half_h = width / 2, height / 2
+        corners = [(-half_w, -half_h), (half_w, -half_h), (half_w, half_h), (-half_w, half_h)]
+        cos_a, sin_a = math.cos(-angle), math.sin(-angle)
+        rotated_corners = [QPointF(center_x + dx * cos_a - dy * sin_a, center_y + dx * sin_a + dy * cos_a) for dx, dy in corners]
+        polygon_check = QPolygonF(rotated_corners)
+        outside = [i for i, (x, y) in enumerate(sumo_points_original) if not polygon_check.containsPoint(QPointF(x, y), Qt.OddEvenFill)]
+        if outside:
+            center_x, center_y, width, height, angle = self._expand_box_to_include_all_points_route(
+                sumo_points_original, center_x, center_y, width, height, angle, safety_margin=100.0
+            )
+            half_w, half_h = width / 2, height / 2
+            corners = [(-half_w, -half_h), (half_w, -half_h), (half_w, half_h), (-half_w, half_h)]
+            cos_a, sin_a = math.cos(-angle), math.sin(-angle)
+            rotated_corners = [QPointF(center_x + dx * cos_a - dy * sin_a, center_y + dx * sin_a + dy * cos_a) for dx, dy in corners]
+        if rotated_corners[0] != rotated_corners[-1]:
+            rotated_corners.append(rotated_corners[0])
+        polygon_original = QPolygonF(rotated_corners)
+        if polygon_original.isEmpty():
+            return None
+        edges = self.network_parser.get_edges()
+        edge_ids = set()
+        for edge_id, edge_data in edges.items():
+            if not edge_data.get('lanes'):
+                continue
+            shape_points = edge_data['lanes'][0].get('shape', [])
+            if len(shape_points) < 2:
+                continue
+            edge_in_box = False
+            for pt in shape_points:
+                x, y = pt[0], pt[1]
+                if polygon_original.containsPoint(QPointF(x, y), Qt.OddEvenFill):
+                    edge_in_box = True
+                    break
+            if not edge_in_box:
+                for i in range(len(shape_points) - 1):
+                    x1, y1 = shape_points[i][0], shape_points[i][1]
+                    x2, y2 = shape_points[i + 1][0], shape_points[i + 1][1]
+                    if self._line_intersects_polygon_route(QPointF(x1, y1), QPointF(x2, y2), polygon_original):
+                        edge_in_box = True
+                        break
+            if edge_in_box:
+                edge_ids.add(edge_id)
+        return edge_ids
+
+    def _segment_has_sumo_route(self, segment_polyline: List[List[float]], seg_idx: int = 0) -> bool:
+        """Check if a SUMO route exists for this segment (view_network logic). Returns True if route found
+        and all GPS points are within 100m of the route. Logs reason to activity log when rejected."""
+        seg_label = f"Segment {seg_idx + 1}"
+        if not self.network_parser or not segment_polyline or len(segment_polyline) < 2:
+            self.log(f"⚠️ {seg_label} SUMO route: not found (network not loaded or segment too short)")
+            return False
+        y_min = getattr(self.map_view, '_network_y_min', 0)
+        y_max = getattr(self.map_view, '_network_y_max', 0)
+
+        def flip_y(y: float) -> float:
+            return y_max + y_min - y
+
+        sumo_points_flipped = []
+        for lon, lat in segment_polyline:
+            coords = self.network_parser.gps_to_sumo_coords(lon, lat)
+            if coords:
+                x, y = coords
+                sumo_points_flipped.append((x, flip_y(y)))
+        if len(sumo_points_flipped) < 2:
+            self.log(f"⚠️ {seg_label} SUMO route: not found (could not convert GPS points to SUMO coordinates)")
+            return False
+        if self._cached_edges_data is None:
+            self._cached_edges_data = build_edges_data(self.network_parser)
+        edges_data = self._cached_edges_data
+        edge_shapes = {eid: shape for eid, _ed, shape in edges_data}
+        orange_ids, green_ids, start_id, end_id, candidates = compute_green_orange_edges(
+            edges_data, sumo_points_flipped, y_min, y_max, top_per_segment=5
+        )
+        if not start_id or not end_id:
+            self.log(f"⚠️ {seg_label} SUMO route: not found (no start or end edges for trajectory)")
+            return False
+        node_positions = build_node_positions(self.network_parser)
+        goal_xy = sumo_points_flipped[-1]
+        base_edges = self._compute_edges_in_polygon(self._current_segments) if self._current_segments else None
+        max_tries = min(5, len(candidates or []))
+        max_star_distance_m = 100.0
+        worst_dist_overall = 0.0
+        worst_idx_overall = 0
+        for try_idx in range(max_tries):
+            cand = (candidates or [])[try_idx]
+            edges_allowed = (base_edges | {cand, end_id}) if base_edges is not None else None
+            path_edges = shortest_path_dijkstra(
+                self.network_parser,
+                cand,
+                end_id,
+                orange_ids=orange_ids,
+                green_ids=green_ids,
+                node_positions=node_positions,
+                goal_xy=goal_xy,
+                edges_in_polygon=edges_allowed,
+            )
+            if not path_edges:
+                continue
+            # Build path points and validate 100m distance (route rejected if any point too far)
+            path_points = []
+            for eid in path_edges:
+                shape_points = edge_shapes.get(eid)
+                if not shape_points:
+                    continue
+                for x_s, y_s in shape_points:
+                    path_points.append((x_s, flip_y(y_s)))
+            path_points_flat = [[p[0], p[1]] for p in path_points]
+            all_within = True
+            worst_dist = 0.0
+            worst_idx = 0
+            for idx, (px, py) in enumerate(sumo_points_flipped):
+                proj_x, proj_y = project_point_onto_polyline(px, py, path_points_flat)
+                dist_m = math.sqrt((px - proj_x) ** 2 + (py - proj_y) ** 2)
+                if dist_m > max_star_distance_m:
+                    all_within = False
+                    if dist_m > worst_dist:
+                        worst_dist = dist_m
+                        worst_idx = idx
+            if all_within:
+                return True
+            if worst_dist > worst_dist_overall:
+                worst_dist_overall = worst_dist
+                worst_idx_overall = worst_idx
+        if worst_dist_overall > max_star_distance_m:
+            self.log(f"⚠️ {seg_label} SUMO route: rejected (GPS point {worst_idx_overall + 1} is {worst_dist_overall:.0f}m from route, max {max_star_distance_m:.0f}m)")
+        else:
+            self.log(f"⚠️ {seg_label} SUMO route: not found (no path between start and end edges)")
+        return False
+
+    def _draw_segment_sumo_route(self, segment_polyline: List[List[float]]) -> None:
+        """Draw SUMO shortest path for a segment (view_network logic: Dijkstra/A*, purple path + stars)."""
+        if not self.network_parser or not segment_polyline or len(segment_polyline) < 2:
+            return
+        y_min = getattr(self.map_view, '_network_y_min', 0)
+        y_max = getattr(self.map_view, '_network_y_max', 0)
+
+        def flip_y(y: float) -> float:
+            return y_max + y_min - y
+
+        sumo_points_flipped = []
+        for lon, lat in segment_polyline:
+            coords = self.network_parser.gps_to_sumo_coords(lon, lat)
+            if coords:
+                x, y = coords
+                sumo_points_flipped.append((x, flip_y(y)))
+        if len(sumo_points_flipped) < 2:
+            return
+        if self._cached_edges_data is None:
+            self._cached_edges_data = build_edges_data(self.network_parser)
+        edges_data = self._cached_edges_data
+        edge_shapes = {eid: shape for eid, _ed, shape in edges_data}
+        orange_ids, green_ids, start_id, end_id, candidates = compute_green_orange_edges(
+            edges_data, sumo_points_flipped, y_min, y_max, top_per_segment=5
+        )
+        if not start_id or not end_id:
+            return
+        node_positions = build_node_positions(self.network_parser)
+        goal_xy = sumo_points_flipped[-1]
+        base_edges = self._compute_edges_in_polygon(self._current_segments) if self._current_segments else None
+        path_edges: List[str] = []
+        max_tries = min(5, len(candidates or []))
+        for try_idx in range(max_tries):
+            cand = (candidates or [])[try_idx]
+            edges_allowed = (base_edges | {cand, end_id}) if base_edges is not None else None
+            path_edges = shortest_path_dijkstra(
+                self.network_parser,
+                cand,
+                end_id,
+                orange_ids=orange_ids,
+                green_ids=green_ids,
+                node_positions=node_positions,
+                goal_xy=goal_xy,
+                edges_in_polygon=edges_allowed,
+            )
+            if path_edges:
+                break
+        if not path_edges:
+            return
+        # Build full path points (for projection and trimming)
+        path_points = []
+        for eid in path_edges:
+            shape_points = edge_shapes.get(eid)
+            if not shape_points:
+                continue
+            for x_s, y_s in shape_points:
+                path_points.append((x_s, flip_y(y_s)))
+        # Validate: if any GPS point is >100m from its projected star, route is too different
+        path_points_flat = [[p[0], p[1]] for p in path_points]
+        max_star_distance_m = 100.0
+        for px, py in sumo_points_flipped:
+            proj_x, proj_y = project_point_onto_polyline(px, py, path_points_flat)
+            dist_m = math.sqrt((px - proj_x) ** 2 + (py - proj_y) ** 2)
+            if dist_m > max_star_distance_m:
+                self.log(f"⚠️ SUMO route rejected: GPS point is {dist_m:.0f}m from route (max {max_star_distance_m:.0f}m)")
+                return
+        # Trim route to start at first star and end at last star
+        first_pt = sumo_points_flipped[0]
+        last_pt = sumo_points_flipped[-1]
+        (first_star_x, first_star_y), first_seg = project_point_onto_polyline_with_segment(
+            first_pt[0], first_pt[1], path_points_flat
+        )
+        (last_star_x, last_star_y), last_seg = project_point_onto_polyline_with_segment(
+            last_pt[0], last_pt[1], path_points_flat
+        )
+        if first_seg <= last_seg:
+            # Build trimmed path: first_star -> intermediate points -> last_star
+            trimmed = [(first_star_x, first_star_y)]
+            for i in range(first_seg + 1, last_seg + 1):
+                trimmed.append(path_points[i])
+            if first_seg < last_seg:
+                trimmed.append((last_star_x, last_star_y))
+            elif first_seg == last_seg and (abs(first_star_x - last_star_x) > 1e-6 or abs(first_star_y - last_star_y) > 1e-6):
+                trimmed.append((last_star_x, last_star_y))
+            draw_points = trimmed
+        else:
+            # Degenerate: last star before first star along path; use full path
+            draw_points = path_points
+        # Draw the route polyline (from first star to last star)
+        path_pen = QPen(QColor(128, 0, 128), 5)
+        path_pen.setStyle(Qt.SolidLine)
+        for j in range(len(draw_points) - 1):
+            x1, y1 = draw_points[j][0], draw_points[j][1]
+            x2, y2 = draw_points[j + 1][0], draw_points[j + 1][1]
+            line = self.map_view.scene.addLine(x1, y1, x2, y2, path_pen)
+            line.setZValue(25)
+            self._sumo_route_items.append(line)
+        if path_points and sumo_points_flipped:
+            from PySide6.QtGui import QPainterPath
+            path_points_flat = [[p[0], p[1]] for p in path_points]
+            star_radius = 7.2
+            star_brush = QBrush(QColor(255, 165, 0))
+            star_pen = QPen(QColor(255, 165, 0), 1.8)
+            font = QFont()
+            font.setPointSize(7)
+            font.setBold(True)
+            red_number_color = QColor(200, 0, 0)
+            for idx, (px, py) in enumerate(sumo_points_flipped):
+                proj_x, proj_y = project_point_onto_polyline(px, py, path_points_flat)
+                path = QPainterPath()
+                num_points = 5
+                outer, inner = star_radius, star_radius * 0.4
+                for i in range(num_points * 2):
+                    angle = (i * math.pi) / num_points - math.pi / 2
+                    r = outer if i % 2 == 0 else inner
+                    x = proj_x + r * math.cos(angle)
+                    y = proj_y + r * math.sin(angle)
+                    if i == 0:
+                        path.moveTo(x, y)
+                    else:
+                        path.lineTo(x, y)
+                path.closeSubpath()
+                from PySide6.QtWidgets import QGraphicsPathItem
+                star_item = QGraphicsPathItem(path)
+                star_item.setPen(star_pen)
+                star_item.setBrush(star_brush)
+                star_item.setZValue(30)
+                self.map_view.scene.addItem(star_item)
+                self._sumo_route_items.append(star_item)
+                text_str = str(idx + 1)
+                tx, ty = proj_x + star_radius, proj_y - star_radius
+                for dx, dy in [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]:
+                    from PySide6.QtWidgets import QGraphicsTextItem
+                    outline_item = QGraphicsTextItem(text_str)
+                    outline_item.setDefaultTextColor(QColor(0, 0, 0))
+                    outline_item.setFont(font)
+                    outline_item.setPos(tx + dx * 0.5, ty + dy * 0.5)
+                    outline_item.setZValue(31)
+                    self.map_view.scene.addItem(outline_item)
+                    self._sumo_route_items.append(outline_item)
+                text_item = QGraphicsTextItem(text_str)
+                text_item.setDefaultTextColor(red_number_color)
+                text_item.setFont(font)
+                text_item.setPos(tx, ty)
+                text_item.setZValue(32)
+                self.map_view.scene.addItem(text_item)
+                self._sumo_route_items.append(text_item)
+
+    def _draw_route_polygon_and_red_edges(self, segments: List[List[List[float]]]) -> None:
+        """Draw polygon around trajectory (all segments) and color edges inside in red."""
+        if not self.network_parser or not segments:
+            return
+        # Flatten segments to one list of GPS points and convert to original SUMO coordinates
+        all_gps = []
+        for seg in segments:
+            if seg and isinstance(seg[0], (list, tuple)) and len(seg[0]) >= 2:
+                for pt in seg:
+                    all_gps.append((pt[0], pt[1]))
+        if len(all_gps) < 2:
+            return
+        sumo_points_original = []
+        for lon, lat in all_gps:
+            coords = self.network_parser.gps_to_sumo_coords(lon, lat)
+            if coords:
+                sumo_points_original.append(coords)
+        if len(sumo_points_original) < 2:
+            return
+        min_box = self._find_minimum_bounding_box_route(sumo_points_original, padding_meters=200.0)
+        if not min_box:
+            return
+        center_x, center_y, width, height, angle = min_box
+        half_w = width / 2
+        half_h = height / 2
+        corners = [
+            (-half_w, -half_h), (half_w, -half_h),
+            (half_w, half_h), (-half_w, half_h),
+        ]
+        cos_a = math.cos(-angle)
+        sin_a = math.sin(-angle)
+        rotated_corners = [QPointF(center_x + dx * cos_a - dy * sin_a, center_y + dx * sin_a + dy * cos_a) for dx, dy in corners]
+        polygon_check = QPolygonF(rotated_corners)
+        outside = [i for i, (x, y) in enumerate(sumo_points_original) if not polygon_check.containsPoint(QPointF(x, y), Qt.OddEvenFill)]
+        if outside:
+            center_x, center_y, width, height, angle = self._expand_box_to_include_all_points_route(
+                sumo_points_original, center_x, center_y, width, height, angle, safety_margin=100.0
+            )
+            half_w, half_h = width / 2, height / 2
+            corners = [(-half_w, -half_h), (half_w, -half_h), (half_w, half_h), (-half_w, half_h)]
+            cos_a, sin_a = math.cos(-angle), math.sin(-angle)
+            rotated_corners = [QPointF(center_x + dx * cos_a - dy * sin_a, center_y + dx * sin_a + dy * cos_a) for dx, dy in corners]
+        if rotated_corners[0] != rotated_corners[-1]:
+            rotated_corners.append(rotated_corners[0])
+        polygon_original = QPolygonF(rotated_corners)
+        if polygon_original.isEmpty():
+            return
+        y_min = getattr(self.map_view, '_network_y_min', 0)
+        y_max = getattr(self.map_view, '_network_y_max', 0)
+
+        def flip_y(y):
+            return y_max + y_min - y
+
+        flipped_corners = [QPointF(c.x(), flip_y(c.y())) for c in rotated_corners]
+        flipped_polygon = QPolygonF(flipped_corners)
+        rect_item = QGraphicsPolygonItem(flipped_polygon)
+        rect_item.setPen(QPen(QColor(0, 0, 0), 4))
+        rect_item.setBrush(QBrush(Qt.NoBrush))
+        rect_item.setZValue(50)
+        self.map_view.scene.addItem(rect_item)
+        self._route_items.append(rect_item)
+        # Edges inside polygon (original SUMO coords)
+        edges = self.network_parser.get_edges()
+        red_pen = QPen(QColor(255, 180, 180, 140), 3)  # Pale red
+        edges_in_box = []
+        for edge_id, edge_data in edges.items():
+            if not edge_data.get('lanes'):
+                continue
+            shape_points = edge_data['lanes'][0].get('shape', [])
+            if len(shape_points) < 2:
+                continue
+            edge_in_box = False
+            for pt in shape_points:
+                x, y = pt[0], pt[1]
+                if polygon_original.containsPoint(QPointF(x, y), Qt.OddEvenFill):
+                    edge_in_box = True
+                    break
+            if not edge_in_box:
+                for i in range(len(shape_points) - 1):
+                    x1, y1 = shape_points[i][0], shape_points[i][1]
+                    x2, y2 = shape_points[i + 1][0], shape_points[i + 1][1]
+                    if self._line_intersects_polygon_route(QPointF(x1, y1), QPointF(x2, y2), polygon_original):
+                        edge_in_box = True
+                        break
+            if edge_in_box:
+                edges_in_box.append((edge_id, edge_data, shape_points))
+        for edge_id, edge_data, shape_points in edges_in_box:
+            for i in range(len(shape_points) - 1):
+                x1, y1 = shape_points[i][0], shape_points[i][1]
+                x2, y2 = shape_points[i + 1][0], shape_points[i + 1][1]
+                y1_d = flip_y(y1)
+                y2_d = flip_y(y2)
+                line = self.map_view.scene.addLine(x1, y1_d, x2, y2_d, red_pen)
+                line.setZValue(15)
+                self._route_items.append(line)
+        self.log(f"✓ Polygon and {len(edges_in_box)} red edges drawn")
+
+    def _find_minimum_bounding_box_route(self, points: List[Tuple[float, float]], padding_meters: float = 200.0) -> Optional[Tuple[float, float, float, float, float]]:
+        """Minimum-area rotated bounding box. Returns (center_x, center_y, width, height, angle_rad) or None."""
+        if len(points) < 2:
+            return None
+        padding = padding_meters
+        min_area = float('inf')
+        best_box = None
+        for angle_deg in range(0, 181, 1):
+            angle_rad = math.radians(angle_deg)
+            cos_a, sin_a = math.cos(angle_rad), math.sin(angle_rad)
+            cx = sum(x for x, y in points) / len(points)
+            cy = sum(y for x, y in points) / len(points)
+            rotated = [( (x - cx) * cos_a - (y - cy) * sin_a, (x - cx) * sin_a + (y - cy) * cos_a ) for x, y in points]
+            xs, ys = [p[0] for p in rotated], [p[1] for p in rotated]
+            w = max(xs) - min(xs) + 2 * padding
+            h = max(ys) - min(ys) + 2 * padding
+            if w * h < min_area:
+                min_area = w * h
+                best_box = (cx, cy, w, h, angle_rad)
+        if best_box is None or best_box[2] <= 0 or best_box[3] <= 0:
+            xs = [x for x, y in points]
+            ys = [y for x, y in points]
+            cx, cy = sum(xs) / len(xs), sum(ys) / len(ys)
+            best_box = (cx, cy, max(xs) - min(xs) + 2 * padding, max(ys) - min(ys) + 2 * padding, 0.0)
+        return best_box
+
+    def _expand_box_to_include_all_points_route(self, points: List[Tuple[float, float]], center_x: float, center_y: float,
+                                                width: float, height: float, angle: float, safety_margin: float = 50.0
+                                                ) -> Tuple[float, float, float, float, float]:
+        """Expand box so all points are inside. Returns (center_x, center_y, width, height, angle)."""
+        if not points:
+            return (center_x, center_y, width, height, angle)
+        cos_neg = math.cos(-angle)
+        sin_neg = math.sin(-angle)
+        rotated = []
+        for x, y in points:
+            dx, dy = x - center_x, y - center_y
+            rotated.append((dx * cos_neg - dy * sin_neg, dx * sin_neg + dy * cos_neg))
+        rxs, rys = [p[0] for p in rotated], [p[1] for p in rotated]
+        min_rx, max_rx = min(rxs), max(rxs)
+        min_ry, max_ry = min(rys), max(rys)
+        req_w = (max_rx - min_rx) + 2 * safety_margin
+        req_h = (max_ry - min_ry) + 2 * safety_margin
+        center_rx = (min_rx + max_rx) / 2
+        center_ry = (min_ry + max_ry) / 2
+        cos_a, sin_a = math.cos(angle), math.sin(angle)
+        new_cx = center_x + center_rx * cos_a - center_ry * sin_a
+        new_cy = center_y + center_rx * sin_a + center_ry * cos_a
+        return (new_cx, new_cy, max(width, req_w), max(height, req_h), angle)
+
+    def _line_intersects_polygon_route(self, p1: QPointF, p2: QPointF, polygon: QPolygonF) -> bool:
+        """True if segment p1-p2 intersects any edge of the polygon."""
+        pts = [polygon.at(i) for i in range(polygon.size())]
+        for i in range(len(pts)):
+            p3, p4 = pts[i], pts[(i + 1) % len(pts)]
+            if self._line_segments_intersect_route(p1, p2, p3, p4):
+                return True
+        return False
+
+    def _line_segments_intersect_route(self, p1: QPointF, p2: QPointF, p3: QPointF, p4: QPointF) -> bool:
+        def ccw(a, b, c):
+            return (c.y() - a.y()) * (b.x() - a.x()) > (b.y() - a.y()) * (c.x() - a.x())
+        return (ccw(p1, p3, p4) != ccw(p2, p3, p4) and ccw(p1, p2, p3) != ccw(p1, p2, p4))
+
     def _draw_route_on_map(self, segments_or_polyline, route_num: int, show_invalid_in_red: bool = False, original_polyline: list = None):
         """Draw the route on the map with colored points and validated segments.
         
@@ -5065,8 +5618,12 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
             return validate_trip_segments(segments[0])
         return None
     
-    def clear_route_display(self):
-        """Clear the displayed route from the map."""
+    def clear_route_display(self, hide_subsections: bool = False):
+        """Clear the displayed route from the map.
+        
+        Args:
+            hide_subsections: If True, hide the trajectory subsets section (e.g. when user clicks Clear).
+        """
         if hasattr(self, '_route_items') and self._route_items:
             for item in self._route_items:
                 self.map_view.scene.removeItem(item)
@@ -5075,6 +5632,23 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
             if hasattr(self, 'invalid_segments_info_label'):
                 self.invalid_segments_info_label.setText("")
             self.log("Route display cleared")
+        if hasattr(self, '_candidate_edge_items') and self._candidate_edge_items:
+            for item in self._candidate_edge_items:
+                try:
+                    self.map_view.scene.removeItem(item)
+                except RuntimeError:
+                    pass
+            self._candidate_edge_items = []
+        if hasattr(self, '_sumo_route_items') and self._sumo_route_items:
+            for item in self._sumo_route_items:
+                try:
+                    self.map_view.scene.removeItem(item)
+                except RuntimeError:
+                    pass
+            self._sumo_route_items = []
+        
+        if hide_subsections and hasattr(self, 'segment_subsections_group'):
+            self.segment_subsections_group.setVisible(False)
         
         # Clear cached route data when route is cleared
         self._cached_route_num = None

@@ -79,11 +79,21 @@ def project_point_onto_polyline(
     px: float, py: float, shape_points: List[List[float]]
 ) -> Tuple[float, float]:
     """Closest point on the polyline to (px, py). Returns (proj_x, proj_y)."""
+    result, _ = project_point_onto_polyline_with_segment(px, py, shape_points)
+    return result
+
+
+def project_point_onto_polyline_with_segment(
+    px: float, py: float, shape_points: List[List[float]]
+) -> Tuple[Tuple[float, float], int]:
+    """Closest point on the polyline to (px, py). Returns ((proj_x, proj_y), segment_idx).
+    segment_idx is the index of the segment (between shape_points[i] and shape_points[i+1])."""
     if len(shape_points) < 2:
         if len(shape_points) == 1:
-            return (float(shape_points[0][0]), float(shape_points[0][1]))
-        return (px, py)
+            return ((float(shape_points[0][0]), float(shape_points[0][1])), 0)
+        return ((px, py), 0)
     best = (px, py)
+    best_seg = 0
     best_dist_sq = float("inf")
     for i in range(len(shape_points) - 1):
         x1, y1 = shape_points[i][0], shape_points[i][1]
@@ -100,7 +110,8 @@ def project_point_onto_polyline(
         if d_sq < best_dist_sq:
             best_dist_sq = d_sq
             best = (cx, cy)
-    return best
+            best_seg = i
+    return (best, best_seg)
 
 
 def build_edges_data(network_parser: Any) -> EdgesData:
@@ -278,8 +289,10 @@ def shortest_path_dijkstra(
     green_ids: Optional[Set[str]] = None,
     node_positions: Optional[Dict[str, Tuple[float, float]]] = None,
     goal_xy: Optional[Tuple[float, float]] = None,
+    edges_in_polygon: Optional[Set[str]] = None,
 ) -> List[str]:
-    """Shortest path from start edge to end edge. Edge weights: orange=1, green=10, other=100.
+    """Shortest path from start edge to end edge. Edge weights: orange=1, green=10, other=1000.
+    If edges_in_polygon is provided, only edges inside the polygon are used.
     If node_positions and goal_xy are provided, uses A* with heuristic = distance to goal (admissible).
     Returns list of edge_ids.
     """
@@ -294,10 +307,12 @@ def shortest_path_dijkstra(
             return 1
         if eid in green_ids:
             return 10
-        return 100
+        return 1000
 
     adj: Dict[str, List[Tuple[str, str, float]]] = {}
     for eid, ed in edges_dict.items():
+        if edges_in_polygon is not None and eid not in edges_in_polygon:
+            continue
         from_id = ed.get("from")
         to_id = ed.get("to")
         if not from_id or not to_id:

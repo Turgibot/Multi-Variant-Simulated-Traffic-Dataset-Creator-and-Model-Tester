@@ -1860,8 +1860,8 @@ class DebugTrajectoryPage(QWidget):
             """Flip Y coordinate to match network display orientation."""
             return y_max + y_min - y
         
-        # Red pen for edges inside bounding box
-        red_pen = QPen(QColor(255, 0, 0), 3)  # Red, 3px width
+        # Red pen for edges inside bounding box (pale red, more transparent)
+        red_pen = QPen(QColor(255, 180, 180, 140), 3)  # Pale red, 3px width
         red_pen.setStyle(Qt.SolidLine)
         
         edges_in_box = []

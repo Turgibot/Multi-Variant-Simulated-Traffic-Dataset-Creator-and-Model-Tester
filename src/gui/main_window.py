@@ -468,27 +468,6 @@ class WelcomePage(QWidget):
         )
         action_layout.addWidget(convert_btn)
         
-        # Debug Trajectory button (next to Dataset Conversion)
-        debug_btn = QPushButton("🔧 Debug Trajectory")
-        debug_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #9C27B0;
-                color: white;
-                border: none;
-                padding: 6px 12px;
-                border-radius: 4px;
-                font-weight: bold;
-                font-size: 11px;
-            }
-            QPushButton:hover {
-                background-color: #7B1FA2;
-            }
-        """)
-        debug_btn.clicked.connect(
-            lambda: self.debug_trajectory_clicked.emit(project['name'])
-        )
-        action_layout.addWidget(debug_btn)
-        
         # Model Testing button
         model_btn = QPushButton("Model Testing")
         model_btn.setStyleSheet("""
