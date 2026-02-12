@@ -8,7 +8,7 @@ import urllib.request
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from PySide6.QtCore import QPointF, QRectF, Qt, QThread, Signal
+from PySide6.QtCore import QPointF, QRectF, Qt, QThread, Signal, QTimer
 from PySide6.QtGui import (QBrush, QColor, QImage, QPainter, QPen, QPixmap,
                            QPolygonF, QWheelEvent)
 from PySide6.QtWidgets import (QGraphicsEllipseItem, QGraphicsItem,
@@ -77,6 +77,56 @@ class TileDownloadWorker(QThread):
                 print(f"Failed to download tile {z}/{x}/{y}: {e}")
         
         self.all_done.emit()
+
+
+class NetworkPrepareWorker(QThread):
+    """Worker thread for preparing network edge and node data (copy, flip Y)."""
+
+    finished = Signal(object, object, object, object, float, float)
+    # edges_data, nodes_data, conv_boundary, bounds, y_min, y_max
+
+    def __init__(self, network_parser, roads_junctions_only: bool = False, parent=None):
+        super().__init__(parent)
+        self.network_parser = network_parser
+        self.roads_junctions_only = roads_junctions_only
+
+    def run(self):
+        import copy
+        conv_boundary = self.network_parser.conv_boundary
+        bounds = self.network_parser.get_bounds()
+        y_min = conv_boundary['y_min'] if conv_boundary else (bounds['y_min'] if bounds else 0)
+        y_max = conv_boundary['y_max'] if conv_boundary else (bounds['y_max'] if bounds else 0)
+
+        def flip_y(y):
+            return y_max + y_min - y
+
+        edges_data = []
+        edges = self.network_parser.get_edges()
+        for edge_id, edge_data in edges.items():
+            if self.roads_junctions_only and not edge_data.get('allows_passenger', True):
+                continue
+            flipped_data = copy.deepcopy(edge_data)
+            if flipped_data.get('lanes'):
+                for lane in flipped_data['lanes']:
+                    if lane.get('shape'):
+                        lane['shape'] = [(x, flip_y(y)) for x, y in lane['shape']]
+            edges_data.append((edge_id, flipped_data))
+
+        nodes_data = []
+        nodes = self.network_parser.get_nodes()
+        junctions = self.network_parser.get_junctions()
+        nodes_to_use = nodes if nodes else junctions
+        for node_id, node_data in nodes_to_use.items():
+            x = node_data.get('x', 0)
+            y = flip_y(node_data.get('y', 0))
+            shape_points = node_data.get('shape', [])
+            if shape_points:
+                flipped_shape = [(px, flip_y(py)) for px, py in shape_points]
+            else:
+                flipped_shape = None
+            nodes_data.append((node_id, x, y, flipped_shape))
+
+        self.finished.emit(edges_data, nodes_data, conv_boundary, bounds, y_min, y_max)
 
 
 class NetworkEdgeItem(QGraphicsItem):
@@ -290,6 +340,7 @@ class SimulationView(QGraphicsView):
         # OSM map tile items
         self.tile_items = {}  # Dict of (z, x, y) -> QGraphicsPixmapItem
         self.tile_worker = None
+        self._network_prepare_worker = None
         self.show_osm_map = False
         self.network_parser = None  # Store reference for OSM tiles
         
@@ -310,196 +361,93 @@ class SimulationView(QGraphicsView):
         self._network_y_max = 0
     
     def load_network(self, network_parser, roads_junctions_only: bool = False):
-        """Load network from parser.
-        
-        Args:
-            network_parser: The NetworkParser instance containing the network data
-            roads_junctions_only: If True, only show edges that allow passenger vehicles
-                                  and use junctions instead of all nodes (default: False to show complete network)
-        """
-        import copy
-
-        from PySide6.QtWidgets import QApplication
-
-        # Store network parser reference for OSM tiles
+        """Load network from parser asynchronously."""
         self.network_parser = network_parser
-
-        # Clear existing items
         self.clear_network()
-        
-        # Get bounds for Y-flip calculation
-        # Use conv_boundary for Y-flip to match the coordinate system used by GPS-to-SUMO conversion
-        # This ensures network, tiles, and GPS points all use the same coordinate system
-        conv_boundary = network_parser.conv_boundary
-        bounds = network_parser.get_bounds()  # Keep for fitInView
-        
-        if conv_boundary:
-            # Use convBoundary bounds for Y-flip (matches GPS-to-SUMO conversion coordinate system)
-            self._network_y_min = conv_boundary['y_min']
-            self._network_y_max = conv_boundary['y_max']
-        elif bounds:
-            # Fallback to recalculated bounds if convBoundary not available
-            self._network_y_min = bounds['y_min']
-            self._network_y_max = bounds['y_max']
-        
-        # #region agent log
-        with open('/home/guy/Projects/Traffic/Multi-Variant-Simulated-Traffic-Dataset-Creator-and-Model-Tester/.cursor/debug.log', 'a') as f:
-            import json
-            f.write(json.dumps({"sessionId":"debug-session","runId":"post-fix3","hypothesisId":"E","location":"simulation_view.py:load_network","message":"Network Y-flip bounds set","data":{"conv_boundary":conv_boundary,"bounds":bounds,"y_min":self._network_y_min,"y_max":self._network_y_max},"timestamp":int(__import__('time').time()*1000)}) + '\n')
-        # #endregion
-        
-        def flip_y(y):
-            """Flip Y coordinate to correct north/south orientation."""
-            # Flip around the center: new_y = y_max + y_min - y
-            return self._network_y_max + self._network_y_min - y
-        
-        # Disable updates during loading for better performance
+        if self._network_prepare_worker and self._network_prepare_worker.isRunning():
+            self._network_prepare_worker.terminate()
+            self._network_prepare_worker.wait()
+        self._network_prepare_worker = NetworkPrepareWorker(network_parser, roads_junctions_only)
+        self._network_prepare_worker.finished.connect(self._on_network_prepare_finished)
+        self._network_prepare_worker.start()
+
+    def _on_network_prepare_finished(self, edges_data, nodes_data, conv_boundary, bounds, y_min, y_max):
+        """Add prepared network items in batches (runs on main thread)."""
+        self._network_prepare_worker = None
+        self._network_y_min = y_min
+        self._network_y_max = y_max
+        self._network_prepare_edges = edges_data
+        self._network_prepare_nodes = nodes_data
+        self._network_prepare_conv_boundary = conv_boundary
+        self._network_prepare_bounds = bounds
+        self._network_prepare_edge_idx = 0
+        self._network_prepare_node_idx = 0
+        self._network_prepare_batch_size = 300
         try:
             self.setUpdatesEnabled(False)
-        except RuntimeError:
-            # View was deleted, abort
-            return
-        
-        # Temporarily disable indexing for faster batch insertion
-        try:
             if self.scene is not None:
                 self.scene.setItemIndexMethod(QGraphicsScene.NoIndex)
         except RuntimeError:
-            # Scene was deleted, abort
             return
-        
+        QTimer.singleShot(0, self._add_network_batch)
+
+    def _add_network_batch(self):
+        """Add one batch of edges/nodes."""
         try:
-            # Add edges (optionally filtered to roads only)
-            edges = network_parser.get_edges()
-            edge_count = 0
-            batch_size = 500  # Process events every N items
-            
-            # #region agent log - Sample first edge to compare coordinates
-            first_edge_logged = False
-            # #endregion
-            
-            for edge_id, edge_data in edges.items():
-                # Filter to roads only if requested: only show edges that allow passenger vehicles
-                if roads_junctions_only and not edge_data.get('allows_passenger', True):
-                    continue
-                
-                # Create a copy of edge_data with flipped Y coordinates
-                flipped_edge_data = copy.deepcopy(edge_data)
-                if flipped_edge_data.get('lanes'):
-                    for lane in flipped_edge_data['lanes']:
-                        if lane.get('shape'):
-                            # #region agent log - Log first edge coordinates
-                            if not first_edge_logged and len(lane['shape']) > 0:
-                                orig_x, orig_y = lane['shape'][0]
-                                flipped_y = flip_y(orig_y)
-                                # Convert a GPS point at the same location for comparison
-                                orig_boundary = network_parser.orig_boundary
-                                if orig_boundary:
-                                    # Estimate GPS from SUMO (reverse conversion)
-                                    conv_boundary = network_parser.conv_boundary
-                                    if conv_boundary:
-                                        lon_norm = (orig_x - conv_boundary['x_min']) / (conv_boundary['x_max'] - conv_boundary['x_min']) if conv_boundary['x_max'] != conv_boundary['x_min'] else 0
-                                        lat_norm = (orig_y - conv_boundary['y_min']) / (conv_boundary['y_max'] - conv_boundary['y_min']) if conv_boundary['y_max'] != conv_boundary['y_min'] else 0
-                                        test_lon = orig_boundary['lon_min'] + lon_norm * (orig_boundary['lon_max'] - orig_boundary['lon_min'])
-                                        test_lat = orig_boundary['lat_min'] + lat_norm * (orig_boundary['lat_max'] - orig_boundary['lat_min'])
-                                        gps_to_sumo = network_parser.gps_to_sumo_coords(test_lon, test_lat)
-                                        if gps_to_sumo:
-                                            gps_sumo_x, gps_sumo_y = gps_to_sumo
-                                            gps_sumo_y_flipped = flip_y(gps_sumo_y)
-                                            with open('/home/guy/Projects/Traffic/Multi-Variant-Simulated-Traffic-Dataset-Creator-and-Model-Tester/.cursor/debug.log', 'a') as f:
-                                                import json
-                                                f.write(json.dumps({"sessionId":"debug-session","runId":"post-fix4","hypothesisId":"F","location":"simulation_view.py:load_network","message":"Network edge vs GPS conversion comparison","data":{"edge_orig":(orig_x,orig_y),"edge_flipped_y":flipped_y,"gps_est":(test_lon,test_lat),"gps_to_sumo":gps_to_sumo,"gps_sumo_flipped_y":gps_sumo_y_flipped,"y_flip_bounds":(self._network_y_min,self._network_y_max)},"timestamp":int(__import__('time').time()*1000)}) + '\n')
-                                            first_edge_logged = True
-                            # #endregion
-                            lane['shape'] = [(x, flip_y(y)) for x, y in lane['shape']]
-                
-                edge_item = NetworkEdgeItem(flipped_edge_data)
-                try:
+            if self.scene is None:
+                return
+            edges = self._network_prepare_edges
+            nodes = self._network_prepare_nodes
+            batch_start = self._network_prepare_edge_idx
+            batch_end = min(batch_start + self._network_prepare_batch_size, len(edges))
+            for i in range(batch_start, batch_end):
+                edge_id, flipped_data = edges[i]
+                edge_item = NetworkEdgeItem(flipped_data)
+                self.scene.addItem(edge_item)
+                self.edge_items[edge_id] = edge_item
+            self._network_prepare_edge_idx = batch_end
+            if batch_end >= len(edges):
+                node_start = self._network_prepare_node_idx
+                node_end = min(node_start + self._network_prepare_batch_size, len(nodes))
+                for i in range(node_start, node_end):
+                    node_id, x, y, shape_points = nodes[i]
+                    node_item = NetworkNodeItem(node_id, x, y, shape_points=shape_points)
+                    self.scene.addItem(node_item)
+                    self.node_items[node_id] = node_item
+                self._network_prepare_node_idx = node_end
+                if node_end >= len(nodes):
+                    self._network_prepare_edges = None
+                    self._network_prepare_nodes = None
                     if self.scene is not None:
-                        self.scene.addItem(edge_item)
-                        self.edge_items[edge_id] = edge_item
-                    else:
-                        break  # Scene deleted, stop processing
-                except RuntimeError:
-                    break  # Scene deleted, stop processing
-                
-                # Process events periodically to keep UI responsive
-                edge_count += 1
-                if edge_count % batch_size == 0:
-                    QApplication.processEvents()
-            
-            # Show all nodes (not just junctions) for complete network display
-            node_count = 0
-            nodes = network_parser.get_nodes()
-            junctions = network_parser.get_junctions()
-            
-            # Use all nodes if available, otherwise fall back to junctions
-            nodes_to_display = nodes if nodes else junctions
-            
-            for node_id, node_data in nodes_to_display.items():
-                x = node_data.get('x', 0)
-                y = flip_y(node_data.get('y', 0))
-                # Get junction shape if available (flip Y coordinates)
-                shape_points = node_data.get('shape', [])
-                if shape_points:
-                    flipped_shape = [(px, flip_y(py)) for px, py in shape_points]
-                else:
-                    flipped_shape = None
-                node_item = NetworkNodeItem(node_id, x, y, shape_points=flipped_shape)
-                try:
-                    if self.scene is not None:
-                        self.scene.addItem(node_item)
-                        self.node_items[node_id] = node_item
-                    else:
-                        break  # Scene deleted, stop processing
-                except RuntimeError:
-                    break  # Scene deleted, stop processing
-                
-                node_count += 1
-                if node_count % batch_size == 0:
-                    QApplication.processEvents()
-        finally:
-            # Re-enable BSP indexing after loading
-            # Check if scene still exists (it might have been deleted)
-            try:
-                if self.scene is not None:
-                    self.scene.setItemIndexMethod(QGraphicsScene.BspTreeIndex)
-            except RuntimeError:
-                # Scene was deleted, skip
-                pass
+                        self.scene.setItemIndexMethod(QGraphicsScene.BspTreeIndex)
+                    self.setUpdatesEnabled(True)
+                    conv_boundary = self._network_prepare_conv_boundary
+                    bounds = self._network_prepare_bounds
+                    if conv_boundary:
+                        rect = QRectF(
+                            conv_boundary['x_min'],
+                            conv_boundary['y_min'],
+                            conv_boundary['x_max'] - conv_boundary['x_min'],
+                            conv_boundary['y_max'] - conv_boundary['y_min']
+                        )
+                        self.fitInView(rect, Qt.KeepAspectRatio)
+                    elif bounds:
+                        rect = QRectF(
+                            bounds['x_min'],
+                            bounds['y_min'],
+                            bounds['x_max'] - bounds['x_min'],
+                            bounds['y_max'] - bounds['y_min']
+                        )
+                        self.fitInView(rect, Qt.KeepAspectRatio)
+                    self.current_zoom = 1.0
+                    return
+            QTimer.singleShot(0, self._add_network_batch)
+        except RuntimeError:
+            # View or scene deleted
             try:
                 self.setUpdatesEnabled(True)
             except RuntimeError:
-                # View was deleted, skip
                 pass
-        
-        # Fit view to network bounds
-        # Use conv_boundary bounds for fitInView to match the coordinate system
-        if conv_boundary:
-            # #region agent log
-            with open('/home/guy/Projects/Traffic/Multi-Variant-Simulated-Traffic-Dataset-Creator-and-Model-Tester/.cursor/debug.log', 'a') as f:
-                import json
-                f.write(json.dumps({"sessionId":"debug-session","runId":"post-fix4","hypothesisId":"G","location":"simulation_view.py:load_network","message":"fitInView bounds","data":{"using_conv_boundary":conv_boundary,"recalculated_bounds":bounds},"timestamp":int(__import__('time').time()*1000)}) + '\n')
-            # #endregion
-            
-            # Use conv_boundary for fitInView to match coordinate system
-            rect = QRectF(
-                conv_boundary['x_min'],
-                conv_boundary['y_min'],
-                conv_boundary['x_max'] - conv_boundary['x_min'],
-                conv_boundary['y_max'] - conv_boundary['y_min']
-            )
-            self.fitInView(rect, Qt.KeepAspectRatio)
-            self.current_zoom = 1.0
-        elif bounds:
-            rect = QRectF(
-                bounds['x_min'],
-                bounds['y_min'],
-                bounds['x_max'] - bounds['x_min'],
-                bounds['y_max'] - bounds['y_min']
-            )
-            self.fitInView(rect, Qt.KeepAspectRatio)
-            self.current_zoom = 1.0
     
     def clear_network(self):
         """Clear all network items."""

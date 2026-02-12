@@ -12,14 +12,14 @@ from collections import defaultdict
 from pathlib import Path
 from typing import List, Optional, Set, Tuple
 
-from PySide6.QtCore import QPointF, QRectF, Qt, QThread, Signal
+from PySide6.QtCore import QPointF, QRectF, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QBrush, QColor, QFont, QPen, QPolygonF
 from PySide6.QtWidgets import (QCheckBox, QFileDialog, QFrame,
-                               QGraphicsPolygonItem,
-                               QGraphicsDropShadowEffect, QGroupBox,
-                               QHBoxLayout, QLabel, QLineEdit, QMessageBox,
-                               QProgressBar, QPushButton, QScrollArea,
-                               QStackedWidget, QTextEdit, QVBoxLayout, QWidget)
+                               QGraphicsDropShadowEffect, QGraphicsPolygonItem,
+                               QGroupBox, QHBoxLayout, QLabel, QLineEdit,
+                               QMessageBox, QProgressBar, QPushButton,
+                               QScrollArea, QStackedWidget, QTextEdit,
+                               QVBoxLayout, QWidget)
 
 from src.gui.simulation_view import SimulationView
 from src.utils.network_parser import NetworkParser
@@ -398,6 +398,119 @@ class DownloadWorker(QThread):
                 f.write(config_xml)
 
 
+def _load_trip_polyline_static(csv_path: str, trip_num: int) -> list:
+    """Load a specific trip's polyline from the CSV file. Thread-safe."""
+    import ast
+    with open(csv_path, 'r', encoding='utf-8') as f:
+        next(f, None)  # Skip header
+        for i, line in enumerate(f, 1):
+            if i == trip_num:
+                try:
+                    polyline_start = line.rfind('"[[')
+                    if polyline_start == -1:
+                        polyline_start = line.rfind('"[]')
+                    if polyline_start != -1:
+                        polyline_str = line[polyline_start+1:].strip().rstrip('"')
+                        return ast.literal_eval(polyline_str)
+                except Exception:
+                    pass
+                return []
+    return []
+
+
+def _prepare_route_data_static(
+    original_polyline: List[List[float]],
+) -> Tuple[object, int, int, list]:
+    """Prepare route data (validation, trim indices). Thread-safe."""
+    validation_result = validate_trip_segments(original_polyline)
+    real_start_idx, real_end_idx = _detect_real_start_and_end_static(original_polyline)
+    segment_trim_data = []
+    if validation_result.invalid_segment_count > 0:
+        split_segments = _split_at_invalid_segments_static(original_polyline)
+        for segment in split_segments:
+            if len(segment) >= 2:
+                seg_start, seg_end = _detect_real_start_and_end_static(segment)
+                segment_trim_data.append((seg_start, seg_end))
+    return validation_result, real_start_idx, real_end_idx, segment_trim_data
+
+
+def _detect_real_start_and_end_static(polyline: list) -> Tuple[int, int]:
+    """Detect real start and end indices. Thread-safe."""
+    if not polyline or len(polyline) < 3:
+        return 0, len(polyline) - 1 if polyline else 0
+    STATIC_THRESHOLD = 15.0
+    R = 6371000
+
+    def haversine_m(coord1, coord2):
+        lat1, lon1 = coord1[0], coord1[1]
+        lat2, lon2 = coord2[0], coord2[1]
+        dlat = math.radians(lat2 - lat1)
+        dlon = math.radians(lon2 - lon1)
+        a = (math.sin(dlat / 2) ** 2 +
+             math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) *
+             math.sin(dlon / 2) ** 2)
+        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+        return R * c
+
+    real_start = 0
+    for i in range(len(polyline) - 1):
+        if haversine_m(polyline[i], polyline[i + 1]) > STATIC_THRESHOLD:
+            real_start = i
+            break
+    real_end = len(polyline) - 1
+    for i in range(len(polyline) - 1, 0, -1):
+        if haversine_m(polyline[i - 1], polyline[i]) > STATIC_THRESHOLD:
+            real_end = i
+            break
+    return real_start, real_end
+
+
+def _split_at_invalid_segments_static(polyline: list) -> list:
+    """Split polyline at invalid segments. Thread-safe."""
+    if not polyline or len(polyline) < 2:
+        return [polyline] if polyline else []
+    validation_result = validate_trip_segments(polyline)
+    invalid_indices = set(validation_result.invalid_segment_indices)
+    if not invalid_indices:
+        return [polyline]
+    segments = []
+    current_segment = [polyline[0]]
+    for i in range(1, len(polyline)):
+        if i - 1 in invalid_indices:
+            segments.append(current_segment)
+            current_segment = [polyline[i]]
+        else:
+            current_segment.append(polyline[i])
+    if current_segment:
+        segments.append(current_segment)
+    return segments
+
+
+class RouteLoadWorker(QThread):
+    """Worker thread for loading route polyline and preparing route data."""
+
+    finished = Signal(bool, object, str)  # success, result_tuple or None, error_msg
+
+    def __init__(self, train_path: str, route_num: int, parent=None):
+        super().__init__(parent)
+        self.train_path = train_path
+        self.route_num = route_num
+
+    def run(self):
+        try:
+            original_polyline = _load_trip_polyline_static(self.train_path, self.route_num)
+            if not original_polyline or len(original_polyline) < 2:
+                self.finished.emit(False, None, "No valid GPS data")
+                return
+            invalid_segments, real_start_idx, real_end_idx, segment_trim_data = _prepare_route_data_static(
+                original_polyline
+            )
+            result = (original_polyline, invalid_segments, real_start_idx, real_end_idx, segment_trim_data)
+            self.finished.emit(True, result, "")
+        except Exception as e:
+            self.finished.emit(False, None, str(e))
+
+
 class DatasetConversionPage(QWidget):
     """Page for Porto dataset conversion with map view."""
     
@@ -418,7 +531,15 @@ class DatasetConversionPage(QWidget):
         self.INTERMEDIATE_CANDIDATES = 6  # Number of candidate edges for intermediate GPS points
         self.download_worker = None
         self.network_loader_worker = None
+        self._route_load_worker = None
         self._loading_settings = False  # Flag to prevent save during load
+        self._save_settings_timer = QTimer(self)
+        self._save_settings_timer.setSingleShot(True)
+        self._save_settings_timer.timeout.connect(self.save_settings)
+        self._validation_timer = QTimer(self)
+        self._validation_timer.setSingleShot(True)
+        self._validation_timer.timeout.connect(self._on_validation_timer_fired)
+        self._validation_args = None  # (path, file_type) for debounced validation
         self._train_trip_count = None  # Cached trip count
         self._route_items = []  # Graphics items for current route display
         self._candidate_edge_items = []  # Green/orange edge items (separate for fast toggle)
@@ -438,7 +559,6 @@ class DatasetConversionPage(QWidget):
         self.load_settings()
         
         # Use QTimer to check resources after UI is shown (non-blocking)
-        from PySide6.QtCore import QTimer
         QTimer.singleShot(100, self.check_resources)
     
     def init_ui(self):
@@ -1737,28 +1857,26 @@ class DatasetConversionPage(QWidget):
     def on_sumo_home_changed(self, path: str):
         """Handle SUMO_HOME path change."""
         self.verify_sumo_installation()
-        self.save_settings()
+        self._schedule_save_settings()
     
     def on_train_path_changed(self, path: str):
         """Handle train CSV path change."""
-        self.validate_dataset_path(path, "train")
-        self.save_settings()
-        self.check_zones_visibility()
+        self._schedule_path_validation(path, "train")
+        self._schedule_save_settings()
     
     def on_test_path_changed(self, path: str):
         """Handle test CSV path change."""
-        self.validate_dataset_path(path, "test")
-        self.save_settings()
-        self.check_zones_visibility()
+        self._schedule_path_validation(path, "test")
+        self._schedule_save_settings()
     
     def on_zones_changed(self, value: int):
         """Handle zones slider value change."""
         self.zones_value_label.setText(str(value))
-        self.save_settings()
+        self._schedule_save_settings()
     
     def on_osm_map_changed(self, state: int):
         """Handle OSM map checkbox change."""
-        self.save_settings()
+        self._schedule_save_settings()
         
         if self.network_parser:
             show_osm_map = self.osm_map_checkbox.isChecked()
@@ -1776,12 +1894,7 @@ class DatasetConversionPage(QWidget):
                     pass  # Not connected yet
                 self.map_view.osm_map_loading_finished.connect(self._on_osm_map_loading_finished)
                 
-                # Force UI update
-                from PySide6.QtWidgets import QApplication
-                QApplication.processEvents()
-                
                 # Use QTimer to defer the work
-                from PySide6.QtCore import QTimer
                 QTimer.singleShot(50, self._do_osm_map_toggle)
             else:
                 # Disabling is quick, do it directly
@@ -1800,7 +1913,7 @@ class DatasetConversionPage(QWidget):
     
     def on_show_network_changed(self, state: int):
         """Handle show network checkbox change."""
-        self.save_settings()
+        self._schedule_save_settings()
         
         if self.map_view:
             show_network = self.show_network_checkbox.isChecked()
@@ -1809,7 +1922,7 @@ class DatasetConversionPage(QWidget):
     
     def on_map_offset_changed(self, value: float):
         """Handle map offset change."""
-        self.save_settings()
+        self._schedule_save_settings()
         
         if self.map_view:
             x_offset = self.map_offset_x_spinbox.value()
@@ -2256,9 +2369,6 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
         # Change cursor to wait
         from PySide6.QtGui import QCursor
         self.setCursor(QCursor(Qt.WaitCursor))
-        # Force UI update
-        from PySide6.QtWidgets import QApplication
-        QApplication.processEvents()
     
     def _hide_busy_indicator(self):
         """Hide busy indicator and show map."""
@@ -2280,9 +2390,6 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
         self.zoom_out_btn.setEnabled(True)
         self.zoom_default_btn.setEnabled(True)
         self.zoom_reset_btn.setEnabled(True)
-        # Force UI update
-        from PySide6.QtWidgets import QApplication
-        QApplication.processEvents()
     
     def zoom_in(self):
         """Zoom in on the map."""
@@ -2414,7 +2521,6 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
             self.map_offset_y_spinbox.setVisible(False)
         
         # Hide progress section after a short delay
-        from PySide6.QtCore import QTimer
         QTimer.singleShot(2000, self.hide_progress_section)
     
     def hide_progress_section(self):
@@ -2435,6 +2541,25 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
         config_dir = Path(self.project_path) / 'config'
         config_dir.mkdir(parents=True, exist_ok=True)
         return config_dir / SETTINGS_FILE
+    
+    def _schedule_save_settings(self, delay_ms: int = 400):
+        """Schedule a debounced save; cancels any pending save."""
+        self._save_settings_timer.stop()
+        self._save_settings_timer.start(delay_ms)
+    
+    def _schedule_path_validation(self, path: str, file_type: str, delay_ms: int = 300):
+        """Schedule debounced path validation."""
+        self._validation_args = (path, file_type)
+        self._validation_timer.stop()
+        self._validation_timer.start(delay_ms)
+    
+    def _on_validation_timer_fired(self):
+        """Run deferred path validation and check zones."""
+        if self._validation_args:
+            path, file_type = self._validation_args
+            self._validation_args = None
+            self.validate_dataset_path(path, file_type)
+            self.check_zones_visibility()
     
     def save_settings(self):
         """Save current settings to JSON file."""
@@ -2481,10 +2606,16 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
                     self.sumo_home_input.setText(settings['sumo_home'])
                 
                 if 'train_csv_path' in settings and settings['train_csv_path']:
+                    self.train_path_input.blockSignals(True)
                     self.train_path_input.setText(settings['train_csv_path'])
+                    self.train_path_input.blockSignals(False)
+                    self.validate_dataset_path(settings['train_csv_path'], "train")
                 
                 if 'test_csv_path' in settings and settings['test_csv_path']:
+                    self.test_path_input.blockSignals(True)
                     self.test_path_input.setText(settings['test_csv_path'])
+                    self.test_path_input.blockSignals(False)
+                    self.validate_dataset_path(settings['test_csv_path'], "test")
                 
                 if 'num_zones' in settings:
                     self.zones_slider.setValue(settings['num_zones'])
@@ -2538,6 +2669,7 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
                 if 'draw_gps_points_path' in settings:
                     self.draw_gps_points_path_checkbox.setChecked(settings['draw_gps_points_path'])
                 
+                self.check_zones_visibility()
                 self.log("Settings loaded from config")
         except Exception as e:
             # Silently fail - use defaults
@@ -2602,21 +2734,21 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
     
     def _on_fix_invalid_segments_changed(self):
         """Handle fix invalid segments checkbox change."""
-        self.save_settings()
+        self._schedule_save_settings()
         # Refresh the route display if a route is currently shown
         if hasattr(self, '_route_items') and self._route_items:
             self.show_selected_route()
     
     def _on_fix_route_changed(self):
         """Handle fix route checkbox change."""
-        self.save_settings()
+        self._schedule_save_settings()
         # Refresh the route display if a route is currently shown
         if hasattr(self, '_route_items') and self._route_items:
             self.show_selected_route()
 
     def _on_show_polygon_changed(self):
         """Handle Show Polygon checkbox change."""
-        self.save_settings()
+        self._schedule_save_settings()
         if hasattr(self, '_route_items') and self._route_items:
             self.show_selected_route()
 
@@ -2633,7 +2765,7 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
             self._segment_show_sumo_route_checkboxes.clear()
             self._segment_sumo_route_status_labels.clear()
             return
-        # Only recreate widgets when segment count changed (preserve checkbox states on redraw)
+        # Recreate widgets when segment count changed
         if len(self._segment_show_candidate_checkboxes) != len(segments):
             while self.segment_subsections_layout.count():
                 item = self.segment_subsections_layout.takeAt(0)
@@ -2655,7 +2787,7 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
                 cb_sumo = QCheckBox("Show SUMO route")
                 cb_sumo.setToolTip("Display the SUMO shortest path (purple) for this subset (view_network logic)")
                 cb_sumo.setStyleSheet("font-size: 9px; color: #333;")
-                has_route = self._segment_has_sumo_route(segment, seg_idx=i)
+                has_route, status_msg = self._segment_has_sumo_route(segment, seg_idx=i)
                 if has_route:
                     cb_sumo.setChecked(True)
                     cb_sumo.setEnabled(True)
@@ -2663,8 +2795,10 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
                 else:
                     cb_sumo.setChecked(False)
                     cb_sumo.setEnabled(False)
-                    status_label = QLabel("No route found")
-                    status_label.setStyleSheet("font-size: 9px; color: #999;")
+                    status_label = QLabel(status_msg or "No route found")
+                    status_label.setStyleSheet("font-size: 9px; color: #c62828;")
+                status_label.setMinimumWidth(200)
+                status_label.setWordWrap(True)
                 cb_sumo.stateChanged.connect(self._on_segment_checkbox_changed)
                 sumo_row.addWidget(cb_sumo)
                 sumo_row.addWidget(status_label)
@@ -2681,6 +2815,25 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
                 self._segment_show_candidate_checkboxes.append(cb_candidate)
                 subsection.setLayout(sub_layout)
                 self.segment_subsections_layout.addWidget(subsection)
+        else:
+            # Same segment count: update status labels for new route data
+            for i, segment in enumerate(segments):
+                if i >= len(self._segment_sumo_route_status_labels):
+                    break
+                has_route, status_msg = self._segment_has_sumo_route(segment, seg_idx=i)
+                cb_sumo = self._segment_show_sumo_route_checkboxes[i]
+                status_label = self._segment_sumo_route_status_labels[i]
+                cb_sumo.blockSignals(True)
+                if has_route:
+                    cb_sumo.setChecked(True)
+                    cb_sumo.setEnabled(True)
+                    status_label.setText("")
+                else:
+                    cb_sumo.setChecked(False)
+                    cb_sumo.setEnabled(False)
+                    status_label.setText(status_msg or "No route found")
+                    status_label.setStyleSheet("font-size: 9px; color: #c62828;")
+                cb_sumo.blockSignals(False)
         self.segment_subsections_group.setVisible(True)
 
     def _on_segment_checkbox_changed(self):
@@ -2707,7 +2860,7 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
             if self._segment_show_candidate_checkboxes[i].isChecked():
                 self._draw_segment_candidate_edges(segment)
             if self._segment_show_sumo_route_checkboxes[i].isChecked():
-                self._draw_segment_sumo_route(segment)
+                self._draw_segment_sumo_route(segment, seg_idx=i)
     
     def _prepare_route_data(self, original_polyline: List[List[float]]):
         """
@@ -2765,60 +2918,59 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
             # Use cached data (checkbox change - no need to reload)
             original_polyline = self._cached_original_polyline
             invalid_segments, real_start_idx, real_end_idx, segment_trim_data = self._cached_route_data
-            original_length = len(original_polyline)
             self.log(f"Using cached data for route #{route_num}")
-        else:
-            # New route selected - load and prepare data
-            self.log(f"Loading route #{route_num}...")
-            self.route_info_label.setText(f"Loading route #{route_num}...")
-            
-            # Reset Step 1 route edges set for new route ONLY if it's a different route number
-            # Don't clear if we're just reloading the same route (e.g., for Step 2)
-            if not hasattr(self, '_last_route_num') or self._last_route_num != route_num:
-                self._step1_route_edges = set()
-                self._step1_final_segments = []  # Clear Step 1 final segments for new route
-                # Reset all Step 2 diagnostic flags for new route
-                self._step2_coord_logged = False
-                self._step2_comparison_logged = False
-                self._step2_distance_diagnostic_logged = False
-                self._step2_return_logged = False
-                self._step2_missing_diagnostic_logged = False
-            self._last_route_num = route_num
-            
-            # Load the specific trip's polyline
-            try:
-                original_polyline = self._load_trip_polyline(train_path, route_num)
-                
-                if not original_polyline or len(original_polyline) < 2:
-                    self.route_info_label.setText(f"Route #{route_num}: No valid GPS data")
-                    self.route_info_label.setStyleSheet("color: #666; font-size: 9px;")
-                    self.log(f"Route #{route_num} has no valid GPS data")
-                    # Clear cache
-                    self._cached_route_num = None
-                    self._cached_original_polyline = None
-                    self._cached_route_data = None
-                    return
-                
-                original_length = len(original_polyline)
-                
-                # Prepare route data once (expensive operations done here)
-                invalid_segments, real_start_idx, real_end_idx, segment_trim_data = self._prepare_route_data(original_polyline)
-                
-                # Cache the data for this route
-                self._cached_route_num = route_num
-                self._cached_original_polyline = original_polyline
-                self._cached_route_data = (invalid_segments, real_start_idx, real_end_idx, segment_trim_data)
-                
-            except Exception as e:
-                self.route_info_label.setText(f"Error loading route: {str(e)[:30]}")
-                self.route_info_label.setStyleSheet("color: #f44336; font-size: 9px;")
-                self.log(f"Error loading route #{route_num}: {e}")
-                # Clear cache on error
-                self._cached_route_num = None
-                self._cached_original_polyline = None
-                self._cached_route_data = None
-                return
+            self._apply_route_display(
+                original_polyline, invalid_segments, real_start_idx, real_end_idx, segment_trim_data, route_num
+            )
+            return
         
+        # New route - load in background
+        if self._route_load_worker and self._route_load_worker.isRunning():
+            return  # Already loading
+        self.log(f"Loading route #{route_num}...")
+        self.route_info_label.setText(f"Loading route #{route_num}...")
+        self.show_route_btn.setEnabled(False)
+        if not hasattr(self, '_last_route_num') or self._last_route_num != route_num:
+            self._step1_route_edges = set()
+            self._step1_final_segments = []
+            self._step2_coord_logged = False
+            self._step2_comparison_logged = False
+            self._step2_distance_diagnostic_logged = False
+            self._step2_return_logged = False
+            self._step2_missing_diagnostic_logged = False
+        self._last_route_num = route_num
+        self._route_load_worker = RouteLoadWorker(train_path, route_num)
+        self._route_load_worker.finished.connect(self._on_route_load_finished)
+        self._route_load_worker.start()
+
+    def _on_route_load_finished(self, success: bool, result, error_msg: str):
+        """Handle RouteLoadWorker completion."""
+        self.show_route_btn.setEnabled(True)
+        self._route_load_worker = None
+        route_num = self.route_spinbox.value()
+        if not success:
+            self.route_info_label.setText(
+                f"Route #{route_num}: {error_msg[:40]}" if error_msg else "Error loading route"
+            )
+            self.route_info_label.setStyleSheet("color: #f44336; font-size: 9px;")
+            self.log(f"Error loading route #{route_num}: {error_msg}")
+            self._cached_route_num = None
+            self._cached_original_polyline = None
+            self._cached_route_data = None
+            return
+        original_polyline, invalid_segments, real_start_idx, real_end_idx, segment_trim_data = result
+        self._cached_route_num = route_num
+        self._cached_original_polyline = original_polyline
+        self._cached_route_data = (invalid_segments, real_start_idx, real_end_idx, segment_trim_data)
+        self._apply_route_display(
+            original_polyline, invalid_segments, real_start_idx, real_end_idx, segment_trim_data, route_num
+        )
+
+    def _apply_route_display(
+        self, original_polyline, invalid_segments, real_start_idx, real_end_idx, segment_trim_data, route_num
+    ):
+        """Apply route data and draw on map (must run on main thread)."""
+        original_length = len(original_polyline)
         try:
             # Update labels with real start/end info
             if real_start_idx < len(original_polyline):
@@ -2910,7 +3062,7 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
                         if i < len(self._segment_show_candidate_checkboxes) and self._segment_show_candidate_checkboxes[i].isChecked():
                             self._draw_segment_candidate_edges(segment)
                         if i < len(self._segment_show_sumo_route_checkboxes) and self._segment_show_sumo_route_checkboxes[i].isChecked():
-                            self._draw_segment_sumo_route(segment)
+                            self._draw_segment_sumo_route(segment, seg_idx=i)
             
             # Build route info text
             display_polyline = segments[0] if segments else []
@@ -4769,7 +4921,7 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
     
     def _on_draw_gps_points_path_changed(self):
         """Handle draw GPS points path checkbox state change."""
-        self.save_settings()
+        self._schedule_save_settings()
         
         # If we have current segments, redraw the route (with or without GPS path)
         if self._current_segments is not None:
@@ -5028,13 +5180,20 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
                 edge_ids.add(edge_id)
         return edge_ids
 
-    def _segment_has_sumo_route(self, segment_polyline: List[List[float]], seg_idx: int = 0) -> bool:
-        """Check if a SUMO route exists for this segment (view_network logic). Returns True if route found
-        and all GPS points are within 100m of the route. Logs reason to activity log when rejected."""
+    MAX_SUMO_ROUTE_DISTANCE_M = 150.0  # Max distance from GPS point to route (reject if exceeded)
+
+    def _segment_has_sumo_route(self, segment_polyline: List[List[float]], seg_idx: int = 0) -> Tuple[bool, str]:
+        """Check if a SUMO route exists for this segment (view_network logic). Returns (True, '') if route found
+        and all GPS points are within MAX_SUMO_ROUTE_DISTANCE_M of the route. Returns (False, reason) when rejected."""
         seg_label = f"Segment {seg_idx + 1}"
-        if not self.network_parser or not segment_polyline or len(segment_polyline) < 2:
-            self.log(f"⚠️ {seg_label} SUMO route: not found (network not loaded or segment too short)")
-            return False
+        if not self.network_parser or not segment_polyline:
+            msg = "Network not loaded or segment empty"
+            self.log(f"⚠️ {seg_label} SUMO route: not found ({msg})")
+            return False, msg
+        if len(segment_polyline) < 3:
+            msg = "Too short (need at least 3 points)"
+            self.log(f"⚠️ {seg_label} SUMO route: rejected ({msg})")
+            return False, msg
         y_min = getattr(self.map_view, '_network_y_min', 0)
         y_max = getattr(self.map_view, '_network_y_max', 0)
 
@@ -5048,8 +5207,9 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
                 x, y = coords
                 sumo_points_flipped.append((x, flip_y(y)))
         if len(sumo_points_flipped) < 2:
-            self.log(f"⚠️ {seg_label} SUMO route: not found (could not convert GPS points to SUMO coordinates)")
-            return False
+            msg = "Could not convert GPS points to SUMO coordinates"
+            self.log(f"⚠️ {seg_label} SUMO route: not found ({msg})")
+            return False, msg
         if self._cached_edges_data is None:
             self._cached_edges_data = build_edges_data(self.network_parser)
         edges_data = self._cached_edges_data
@@ -5058,13 +5218,14 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
             edges_data, sumo_points_flipped, y_min, y_max, top_per_segment=5
         )
         if not start_id or not end_id:
-            self.log(f"⚠️ {seg_label} SUMO route: not found (no start or end edges for trajectory)")
-            return False
+            msg = "No start or end edges for trajectory"
+            self.log(f"⚠️ {seg_label} SUMO route: not found ({msg})")
+            return False, msg
         node_positions = build_node_positions(self.network_parser)
         goal_xy = sumo_points_flipped[-1]
         base_edges = self._compute_edges_in_polygon(self._current_segments) if self._current_segments else None
         max_tries = min(5, len(candidates or []))
-        max_star_distance_m = 100.0
+        max_star_distance_m = self.MAX_SUMO_ROUTE_DISTANCE_M
         worst_dist_overall = 0.0
         worst_idx_overall = 0
         for try_idx in range(max_tries):
@@ -5103,19 +5264,34 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
                         worst_dist = dist_m
                         worst_idx = idx
             if all_within:
-                return True
+                return True, ""
             if worst_dist > worst_dist_overall:
                 worst_dist_overall = worst_dist
                 worst_idx_overall = worst_idx
         if worst_dist_overall > max_star_distance_m:
-            self.log(f"⚠️ {seg_label} SUMO route: rejected (GPS point {worst_idx_overall + 1} is {worst_dist_overall:.0f}m from route, max {max_star_distance_m:.0f}m)")
+            msg = f"GPS point {worst_idx_overall + 1} is {worst_dist_overall:.0f}m from route (max {max_star_distance_m:.0f}m)"
+            self.log(f"⚠️ {seg_label} SUMO route: rejected ({msg})")
+            return False, msg
         else:
-            self.log(f"⚠️ {seg_label} SUMO route: not found (no path between start and end edges)")
-        return False
+            msg = "No path between start and end edges"
+            self.log(f"⚠️ {seg_label} SUMO route: not found ({msg})")
+            return False, msg
 
-    def _draw_segment_sumo_route(self, segment_polyline: List[List[float]]) -> None:
+    def _draw_segment_sumo_route(self, segment_polyline: List[List[float]], seg_idx: int = 0) -> None:
         """Draw SUMO shortest path for a segment (view_network logic: Dijkstra/A*, purple path + stars)."""
-        if not self.network_parser or not segment_polyline or len(segment_polyline) < 2:
+        if not self.network_parser or not segment_polyline:
+            return
+        if len(segment_polyline) < 3:
+            msg = "Too short (need at least 3 points)"
+            self.log(f"⚠️ Segment {seg_idx + 1} SUMO route rejected: {msg}")
+            if seg_idx < len(self._segment_sumo_route_status_labels):
+                self._segment_sumo_route_status_labels[seg_idx].setText(msg)
+                self._segment_sumo_route_status_labels[seg_idx].setStyleSheet("font-size: 9px; color: #c62828;")
+            if seg_idx < len(self._segment_show_sumo_route_checkboxes):
+                self._segment_show_sumo_route_checkboxes[seg_idx].blockSignals(True)
+                self._segment_show_sumo_route_checkboxes[seg_idx].setChecked(False)
+                self._segment_show_sumo_route_checkboxes[seg_idx].setEnabled(False)
+                self._segment_show_sumo_route_checkboxes[seg_idx].blockSignals(False)
             return
         y_min = getattr(self.map_view, '_network_y_min', 0)
         y_max = getattr(self.map_view, '_network_y_max', 0)
@@ -5143,12 +5319,15 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
         node_positions = build_node_positions(self.network_parser)
         goal_xy = sumo_points_flipped[-1]
         base_edges = self._compute_edges_in_polygon(self._current_segments) if self._current_segments else None
-        path_edges: List[str] = []
         max_tries = min(5, len(candidates or []))
+        max_star_distance_m = self.MAX_SUMO_ROUTE_DISTANCE_M
+        path_edges: List[str] = []
+        worst_dist_overall = 0.0
+        worst_idx_overall = 0
         for try_idx in range(max_tries):
             cand = (candidates or [])[try_idx]
             edges_allowed = (base_edges | {cand, end_id}) if base_edges is not None else None
-            path_edges = shortest_path_dijkstra(
+            candidate_path = shortest_path_dijkstra(
                 self.network_parser,
                 cand,
                 end_id,
@@ -5158,9 +5337,47 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
                 goal_xy=goal_xy,
                 edges_in_polygon=edges_allowed,
             )
-            if path_edges:
+            if not candidate_path:
+                continue
+            path_points = []
+            for eid in candidate_path:
+                shape_points = edge_shapes.get(eid)
+                if not shape_points:
+                    continue
+                for x_s, y_s in shape_points:
+                    path_points.append((x_s, flip_y(y_s)))
+            path_points_flat = [[p[0], p[1]] for p in path_points]
+            all_within = True
+            worst_dist = 0.0
+            worst_idx = 0
+            for idx, (px, py) in enumerate(sumo_points_flipped):
+                proj_x, proj_y = project_point_onto_polyline(px, py, path_points_flat)
+                dist_m = math.sqrt((px - proj_x) ** 2 + (py - proj_y) ** 2)
+                if dist_m > max_star_distance_m:
+                    all_within = False
+                    if dist_m > worst_dist:
+                        worst_dist = dist_m
+                        worst_idx = idx
+            if all_within:
+                path_edges = candidate_path
                 break
+            if worst_dist > worst_dist_overall:
+                worst_dist_overall = worst_dist
+                worst_idx_overall = worst_idx
         if not path_edges:
+            if worst_dist_overall > 0:
+                msg = f"GPS point {worst_idx_overall + 1} is {worst_dist_overall:.0f}m from route (max {max_star_distance_m:.0f}m)"
+            else:
+                msg = "No path between start and end edges"
+            self.log(f"⚠️ Segment {seg_idx + 1} SUMO route rejected: {msg}")
+            if seg_idx < len(self._segment_sumo_route_status_labels):
+                self._segment_sumo_route_status_labels[seg_idx].setText(msg)
+                self._segment_sumo_route_status_labels[seg_idx].setStyleSheet("font-size: 9px; color: #c62828;")
+            if seg_idx < len(self._segment_show_sumo_route_checkboxes):
+                self._segment_show_sumo_route_checkboxes[seg_idx].blockSignals(True)
+                self._segment_show_sumo_route_checkboxes[seg_idx].setChecked(False)
+                self._segment_show_sumo_route_checkboxes[seg_idx].setEnabled(False)
+                self._segment_show_sumo_route_checkboxes[seg_idx].blockSignals(False)
             return
         # Build full path points (for projection and trimming)
         path_points = []
@@ -5170,15 +5387,7 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
                 continue
             for x_s, y_s in shape_points:
                 path_points.append((x_s, flip_y(y_s)))
-        # Validate: if any GPS point is >100m from its projected star, route is too different
         path_points_flat = [[p[0], p[1]] for p in path_points]
-        max_star_distance_m = 100.0
-        for px, py in sumo_points_flipped:
-            proj_x, proj_y = project_point_onto_polyline(px, py, path_points_flat)
-            dist_m = math.sqrt((px - proj_x) ** 2 + (py - proj_y) ** 2)
-            if dist_m > max_star_distance_m:
-                self.log(f"⚠️ SUMO route rejected: GPS point is {dist_m:.0f}m from route (max {max_star_distance_m:.0f}m)")
-                return
         # Trim route to start at first star and end at last star
         first_pt = sumo_points_flipped[0]
         last_pt = sumo_points_flipped[-1]

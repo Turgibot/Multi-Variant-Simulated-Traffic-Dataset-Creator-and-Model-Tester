@@ -11,7 +11,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
-from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal, QThread
 from PySide6.QtGui import QBrush, QColor, QFont, QPen
 from PySide6.QtWidgets import (QDoubleSpinBox, QGraphicsEllipseItem,
                                QGraphicsPolygonItem, QGraphicsTextItem,
@@ -30,6 +30,84 @@ from src.utils.trip_validator import (DEFAULT_MAX_SEGMENT_DISTANCE,
                                       TripValidationResult,
                                       split_at_invalid_segments,
                                       validate_trip_segments)
+
+
+class TripCountWorker(QThread):
+    """Worker thread for counting trajectories in CSV."""
+
+    finished = Signal(int)
+
+    def __init__(self, csv_path: str, parent=None):
+        super().__init__(parent)
+        self.csv_path = csv_path
+
+    def run(self):
+        try:
+            with open(self.csv_path, 'r', encoding='utf-8') as f:
+                count = sum(1 for _ in f) - 1  # Subtract header
+            self.finished.emit(max(0, count))
+        except Exception:
+            self.finished.emit(0)
+
+
+class ExportBboxWorker(QThread):
+    """Worker thread for exporting bounding box network to XML."""
+
+    finished = Signal(bool, str)  # success, message
+
+    def __init__(self, red_edges_data, network_file_path, out_file: Path, parent=None):
+        super().__init__(parent)
+        self.red_edges_data = red_edges_data
+        self.network_file_path = network_file_path
+        self.out_file = out_file
+
+    def run(self):
+        try:
+            edge_base_ids = set()
+            node_ids = set()
+            for edge_id, edge_data, _ in self.red_edges_data:
+                base_id = edge_id.split("#")[0] if "#" in edge_id else edge_id
+                edge_base_ids.add(base_id)
+                fn, tn = edge_data.get("from"), edge_data.get("to")
+                if fn:
+                    node_ids.add(fn)
+                if tn:
+                    node_ids.add(tn)
+            if str(self.network_file_path).endswith(".gz") or self.network_file_path.suffix == ".gz":
+                with gzip.open(self.network_file_path, "rb") as f:
+                    tree = ET.parse(f)
+            else:
+                tree = ET.parse(self.network_file_path)
+            root = tree.getroot()
+            ns = root.tag.split("}")[0] + "}" if "}" in root.tag else ""
+            new_root = ET.Element(root.tag, root.attrib)
+            location = root.find("location")
+            if location is not None:
+                new_root.append(copy.deepcopy(location))
+            for edge in root.findall("edge"):
+                eid = edge.get("id")
+                base_id = eid.split("#")[0] if eid and "#" in eid else (eid or "")
+                if base_id in edge_base_ids:
+                    new_root.append(copy.deepcopy(edge))
+            for junction in root.findall("junction"):
+                jid = junction.get("id")
+                if jid in node_ids:
+                    new_root.append(copy.deepcopy(junction))
+            try:
+                ET.indent(new_root, space="  ")
+            except AttributeError:
+                pass
+            out_tree = ET.ElementTree(new_root)
+            out_tree.write(
+                self.out_file,
+                encoding="utf-8",
+                default_namespace=None,
+                xml_declaration=True,
+                method="xml",
+            )
+            self.finished.emit(True, str(self.out_file))
+        except Exception as e:
+            self.finished.emit(False, str(e))
 
 
 class DebugTrajectoryPage(QWidget):
@@ -55,6 +133,8 @@ class DebugTrajectoryPage(QWidget):
         self._current_sumo_points = None  # Store current trajectory points (Y-flipped for display)
         self._current_sumo_segments = []  # Per-segment sumo points (Y-flipped) for route finding
         self._network_file_path = None  # Path to loaded .net.xml for export
+        self._trip_count_worker = None
+        self._export_worker = None
         self.init_ui()
         
         # Auto-load network (trajectory will be loaded via Show button)
@@ -461,30 +541,29 @@ class DebugTrajectoryPage(QWidget):
         # Store train_csv path for later use
         self.train_csv_path = train_csv
         
-        # Count trajectories and update UI
+        # Count trajectories in background
         if train_csv and train_csv.exists():
-            trajectory_count = self._count_trajectories(str(train_csv))
-            if trajectory_count > 0:
-                self.trajectory_spinbox.setRange(1, trajectory_count)
-                self.trajectory_spinbox.setValue(1)
-                self.show_btn.setEnabled(True)
-                self.log(f"✓ Found {trajectory_count} trajectories in CSV")
-            else:
-                self.log("⚠️ No trajectories found in CSV")
-                self.show_btn.setEnabled(False)
+            self.log("Counting trajectories...")
+            if self._trip_count_worker and self._trip_count_worker.isRunning():
+                return
+            self._trip_count_worker = TripCountWorker(str(train_csv))
+            self._trip_count_worker.finished.connect(self._on_trip_count_finished)
+            self._trip_count_worker.start()
         else:
             self.log("⚠️ train.csv not found - trajectory selection disabled")
             self.show_btn.setEnabled(False)
     
-    def _count_trajectories(self, csv_path: str) -> int:
-        """Count the number of trajectories in the CSV file."""
-        try:
-            with open(csv_path, 'r', encoding='utf-8') as f:
-                # Count lines (excluding header)
-                return sum(1 for _ in f) - 1  # Subtract 1 for header
-        except Exception as e:
-            self.log(f"⚠️ Error counting trajectories: {e}")
-            return 0
+    def _on_trip_count_finished(self, count: int):
+        """Handle trip count worker completion."""
+        self._trip_count_worker = None
+        if count > 0:
+            self.trajectory_spinbox.setRange(1, count)
+            self.trajectory_spinbox.setValue(1)
+            self.show_btn.setEnabled(True)
+            self.log(f"✓ Found {count} trajectories in CSV")
+        else:
+            self.log("⚠️ No trajectories found in CSV")
+            self.show_btn.setEnabled(False)
     
     def on_show_clicked(self):
         """Handle Show button click - load and display selected trajectory."""
@@ -572,73 +651,30 @@ class DebugTrajectoryPage(QWidget):
         if not getattr(self, '_network_file_path', None) or not self._network_file_path.exists():
             self.log("⚠️ No source network file path. Reload the page.")
             return
+        if self._export_worker and self._export_worker.isRunning():
+            return
         trajectory_num = int(self.trajectory_spinbox.value())
         project_path = Path(self.project_path)
         out_dir = project_path / "config"
         out_dir.mkdir(parents=True, exist_ok=True)
         out_file = out_dir / f"trajectory_{trajectory_num}.net.xml"
-        
-        # Edge base IDs and node IDs (from/to) for edges in box
-        edge_base_ids: Set[str] = set()
-        node_ids: Set[str] = set()
-        for edge_id, edge_data, _ in self._red_edges_data:
-            base_id = edge_id.split("#")[0] if "#" in edge_id else edge_id
-            edge_base_ids.add(base_id)
-            fn, tn = edge_data.get("from"), edge_data.get("to")
-            if fn:
-                node_ids.add(fn)
-            if tn:
-                node_ids.add(tn)
-        
-        # Parse source .net.xml (support gzip)
-        try:
-            if str(self._network_file_path).endswith(".gz") or self._network_file_path.suffix == ".gz":
-                with gzip.open(self._network_file_path, "rb") as f:
-                    tree = ET.parse(f)
-            else:
-                tree = ET.parse(self._network_file_path)
-            root = tree.getroot()
-        except Exception as e:
-            self.log(f"❌ Failed to read source network: {e}")
+        self.export_bbox_network_btn.setEnabled(False)
+        self.log("Exporting...")
+        self._export_worker = ExportBboxWorker(
+            self._red_edges_data, self._network_file_path, out_file
+        )
+        self._export_worker.finished.connect(self._on_export_bbox_finished)
+        self._export_worker.start()
+
+    def _on_export_bbox_finished(self, success: bool, message: str):
+        """Handle export worker completion."""
+        self._export_worker = None
+        self.export_bbox_network_btn.setEnabled(True)
+        if not success:
+            self.log(f"❌ Export failed: {message}")
             return
-        
-        # Build new net: same root tag/attrib, location, then edges, then junctions
-        ns = root.tag.split("}")[0] + "}" if "}" in root.tag else ""
-        new_root = ET.Element(root.tag, root.attrib)
-        location = root.find("location")
-        if location is not None:
-            new_root.append(copy.deepcopy(location))
-        for edge in root.findall("edge"):
-            eid = edge.get("id")
-            base_id = eid.split("#")[0] if eid and "#" in eid else (eid or "")
-            if base_id in edge_base_ids:
-                new_root.append(copy.deepcopy(edge))
-        for junction in root.findall("junction"):
-            jid = junction.get("id")
-            if jid in node_ids:
-                new_root.append(copy.deepcopy(junction))
-        
-        # Write output
-        try:
-            try:
-                ET.indent(new_root, space="  ")
-            except AttributeError:
-                pass  # Python < 3.9
-            out_tree = ET.ElementTree(new_root)
-            out_tree.write(
-                out_file,
-                encoding="utf-8",
-                default_namespace=None,
-                xml_declaration=True,
-                method="xml",
-            )
-        except Exception as e:
-            self.log(f"❌ Failed to write {out_file.name}: {e}")
-            return
-        
-        self.log(f"✓ Exported to {out_file}")
-        
-        # Validate: no missing data (every edge has from/to and lanes)
+        self.log(f"✓ Exported to {message}")
+        out_file = Path(message)
         try:
             parser = NetworkParser(str(out_file))
             exp_edges = parser.get_edges()
