@@ -442,6 +442,49 @@ class NetworkParser:
         # #endregion
         
         return (x, y)
+
+    def sumo_to_gps_coords(self, x: float, y: float) -> Optional[Tuple[float, float]]:
+        """
+        Convert SUMO network coordinates to GPS (lon, lat).
+        Inverse of gps_to_sumo_coords when using linear interpolation fallback.
+
+        Args:
+            x: X coordinate in SUMO space
+            y: Y coordinate in SUMO space
+
+        Returns:
+            Tuple of (lon, lat) or None if conversion fails
+        """
+        if not self.orig_boundary or not self.conv_boundary:
+            return None
+
+        lon_min = self.orig_boundary['lon_min']
+        lon_max = self.orig_boundary['lon_max']
+        lat_min = self.orig_boundary['lat_min']
+        lat_max = self.orig_boundary['lat_max']
+
+        net_x_min = self.conv_boundary['x_min']
+        net_x_max = self.conv_boundary['x_max']
+        net_y_min = self.conv_boundary['y_min']
+        net_y_max = self.conv_boundary['y_max']
+
+        if net_x_max == net_x_min or net_y_max == net_y_min:
+            return None
+
+        x_norm = (x - net_x_min) / (net_x_max - net_x_min)
+        y_norm = (y - net_y_min) / (net_y_max - net_y_min)
+        x_norm = max(0.0, min(1.0, x_norm))
+        y_norm = max(0.0, min(1.0, y_norm))
+
+        lon_norm = (x_norm - self.conv_adjust_x) / self.conv_scale_x
+        lat_norm = (y_norm - self.conv_adjust_y) / self.conv_scale_y
+        lon_norm = max(0.0, min(1.0, lon_norm))
+        lat_norm = max(0.0, min(1.0, lat_norm))
+
+        lon = lon_min + lon_norm * (lon_max - lon_min)
+        lat = lat_min + lat_norm * (lat_max - lat_min)
+
+        return (lon, lat)
     
     def _point_to_segment_distance_and_position(self, px: float, py: float, 
                                                  x1: float, y1: float, x2: float, y2: float) -> Tuple[float, float]:

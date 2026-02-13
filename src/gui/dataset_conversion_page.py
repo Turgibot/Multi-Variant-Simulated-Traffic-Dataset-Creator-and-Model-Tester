@@ -418,6 +418,45 @@ def _load_trip_polyline_static(csv_path: str, trip_num: int) -> list:
     return []
 
 
+def _load_trip_row_static(csv_path: str, trip_num: int) -> Tuple[Optional[List[List[float]]], Optional[int]]:
+    """Load polyline and TIMESTAMP for a trip from CSV. Thread-safe. Returns (polyline, timestamp) or (None, None)."""
+    import ast
+    import csv as csv_module
+    try:
+        with open(csv_path, 'r', encoding='utf-8') as f:
+            reader = csv_module.reader(f)
+            header = next(reader, None)
+            if not header:
+                return None, None
+            ts_idx = None
+            for i, h in enumerate(header):
+                if h.strip('"') == 'TIMESTAMP':
+                    ts_idx = i
+                    break
+            for i, row in enumerate(reader, 1):
+                if i == trip_num:
+                    timestamp = None
+                    if ts_idx is not None and ts_idx < len(row):
+                        try:
+                            timestamp = int(str(row[ts_idx]).strip('"'))
+                        except (ValueError, TypeError):
+                            pass
+                    polyline_str = None
+                    for cell in row:
+                        s = str(cell).strip()
+                        if s.startswith('[[') and s.endswith(']]'):
+                            polyline_str = s
+                            break
+                    if polyline_str:
+                        polyline = ast.literal_eval(polyline_str)
+                        if isinstance(polyline, list) and len(polyline) >= 2:
+                            return polyline, timestamp
+                    return None, None
+    except Exception:
+        pass
+    return None, None
+
+
 def _prepare_route_data_static(
     original_polyline: List[List[float]],
 ) -> Tuple[object, int, int, list]:
@@ -511,6 +550,177 @@ class RouteLoadWorker(QThread):
             self.finished.emit(False, None, str(e))
 
 
+class DatasetGenerationWorker(QThread):
+    """Worker thread for batch dataset generation - exports trajectories with SUMO routes to JSON."""
+
+    progress = Signal(int, int, str)  # current, total, status
+    finished = Signal(int, int, str)  # saved_count, total_processed, error_msg (empty if ok)
+
+    GPS_INTERVAL_SEC = 15
+    MAX_SUMO_ROUTE_DISTANCE_M = 150.0
+
+    def __init__(
+        self,
+        train_path: str,
+        output_path: str,
+        start_traj: int,
+        last_traj: int,
+        network_parser,
+        y_min: float,
+        y_max: float,
+        cancelled_callback,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self.train_path = train_path
+        self.output_path = output_path
+        self.start_traj = start_traj
+        self.last_traj = last_traj
+        self.network_parser = network_parser
+        self.y_min = y_min
+        self.y_max = y_max
+        self._cancelled = cancelled_callback
+
+    def _flip_y(self, y: float) -> float:
+        return self.y_max + self.y_min - y
+
+    def run(self):
+        import csv as csv_module
+        total = max(0, self.last_traj - self.start_traj + 1)
+        saved_count = 0
+        total_processed = 0
+        edges_data = build_edges_data(self.network_parser)
+        edge_shapes = {eid: shape for eid, _ed, shape in edges_data}
+        node_positions = build_node_positions(self.network_parser)
+        os.makedirs(self.output_path, exist_ok=True)
+
+        for traj_idx, trip_num in enumerate(range(self.start_traj, self.last_traj + 1)):
+            if self._cancelled():
+                self.finished.emit(saved_count, total_processed, "Cancelled")
+                return
+
+            self.progress.emit(traj_idx + 1, total, f"Processing trajectory {trip_num}...")
+
+            polyline, base_timestamp = _load_trip_row_static(self.train_path, trip_num)
+            if not polyline or len(polyline) < 2:
+                continue
+
+            invalid_segments, real_start_idx, real_end_idx, segment_trim_data = _prepare_route_data_static(polyline)
+
+            if invalid_segments.invalid_segment_count > 0:
+                split_segments = _split_at_invalid_segments_static(polyline)
+                segments = []
+                offset_in_original = 0
+                seg_offsets = []
+                for seg in split_segments:
+                    if len(seg) >= 2:
+                        seg_start, seg_end = _detect_real_start_and_end_static(seg)
+                        trim_seg = seg[seg_start : seg_end + 1]
+                        if len(trim_seg) >= 3:
+                            segments.append(trim_seg)
+                            seg_offsets.append(offset_in_original + seg_start)
+                    offset_in_original += len(seg)
+            else:
+                trim_poly = polyline[real_start_idx : real_end_idx + 1]
+                if len(trim_poly) >= 3:
+                    segments = [trim_poly]
+                    seg_offsets = [real_start_idx]
+                else:
+                    segments = []
+                    seg_offsets = []
+
+            base_ts = base_timestamp if base_timestamp is not None else 0
+
+            for seg_idx, (segment, orig_offset) in enumerate(zip(segments, seg_offsets)):
+                sumo_points_flipped = []
+                for lon, lat in segment:
+                    coords = self.network_parser.gps_to_sumo_coords(lon, lat)
+                    if coords:
+                        x, y = coords
+                        sumo_points_flipped.append((x, self._flip_y(y)))
+                if len(sumo_points_flipped) < 2:
+                    continue
+
+                orange_ids, green_ids, start_id, end_id, candidates = compute_green_orange_edges(
+                    edges_data, sumo_points_flipped, self.y_min, self.y_max, top_per_segment=5
+                )
+                if not start_id or not end_id:
+                    continue
+
+                goal_xy = sumo_points_flipped[-1]
+                max_tries = min(5, len(candidates or []))
+                valid_routes = []
+
+                for try_idx in range(max_tries):
+                    if self._cancelled():
+                        self.finished.emit(saved_count, total_processed, "Cancelled")
+                        return
+
+                    cand = (candidates or [])[try_idx]
+                    path_edges = shortest_path_dijkstra(
+                        self.network_parser,
+                        cand,
+                        end_id,
+                        orange_ids=orange_ids,
+                        green_ids=green_ids,
+                        node_positions=node_positions,
+                        goal_xy=goal_xy,
+                        edges_in_polygon=None,
+                    )
+                    if not path_edges:
+                        continue
+
+                    path_points = []
+                    for eid in path_edges:
+                        sp = edge_shapes.get(eid)
+                        if sp:
+                            for x_s, y_s in sp:
+                                path_points.append((x_s, self._flip_y(y_s)))
+                    path_points_flat = [[p[0], p[1]] for p in path_points]
+
+                    all_within = True
+                    for px, py in sumo_points_flipped:
+                        proj_x, proj_y = project_point_onto_polyline(px, py, path_points_flat)
+                        dist_m = math.sqrt((px - proj_x) ** 2 + (py - proj_y) ** 2)
+                        if dist_m > self.MAX_SUMO_ROUTE_DISTANCE_M:
+                            all_within = False
+                            break
+                    if all_within:
+                        valid_routes.append((path_edges, path_points_flat))
+
+                for route_idx, (path_edges, path_points_flat) in enumerate(valid_routes):
+                    starting_timestamp = base_ts + orig_offset * self.GPS_INTERVAL_SEC
+                    stars_gps = []
+                    for px, py in sumo_points_flipped:
+                        proj_x, proj_y = project_point_onto_polyline(px, py, path_points_flat)
+                        # proj_x, proj_y are in display (y-flipped) coords; unflip for sumo_to_gps
+                        lon_lat = self.network_parser.sumo_to_gps_coords(proj_x, self._flip_y(proj_y))
+                        if lon_lat:
+                            stars_gps.append(list(lon_lat))
+
+                    duration_seconds = (len(segment) - 1) * self.GPS_INTERVAL_SEC if len(segment) > 1 else 0
+                    rec = {
+                        "starting_timestamp": starting_timestamp,
+                        "duration_seconds": duration_seconds,
+                        "gps_points": segment,
+                        "number_of_edges": len(path_edges),
+                        "route_edges": path_edges,
+                        "sumo_route_gps": stars_gps,
+                    }
+
+                    out_file = Path(self.output_path) / f"traj_{trip_num}_seg{seg_idx + 1}_r{route_idx + 1}.json"
+                    try:
+                        with open(out_file, "w", encoding="utf-8") as f:
+                            json.dump(rec, f, indent=2)
+                        saved_count += 1
+                    except Exception as e:
+                        pass
+
+            total_processed += 1
+
+        self.finished.emit(saved_count, total_processed, "")
+
+
 class DatasetConversionPage(QWidget):
     """Page for Porto dataset conversion with map view."""
     
@@ -543,6 +753,8 @@ class DatasetConversionPage(QWidget):
         self._train_trip_count = None  # Cached trip count
         self._route_items = []  # Graphics items for current route display
         self._candidate_edge_items = []  # Green/orange edge items (separate for fast toggle)
+        self._dataset_gen_worker = None
+        self._dataset_gen_cancelled = False
         self._sumo_route_items = []  # SUMO path lines and stars (separate for fast toggle)
         self._current_polyline = None  # Store current polyline for SUMO route mapping
         self._current_segments = None  # Store current segments for SUMO route mapping
@@ -1667,6 +1879,146 @@ class DatasetConversionPage(QWidget):
         self.route_group.setVisible(False)  # Hidden until map and dataset ready
         controls_layout.addWidget(self.route_group)
         
+        # ---- Dataset Generation Section ----
+        self.dataset_gen_group = QGroupBox("📦 Dataset Generation")
+        self.dataset_gen_group.setStyleSheet("""
+            QGroupBox {
+                font-weight: bold;
+                font-size: 13px;
+                border: 1px solid #ddd;
+                border-radius: 5px;
+                margin-top: 10px;
+                padding-top: 15px;
+                background-color: white;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 8px;
+                color: #333;
+            }
+        """)
+        dataset_gen_layout = QVBoxLayout()
+        dataset_gen_layout.setSpacing(8)
+        
+        # Trajectory range: start number, count, and last number (linked)
+        traj_range_layout = QHBoxLayout()
+        traj_range_layout.addWidget(QLabel("Start trajectory:"))
+        self.dataset_start_traj_spin = QLineEdit()
+        self.dataset_start_traj_spin.setPlaceholderText("1")
+        self.dataset_start_traj_spin.setFixedWidth(60)
+        self.dataset_start_traj_spin.setToolTip("Starting trajectory number (1-based)")
+        traj_range_layout.addWidget(self.dataset_start_traj_spin)
+        traj_range_layout.addWidget(QLabel("Count:"))
+        self.dataset_count_spin = QLineEdit()
+        self.dataset_count_spin.setPlaceholderText("10")
+        self.dataset_count_spin.setFixedWidth(50)
+        self.dataset_count_spin.setToolTip("Number of trajectories to process")
+        traj_range_layout.addWidget(self.dataset_count_spin)
+        traj_range_layout.addWidget(QLabel("Last:"))
+        self.dataset_last_traj_spin = QLineEdit()
+        self.dataset_last_traj_spin.setPlaceholderText("10")
+        self.dataset_last_traj_spin.setFixedWidth(60)
+        self.dataset_last_traj_spin.setToolTip("Last trajectory number to process")
+        traj_range_layout.addWidget(self.dataset_last_traj_spin)
+        traj_range_layout.addStretch()
+        dataset_gen_layout.addLayout(traj_range_layout)
+        
+        # Output folder path
+        output_layout = QHBoxLayout()
+        output_layout.addWidget(QLabel("Output folder:"))
+        self.dataset_output_path = QLineEdit()
+        self.dataset_output_path.setPlaceholderText("Select output folder...")
+        self.dataset_output_path.setReadOnly(True)
+        output_layout.addWidget(self.dataset_output_path)
+        browse_output_btn = QPushButton("📁")
+        browse_output_btn.setFixedWidth(36)
+        browse_output_btn.setToolTip("Browse for output folder")
+        browse_output_btn.clicked.connect(self._browse_dataset_output_folder)
+        output_layout.addWidget(browse_output_btn)
+        dataset_gen_layout.addLayout(output_layout)
+        
+        # Start/Stop buttons (hidden until start and output are set)
+        self.dataset_buttons_layout = QHBoxLayout()
+        self.dataset_start_btn = QPushButton("▶ Start")
+        self.dataset_start_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #4CAF50;
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 5px;
+                font-weight: bold;
+            }
+            QPushButton:hover { background-color: #45a049; }
+            QPushButton:disabled { background-color: #cccccc; }
+        """)
+        self.dataset_start_btn.clicked.connect(self._on_dataset_start_clicked)
+        self.dataset_stop_btn = QPushButton("⏹ Stop")
+        self.dataset_stop_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #f44336;
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 5px;
+                font-weight: bold;
+            }
+            QPushButton:hover { background-color: #da190b; }
+            QPushButton:disabled { background-color: #cccccc; }
+        """)
+        self.dataset_stop_btn.clicked.connect(self._on_dataset_stop_clicked)
+        self.dataset_start_btn.setVisible(False)
+        self.dataset_stop_btn.setVisible(False)
+        self.dataset_buttons_layout.addWidget(self.dataset_start_btn)
+        self.dataset_buttons_layout.addWidget(self.dataset_stop_btn)
+        self.dataset_buttons_layout.addStretch()
+        dataset_gen_layout.addLayout(self.dataset_buttons_layout)
+        
+        # Link count <-> last trajectory (when one changes, update the other)
+        def _on_dataset_count_changed():
+            txt = self.dataset_count_spin.text().strip()
+            if not txt:
+                return
+            try:
+                n = int(txt)
+                start_txt = self.dataset_start_traj_spin.text().strip()
+                start = int(start_txt) if start_txt else 1
+                self.dataset_last_traj_spin.setText(str(start + n - 1))
+            except ValueError:
+                pass
+
+        def _on_dataset_last_changed():
+            txt = self.dataset_last_traj_spin.text().strip()
+            if not txt:
+                return
+            try:
+                last = int(txt)
+                start_txt = self.dataset_start_traj_spin.text().strip()
+                start = int(start_txt) if start_txt else 1
+                if last >= start:
+                    self.dataset_count_spin.setText(str(last - start + 1))
+            except ValueError:
+                pass
+
+        def _on_dataset_start_changed():
+            txt = self.dataset_start_traj_spin.text().strip()
+            if txt:
+                _on_dataset_count_changed()
+
+        self.dataset_count_spin.textChanged.connect(_on_dataset_count_changed)
+        self.dataset_last_traj_spin.textChanged.connect(_on_dataset_last_changed)
+        self.dataset_start_traj_spin.textChanged.connect(_on_dataset_start_changed)
+        self.dataset_count_spin.setText("10")  # Set default, triggers last update
+
+        self.dataset_start_traj_spin.textChanged.connect(self._update_dataset_buttons_visibility)
+        self.dataset_output_path.textChanged.connect(self._update_dataset_buttons_visibility)
+        self.dataset_output_path.textChanged.connect(lambda _: self._schedule_save_settings())
+
+        self.dataset_gen_group.setLayout(dataset_gen_layout)
+        self.dataset_gen_group.setVisible(False)  # Hidden until map and dataset ready
+        controls_layout.addWidget(self.dataset_gen_group)
+        
         # ---- Progress Section (hidden by default) ----
         self.progress_group = QGroupBox("⏳ Download Progress")
         self.progress_group.setStyleSheet("""
@@ -1946,12 +2298,15 @@ class DatasetConversionPage(QWidget):
             if not self.zones_group.isVisible():
                 self.zones_group.setVisible(True)
                 self.route_group.setVisible(True)
+                self.dataset_gen_group.setVisible(True)
+                self._update_dataset_buttons_visibility()
                 self.log("✅ Map and dataset ready - Zone and Route configuration enabled")
                 # Load trip count from train dataset
                 self.load_trip_count()
         else:
             self.zones_group.setVisible(False)
             self.route_group.setVisible(False)
+            self.dataset_gen_group.setVisible(False)
     
     def check_resources(self):
         """Check if map and dataset resources exist."""
@@ -2095,6 +2450,106 @@ class DatasetConversionPage(QWidget):
         if file_path:
             input_field.setText(file_path)
             self.log(f"{file_type.capitalize()} dataset path set to: {file_path}")
+
+    def _update_dataset_buttons_visibility(self):
+        """Show Start/Stop buttons when start trajectory and output path are set."""
+        start_txt = self.dataset_start_traj_spin.text().strip()
+        output_txt = self.dataset_output_path.text().strip()
+        show = bool(start_txt and output_txt)
+        self.dataset_start_btn.setVisible(show)
+        self.dataset_stop_btn.setVisible(show)
+        if show and self._dataset_gen_worker and self._dataset_gen_worker.isRunning():
+            self.dataset_start_btn.setEnabled(False)
+            self.dataset_stop_btn.setEnabled(True)
+        elif show:
+            self.dataset_start_btn.setEnabled(True)
+            self.dataset_stop_btn.setEnabled(False)
+
+    def _browse_dataset_output_folder(self):
+        """Open folder dialog to select output directory for dataset generation."""
+        current = self.dataset_output_path.text().strip()
+        start_dir = current if current and Path(current).exists() else self.project_path
+        folder = QFileDialog.getExistingDirectory(
+            self,
+            "Select Output Folder for Dataset",
+            start_dir,
+            options=QFileDialog.DontUseNativeDialog
+        )
+        if folder:
+            self.dataset_output_path.setText(folder)
+            self.log(f"Dataset output folder set to: {folder}")
+
+    def _on_dataset_start_clicked(self):
+        """Start dataset generation."""
+        train_path = self.train_path_input.text().strip()
+        if not train_path or not Path(train_path).exists():
+            self.log("❌ train.csv not found - select a valid train dataset first")
+            QMessageBox.warning(self, "Dataset Error", "Please select a valid train.csv file first.")
+            return
+        output_path = self.dataset_output_path.text().strip()
+        if not output_path:
+            self.log("❌ Select an output folder first")
+            QMessageBox.warning(self, "Dataset Error", "Please select an output folder.")
+            return
+        try:
+            start_traj = int(self.dataset_start_traj_spin.text().strip() or "1")
+            last_traj = int(self.dataset_last_traj_spin.text().strip() or "10")
+        except ValueError:
+            self.log("❌ Invalid trajectory numbers")
+            QMessageBox.warning(self, "Dataset Error", "Please enter valid start and last trajectory numbers.")
+            return
+        if start_traj < 1 or last_traj < start_traj:
+            self.log("❌ Start must be ≥ 1 and last must be ≥ start")
+            QMessageBox.warning(self, "Dataset Error", "Start must be ≥ 1 and last must be ≥ start.")
+            return
+        if not self.network_parser:
+            self.log("❌ Network not loaded")
+            QMessageBox.warning(self, "Dataset Error", "Please wait for the network map to load.")
+            return
+
+        y_min = getattr(self.map_view, '_network_y_min', 0)
+        y_max = getattr(self.map_view, '_network_y_max', 0)
+        if y_min == 0 and y_max == 0:
+            self.log("❌ Network bounds not ready")
+            QMessageBox.warning(self, "Dataset Error", "Network bounds not ready. Please wait for map to load.")
+            return
+
+        self._dataset_gen_cancelled = False
+        self._dataset_gen_worker = DatasetGenerationWorker(
+            train_path=train_path,
+            output_path=output_path,
+            start_traj=start_traj,
+            last_traj=last_traj,
+            network_parser=self.network_parser,
+            y_min=y_min,
+            y_max=y_max,
+            cancelled_callback=lambda: self._dataset_gen_cancelled,
+        )
+        self._dataset_gen_worker.progress.connect(self._on_dataset_gen_progress)
+        self._dataset_gen_worker.finished.connect(self._on_dataset_gen_finished)
+        self.dataset_start_btn.setEnabled(False)
+        self.dataset_stop_btn.setEnabled(True)
+        self.log(f"▶ Starting dataset generation: trajectories {start_traj}–{last_traj} → {output_path}")
+        self._dataset_gen_worker.start()
+
+    def _on_dataset_stop_clicked(self):
+        """Stop dataset generation."""
+        self._dataset_gen_cancelled = True
+        self.log("⏹ Stop requested...")
+
+    def _on_dataset_gen_progress(self, current: int, total: int, status: str):
+        """Handle dataset generation progress."""
+        self.log(f"  {status} ({current}/{total})")
+
+    def _on_dataset_gen_finished(self, saved_count: int, total_processed: int, error_msg: str):
+        """Handle dataset generation completion."""
+        self._dataset_gen_worker = None
+        self.dataset_start_btn.setEnabled(True)
+        self.dataset_stop_btn.setEnabled(False)
+        if error_msg:
+            self.log(f"Dataset generation stopped: {error_msg}")
+        else:
+            self.log(f"✅ Dataset generation complete: {saved_count} route(s) saved from {total_processed} trajectory(ies)")
     
     def validate_dataset_path(self, path: str, file_type: str):
         """Validate the dataset path and update status.
@@ -2580,6 +3035,7 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
             'fix_invalid_segments': self.fix_invalid_segments_checkbox.isChecked(),
             'show_polygon': self.show_polygon_checkbox.isChecked(),
             'draw_gps_points_path': self.draw_gps_points_path_checkbox.isChecked(),
+            'dataset_output_folder': self.dataset_output_path.text().strip(),
         }
         
         try:
@@ -2668,6 +3124,11 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
                 
                 if 'draw_gps_points_path' in settings:
                     self.draw_gps_points_path_checkbox.setChecked(settings['draw_gps_points_path'])
+                
+                if 'dataset_output_folder' in settings and settings['dataset_output_folder']:
+                    self.dataset_output_path.blockSignals(True)
+                    self.dataset_output_path.setText(settings['dataset_output_folder'])
+                    self.dataset_output_path.blockSignals(False)
                 
                 self.check_zones_visibility()
                 self.log("Settings loaded from config")
@@ -3055,7 +3516,7 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
                 )
                 # Draw polygon around trajectory and red inner edges if Show Polygon is checked
                 if self.show_polygon_checkbox.isChecked():
-                    self._draw_route_polygon_and_red_edges(segments)
+                    self._draw_route_polygon_and_red_edges(segments, route_num)
                 # Draw candidate edges and SUMO route for each segment subset if checkbox checked
                 if self._segment_show_candidate_checkboxes and self._segment_show_sumo_route_checkboxes:
                     for i, segment in enumerate(segments):
@@ -5470,7 +5931,7 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
                 self.map_view.scene.addItem(text_item)
                 self._sumo_route_items.append(text_item)
 
-    def _draw_route_polygon_and_red_edges(self, segments: List[List[List[float]]]) -> None:
+    def _draw_route_polygon_and_red_edges(self, segments: List[List[List[float]]], route_num: int = 0) -> None:
         """Draw polygon around trajectory (all segments) and color edges inside in red."""
         if not self.network_parser or not segments:
             return
@@ -5489,6 +5950,14 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
                 sumo_points_original.append(coords)
         if len(sumo_points_original) < 2:
             return
+        # #region agent log
+        _log_path = "/home/guy/Projects/Traffic/Multi-Variant-Simulated-Traffic-Dataset-Creator-and-Model-Tester/.cursor/debug.log"
+        try:
+            with open(_log_path, "a") as _f:
+                _f.write(json.dumps({"hypothesisId":"B","location":"dataset_conversion_page:_draw_route_polygon","message":"Point counts","data":{"route_num":route_num,"all_gps":len(all_gps),"sumo_converted":len(sumo_points_original),"dropped":len(all_gps)-len(sumo_points_original)},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+        except Exception:
+            pass
+        # #endregion
         min_box = self._find_minimum_bounding_box_route(sumo_points_original, padding_meters=200.0)
         if not min_box:
             return
@@ -5504,7 +5973,20 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
         rotated_corners = [QPointF(center_x + dx * cos_a - dy * sin_a, center_y + dx * sin_a + dy * cos_a) for dx, dy in corners]
         polygon_check = QPolygonF(rotated_corners)
         outside = [i for i, (x, y) in enumerate(sumo_points_original) if not polygon_check.containsPoint(QPointF(x, y), Qt.OddEvenFill)]
+        if route_num == 495:
+            try:
+                with open(_log_path, "a") as _f:
+                    _f.write(json.dumps({"hypothesisId":"D","location":"dataset_conversion_page:polygon_check","message":"Traj 495 initial containment","data":{"route_num":route_num,"outside_count":len(outside),"total_points":len(sumo_points_original),"outside_indices":outside[:15]},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+            except Exception:
+                pass
         if outside:
+            # #region agent log
+            try:
+                with open(_log_path, "a") as _f:
+                    _f.write(json.dumps({"hypothesisId":"A","location":"dataset_conversion_page:before_expand","message":"Points outside before expansion","data":{"route_num":route_num,"outside_count":len(outside),"outside_indices":outside[:10],"sample_outside":sumo_points_original[outside[0]] if outside else None},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+            except Exception:
+                pass
+            # #endregion
             center_x, center_y, width, height, angle = self._expand_box_to_include_all_points_route(
                 sumo_points_original, center_x, center_y, width, height, angle, safety_margin=100.0
             )
@@ -5512,6 +5994,15 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
             corners = [(-half_w, -half_h), (half_w, -half_h), (half_w, half_h), (-half_w, half_h)]
             cos_a, sin_a = math.cos(-angle), math.sin(-angle)
             rotated_corners = [QPointF(center_x + dx * cos_a - dy * sin_a, center_y + dx * sin_a + dy * cos_a) for dx, dy in corners]
+            # #region agent log
+            polygon_after = QPolygonF(rotated_corners)
+            still_outside = [i for i, (x, y) in enumerate(sumo_points_original) if not polygon_after.containsPoint(QPointF(x, y), Qt.OddEvenFill)]
+            try:
+                with open(_log_path, "a") as _f:
+                    _f.write(json.dumps({"hypothesisId":"A","location":"dataset_conversion_page:after_expand","message":"Points outside after expansion","data":{"route_num":route_num,"still_outside_count":len(still_outside),"still_outside_indices":still_outside[:10],"sample_still_outside":sumo_points_original[still_outside[0]] if still_outside else None,"expand_result":{"cx":center_x,"cy":center_y,"w":width,"h":height}},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+            except Exception:
+                pass
+            # #endregion
         if rotated_corners[0] != rotated_corners[-1]:
             rotated_corners.append(rotated_corners[0])
         polygon_original = QPolygonF(rotated_corners)
@@ -5599,12 +6090,12 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
         """Expand box so all points are inside. Returns (center_x, center_y, width, height, angle)."""
         if not points:
             return (center_x, center_y, width, height, angle)
-        cos_neg = math.cos(-angle)
-        sin_neg = math.sin(-angle)
+        # Use same rotation as _find_minimum_bounding_box_route: R(angle) to transform world->local
+        cos_a, sin_a = math.cos(angle), math.sin(angle)
         rotated = []
         for x, y in points:
             dx, dy = x - center_x, y - center_y
-            rotated.append((dx * cos_neg - dy * sin_neg, dx * sin_neg + dy * cos_neg))
+            rotated.append((dx * cos_a - dy * sin_a, dx * sin_a + dy * cos_a))
         rxs, rys = [p[0] for p in rotated], [p[1] for p in rotated]
         min_rx, max_rx = min(rxs), max(rxs)
         min_ry, max_ry = min(rys), max(rys)
@@ -5612,9 +6103,17 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
         req_h = (max_ry - min_ry) + 2 * safety_margin
         center_rx = (min_rx + max_rx) / 2
         center_ry = (min_ry + max_ry) / 2
-        cos_a, sin_a = math.cos(angle), math.sin(angle)
-        new_cx = center_x + center_rx * cos_a - center_ry * sin_a
-        new_cy = center_y + center_rx * sin_a + center_ry * cos_a
+        # Transform center back to world: local = R(angle)*(world-center) => world = center + R(-angle)*local
+        cos_neg, sin_neg = math.cos(-angle), math.sin(-angle)
+        new_cx = center_x + center_rx * cos_neg - center_ry * sin_neg
+        new_cy = center_y + center_rx * sin_neg + center_ry * cos_neg
+        # #region agent log
+        try:
+            with open("/home/guy/Projects/Traffic/Multi-Variant-Simulated-Traffic-Dataset-Creator-and-Model-Tester/.cursor/debug.log", "a") as _f:
+                _f.write(json.dumps({"hypothesisId":"A","location":"dataset_conversion_page:_expand_box","message":"Expand computation","data":{"min_rx":min_rx,"max_rx":max_rx,"min_ry":min_ry,"max_ry":max_ry,"req_w":req_w,"req_h":req_h,"center_rx":center_rx,"center_ry":center_ry,"new_cx":new_cx,"new_cy":new_cy,"old_cx":center_x,"old_cy":center_y,"angle_deg":math.degrees(angle)},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+        except Exception:
+            pass
+        # #endregion
         return (new_cx, new_cy, max(width, req_w), max(height, req_h), angle)
 
     def _line_intersects_polygon_route(self, p1: QPointF, p2: QPointF, polygon: QPolygonF) -> bool:
