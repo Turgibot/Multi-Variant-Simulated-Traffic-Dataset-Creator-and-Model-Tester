@@ -631,6 +631,9 @@ class DatasetGenerationWorker(QThread):
 
             base_ts = base_timestamp if base_timestamp is not None else 0
 
+            # Collect one valid route per segment (matches route display: 1 route per segment)
+            trajectory_segments = []
+
             for seg_idx, (segment, orig_offset) in enumerate(zip(segments, seg_offsets)):
                 sumo_points_flipped = []
                 for lon, lat in segment:
@@ -649,15 +652,17 @@ class DatasetGenerationWorker(QThread):
 
                 goal_xy = sumo_points_flipped[-1]
                 max_tries = min(5, len(candidates or []))
-                valid_routes = []
+                path_edges = None
+                path_points_flat = None
 
+                # Use first valid route only (matches _draw_segment_sumo_route display logic)
                 for try_idx in range(max_tries):
                     if self._cancelled():
                         self.finished.emit(saved_count, total_processed, "Cancelled")
                         return
 
                     cand = (candidates or [])[try_idx]
-                    path_edges = shortest_path_dijkstra(
+                    candidate_path = shortest_path_dijkstra(
                         self.network_parser,
                         cand,
                         end_id,
@@ -667,54 +672,63 @@ class DatasetGenerationWorker(QThread):
                         goal_xy=goal_xy,
                         edges_in_polygon=None,
                     )
-                    if not path_edges:
+                    if not candidate_path:
                         continue
 
                     path_points = []
-                    for eid in path_edges:
+                    for eid in candidate_path:
                         sp = edge_shapes.get(eid)
                         if sp:
                             for x_s, y_s in sp:
                                 path_points.append((x_s, self._flip_y(y_s)))
-                    path_points_flat = [[p[0], p[1]] for p in path_points]
+                    path_points_flat_cand = [[p[0], p[1]] for p in path_points]
 
                     all_within = True
                     for px, py in sumo_points_flipped:
-                        proj_x, proj_y = project_point_onto_polyline(px, py, path_points_flat)
+                        proj_x, proj_y = project_point_onto_polyline(px, py, path_points_flat_cand)
                         dist_m = math.sqrt((px - proj_x) ** 2 + (py - proj_y) ** 2)
                         if dist_m > self.MAX_SUMO_ROUTE_DISTANCE_M:
                             all_within = False
                             break
                     if all_within:
-                        valid_routes.append((path_edges, path_points_flat))
+                        path_edges = candidate_path
+                        path_points_flat = path_points_flat_cand
+                        break
 
-                for route_idx, (path_edges, path_points_flat) in enumerate(valid_routes):
-                    starting_timestamp = base_ts + orig_offset * self.GPS_INTERVAL_SEC
-                    stars_gps = []
-                    for px, py in sumo_points_flipped:
-                        proj_x, proj_y = project_point_onto_polyline(px, py, path_points_flat)
-                        # proj_x, proj_y are in display (y-flipped) coords; unflip for sumo_to_gps
-                        lon_lat = self.network_parser.sumo_to_gps_coords(proj_x, self._flip_y(proj_y))
-                        if lon_lat:
-                            stars_gps.append(list(lon_lat))
+                if path_edges is None or path_points_flat is None:
+                    continue
 
-                    duration_seconds = (len(segment) - 1) * self.GPS_INTERVAL_SEC if len(segment) > 1 else 0
-                    rec = {
-                        "starting_timestamp": starting_timestamp,
-                        "duration_seconds": duration_seconds,
-                        "gps_points": segment,
-                        "number_of_edges": len(path_edges),
-                        "route_edges": path_edges,
-                        "sumo_route_gps": stars_gps,
-                    }
+                starting_timestamp = base_ts + orig_offset * self.GPS_INTERVAL_SEC
+                stars_gps = []
+                for px, py in sumo_points_flipped:
+                    proj_x, proj_y = project_point_onto_polyline(px, py, path_points_flat)
+                    lon_lat = self.network_parser.sumo_to_gps_coords(proj_x, self._flip_y(proj_y))
+                    if lon_lat:
+                        stars_gps.append(list(lon_lat))
 
-                    out_file = Path(self.output_path) / f"traj_{trip_num}_seg{seg_idx + 1}_r{route_idx + 1}.json"
-                    try:
-                        with open(out_file, "w", encoding="utf-8") as f:
-                            json.dump(rec, f, indent=2)
-                        saved_count += 1
-                    except Exception as e:
-                        pass
+                duration_seconds = (len(segment) - 1) * self.GPS_INTERVAL_SEC if len(segment) > 1 else 0
+                seg_rec = {
+                    "starting_timestamp": starting_timestamp,
+                    "duration_seconds": duration_seconds,
+                    "gps_points": segment,
+                    "number_of_edges": len(path_edges),
+                    "route_edges": path_edges,
+                    "sumo_route_gps": stars_gps,
+                }
+                trajectory_segments.append(seg_rec)
+
+            if trajectory_segments:
+                out_file = Path(self.output_path) / f"traj_{trip_num}.json"
+                rec = {
+                    "trajectory_id": trip_num,
+                    "segments": trajectory_segments,
+                }
+                try:
+                    with open(out_file, "w", encoding="utf-8") as f:
+                        json.dump(rec, f, indent=2)
+                    saved_count += 1
+                except Exception:
+                    pass
 
             total_processed += 1
 
@@ -2549,7 +2563,7 @@ class DatasetConversionPage(QWidget):
         if error_msg:
             self.log(f"Dataset generation stopped: {error_msg}")
         else:
-            self.log(f"✅ Dataset generation complete: {saved_count} route(s) saved from {total_processed} trajectory(ies)")
+            self.log(f"✅ Dataset generation complete: {saved_count} trajectory file(s) saved from {total_processed} processed")
     
     def validate_dataset_path(self, path: str, file_type: str):
         """Validate the dataset path and update status.
