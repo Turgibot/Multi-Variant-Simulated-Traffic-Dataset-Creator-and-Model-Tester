@@ -28,6 +28,11 @@ from src.utils.route_finding import (build_edges_data, build_node_positions,
                                      project_point_onto_polyline,
                                      project_point_onto_polyline_with_segment,
                                      shortest_path_dijkstra)
+from src.utils.dataset_conversion_mp import run_multiprocess
+from src.utils.trajectory_converter import (
+    convert_trajectory,
+    iter_trajectories_from_csv,
+)
 from src.utils.trip_validator import (TripValidationResult,
                                       validate_trip_segments)
 
@@ -551,13 +556,12 @@ class RouteLoadWorker(QThread):
 
 
 class DatasetGenerationWorker(QThread):
-    """Worker thread for batch dataset generation - exports trajectories with SUMO routes to JSON."""
+    """Worker thread for batch dataset generation - exports trajectories with SUMO routes to JSON.
+    Uses shared trajectory_converter logic. Supports multiprocessing for speed.
+    """
 
     progress = Signal(int, int, str)  # current, total, status
     finished = Signal(int, int, str)  # saved_count, total_processed, error_msg (empty if ok)
-
-    GPS_INTERVAL_SEC = 15
-    MAX_SUMO_ROUTE_DISTANCE_M = 150.0
 
     def __init__(
         self,
@@ -565,9 +569,11 @@ class DatasetGenerationWorker(QThread):
         output_path: str,
         start_traj: int,
         last_traj: int,
+        network_path: str,
         network_parser,
         y_min: float,
         y_max: float,
+        workers: int,
         cancelled_callback,
         parent=None,
     ):
@@ -576,17 +582,58 @@ class DatasetGenerationWorker(QThread):
         self.output_path = output_path
         self.start_traj = start_traj
         self.last_traj = last_traj
+        self.network_path = network_path
         self.network_parser = network_parser
         self.y_min = y_min
         self.y_max = y_max
+        self.workers = max(1, workers)
         self._cancelled = cancelled_callback
 
-    def _flip_y(self, y: float) -> float:
-        return self.y_max + self.y_min - y
-
     def run(self):
-        import csv as csv_module
         total = max(0, self.last_traj - self.start_traj + 1)
+        if total == 0:
+            self.finished.emit(0, 0, "")
+            return
+
+        if self.workers > 1:
+            self._run_multiprocess(total)
+        else:
+            self._run_single(total)
+
+    def _run_multiprocess(self, total: int):
+        """Use multiprocessing for parallel conversion."""
+        trajectories = list(
+            iter_trajectories_from_csv(self.train_path, self.start_traj, self.last_traj)
+        )
+        if not trajectories:
+            self.finished.emit(0, 0, "")
+            return
+
+        last_emitted = [0]  # use list to allow closure to mutate
+
+        def on_progress(current: int, tot: int):
+            if self._cancelled():
+                return
+            # Throttle: emit every 5 trajectories or when done
+            if current == 1 or current - last_emitted[0] >= 5 or current == tot:
+                last_emitted[0] = current
+                pct = 100 * current // tot if tot else 0
+                self.progress.emit(current, tot, f"Processing... {current}/{tot} ({pct}%)")
+
+        saved_count, total_processed = run_multiprocess(
+            trajectories,
+            self.network_path,
+            self.output_path,
+            self.workers,
+            use_polygon=False,
+            progress_callback=on_progress,
+            cancelled_callback=self._cancelled,
+        )
+        err = "Cancelled" if self._cancelled() else ""
+        self.finished.emit(saved_count, total_processed, err)
+
+    def _run_single(self, total: int):
+        """Single-threaded conversion (supports per-trajectory cancellation)."""
         saved_count = 0
         total_processed = 0
         edges_data = build_edges_data(self.network_parser)
@@ -594,142 +641,39 @@ class DatasetGenerationWorker(QThread):
         node_positions = build_node_positions(self.network_parser)
         os.makedirs(self.output_path, exist_ok=True)
 
-        for traj_idx, trip_num in enumerate(range(self.start_traj, self.last_traj + 1)):
+        iterator = iter_trajectories_from_csv(self.train_path, self.start_traj, self.last_traj)
+        last_emitted = [0]
+        for current, (trip_num, polyline, base_timestamp) in enumerate(iterator, 1):
             if self._cancelled():
                 self.finished.emit(saved_count, total_processed, "Cancelled")
                 return
 
-            self.progress.emit(traj_idx + 1, total, f"Processing trajectory {trip_num}...")
+            # Throttle progress: emit every 5 trajectories or when done
+            if current == 1 or current - last_emitted[0] >= 5 or current == total:
+                last_emitted[0] = current
+                self.progress.emit(current, total, f"Processing trajectory {trip_num}...")
 
-            polyline, base_timestamp = _load_trip_row_static(self.train_path, trip_num)
-            if not polyline or len(polyline) < 2:
-                continue
-
-            invalid_segments, real_start_idx, real_end_idx, segment_trim_data = _prepare_route_data_static(polyline)
-
-            if invalid_segments.invalid_segment_count > 0:
-                split_segments = _split_at_invalid_segments_static(polyline)
-                segments = []
-                offset_in_original = 0
-                seg_offsets = []
-                for seg in split_segments:
-                    if len(seg) >= 2:
-                        seg_start, seg_end = _detect_real_start_and_end_static(seg)
-                        trim_seg = seg[seg_start : seg_end + 1]
-                        if len(trim_seg) >= 3:
-                            segments.append(trim_seg)
-                            seg_offsets.append(offset_in_original + seg_start)
-                    offset_in_original += len(seg)
-            else:
-                trim_poly = polyline[real_start_idx : real_end_idx + 1]
-                if len(trim_poly) >= 3:
-                    segments = [trim_poly]
-                    seg_offsets = [real_start_idx]
-                else:
-                    segments = []
-                    seg_offsets = []
-
-            base_ts = base_timestamp if base_timestamp is not None else 0
-
-            # Collect one valid route per segment (matches route display: 1 route per segment)
-            trajectory_segments = []
-
-            for seg_idx, (segment, orig_offset) in enumerate(zip(segments, seg_offsets)):
-                sumo_points_flipped = []
-                for lon, lat in segment:
-                    coords = self.network_parser.gps_to_sumo_coords(lon, lat)
-                    if coords:
-                        x, y = coords
-                        sumo_points_flipped.append((x, self._flip_y(y)))
-                if len(sumo_points_flipped) < 2:
-                    continue
-
-                orange_ids, green_ids, start_id, end_id, candidates = compute_green_orange_edges(
-                    edges_data, sumo_points_flipped, self.y_min, self.y_max, top_per_segment=5
-                )
-                if not start_id or not end_id:
-                    continue
-
-                goal_xy = sumo_points_flipped[-1]
-                max_tries = min(5, len(candidates or []))
-                path_edges = None
-                path_points_flat = None
-
-                # Use first valid route only (matches _draw_segment_sumo_route display logic)
-                for try_idx in range(max_tries):
-                    if self._cancelled():
-                        self.finished.emit(saved_count, total_processed, "Cancelled")
-                        return
-
-                    cand = (candidates or [])[try_idx]
-                    candidate_path = shortest_path_dijkstra(
-                        self.network_parser,
-                        cand,
-                        end_id,
-                        orange_ids=orange_ids,
-                        green_ids=green_ids,
-                        node_positions=node_positions,
-                        goal_xy=goal_xy,
-                        edges_in_polygon=None,
-                    )
-                    if not candidate_path:
-                        continue
-
-                    path_points = []
-                    for eid in candidate_path:
-                        sp = edge_shapes.get(eid)
-                        if sp:
-                            for x_s, y_s in sp:
-                                path_points.append((x_s, self._flip_y(y_s)))
-                    path_points_flat_cand = [[p[0], p[1]] for p in path_points]
-
-                    all_within = True
-                    for px, py in sumo_points_flipped:
-                        proj_x, proj_y = project_point_onto_polyline(px, py, path_points_flat_cand)
-                        dist_m = math.sqrt((px - proj_x) ** 2 + (py - proj_y) ** 2)
-                        if dist_m > self.MAX_SUMO_ROUTE_DISTANCE_M:
-                            all_within = False
-                            break
-                    if all_within:
-                        path_edges = candidate_path
-                        path_points_flat = path_points_flat_cand
-                        break
-
-                if path_edges is None or path_points_flat is None:
-                    continue
-
-                starting_timestamp = base_ts + orig_offset * self.GPS_INTERVAL_SEC
-                stars_gps = []
-                for px, py in sumo_points_flipped:
-                    proj_x, proj_y = project_point_onto_polyline(px, py, path_points_flat)
-                    lon_lat = self.network_parser.sumo_to_gps_coords(proj_x, self._flip_y(proj_y))
-                    if lon_lat:
-                        stars_gps.append(list(lon_lat))
-
-                duration_seconds = (len(segment) - 1) * self.GPS_INTERVAL_SEC if len(segment) > 1 else 0
-                seg_rec = {
-                    "starting_timestamp": starting_timestamp,
-                    "duration_seconds": duration_seconds,
-                    "gps_points": segment,
-                    "number_of_edges": len(path_edges),
-                    "route_edges": path_edges,
-                    "sumo_route_gps": stars_gps,
-                }
-                trajectory_segments.append(seg_rec)
-
-            if trajectory_segments:
+            rec = convert_trajectory(
+                trip_num,
+                polyline,
+                base_timestamp,
+                self.network_parser,
+                edges_data,
+                edge_shapes,
+                node_positions,
+                self.y_min,
+                self.y_max,
+                use_polygon=False,
+                cancelled_callback=self._cancelled,
+            )
+            if rec:
                 out_file = Path(self.output_path) / f"traj_{trip_num}.json"
-                rec = {
-                    "trajectory_id": trip_num,
-                    "segments": trajectory_segments,
-                }
                 try:
                     with open(out_file, "w", encoding="utf-8") as f:
                         json.dump(rec, f, indent=2)
                     saved_count += 1
                 except Exception:
                     pass
-
             total_processed += 1
 
         self.finished.emit(saved_count, total_processed, "")
@@ -952,7 +896,7 @@ class DatasetConversionPage(QWidget):
         self.map_offset_x_spinbox.setSingleStep(10.0)
         self.map_offset_x_spinbox.setValue(0.0)
         self.map_offset_x_spinbox.setSuffix(" m")
-        self.map_offset_x_spinbox.setToolTip("Adjust map X offset in meters (positive = move map right)")
+        self.map_offset_x_spinbox.setToolTip("Adjust alignment: X offset in meters (positive = move network right)")
         self.map_offset_x_spinbox.setStyleSheet("""
             QDoubleSpinBox {
                 color: #333;
@@ -978,7 +922,7 @@ class DatasetConversionPage(QWidget):
         self.map_offset_y_spinbox.setSingleStep(10.0)
         self.map_offset_y_spinbox.setValue(0.0)
         self.map_offset_y_spinbox.setSuffix(" m")
-        self.map_offset_y_spinbox.setToolTip("Adjust map Y offset in meters (positive = move map down)")
+        self.map_offset_y_spinbox.setToolTip("Adjust alignment: Y offset in meters (positive = move network down)")
         self.map_offset_y_spinbox.setStyleSheet("""
             QDoubleSpinBox {
                 color: #333;
@@ -1935,6 +1879,12 @@ class DatasetConversionPage(QWidget):
         self.dataset_last_traj_spin.setFixedWidth(60)
         self.dataset_last_traj_spin.setToolTip("Last trajectory number to process")
         traj_range_layout.addWidget(self.dataset_last_traj_spin)
+        traj_range_layout.addWidget(QLabel("Workers:"))
+        self.dataset_workers_spin = QLineEdit()
+        self.dataset_workers_spin.setPlaceholderText("4")
+        self.dataset_workers_spin.setFixedWidth(40)
+        self.dataset_workers_spin.setToolTip("Number of parallel workers (1=single-threaded, 4=faster)")
+        traj_range_layout.addWidget(self.dataset_workers_spin)
         traj_range_layout.addStretch()
         dataset_gen_layout.addLayout(traj_range_layout)
         
@@ -2520,6 +2470,17 @@ class DatasetConversionPage(QWidget):
             self.log("❌ Network not loaded")
             QMessageBox.warning(self, "Dataset Error", "Please wait for the network map to load.")
             return
+        network_path = getattr(self, 'network_file_path', None) or ''
+        if not network_path or not Path(network_path).exists():
+            self.log("❌ Network file path not available")
+            QMessageBox.warning(self, "Dataset Error", "Network file path not available. Reload the network.")
+            return
+
+        try:
+            workers = int(self.dataset_workers_spin.text().strip() or "4")
+            workers = max(1, min(workers, 32))
+        except ValueError:
+            workers = 4
 
         y_min = getattr(self.map_view, '_network_y_min', 0)
         y_max = getattr(self.map_view, '_network_y_max', 0)
@@ -2534,15 +2495,22 @@ class DatasetConversionPage(QWidget):
             output_path=output_path,
             start_traj=start_traj,
             last_traj=last_traj,
+            network_path=network_path,
             network_parser=self.network_parser,
             y_min=y_min,
             y_max=y_max,
+            workers=workers,
             cancelled_callback=lambda: self._dataset_gen_cancelled,
         )
         self._dataset_gen_worker.progress.connect(self._on_dataset_gen_progress)
         self._dataset_gen_worker.finished.connect(self._on_dataset_gen_finished)
         self.dataset_start_btn.setEnabled(False)
         self.dataset_stop_btn.setEnabled(True)
+        self.progress_group.setVisible(True)
+        self.progress_group.setTitle("⏳ Dataset Generation")
+        self.progress_bar.setMaximum(max(1, last_traj - start_traj + 1))
+        self.progress_bar.setValue(0)
+        self.progress_status.setText(f"Processing trajectories {start_traj}–{last_traj}...")
         self.log(f"▶ Starting dataset generation: trajectories {start_traj}–{last_traj} → {output_path}")
         self._dataset_gen_worker.start()
 
@@ -2553,16 +2521,23 @@ class DatasetConversionPage(QWidget):
 
     def _on_dataset_gen_progress(self, current: int, total: int, status: str):
         """Handle dataset generation progress."""
-        self.log(f"  {status} ({current}/{total})")
+        self.progress_bar.setValue(current)
+        self.progress_status.setText(status)
+        # Log throttled - status already includes progress when throttled
+        self.log(f"  {status}")
 
     def _on_dataset_gen_finished(self, saved_count: int, total_processed: int, error_msg: str):
         """Handle dataset generation completion."""
         self._dataset_gen_worker = None
         self.dataset_start_btn.setEnabled(True)
         self.dataset_stop_btn.setEnabled(False)
+        self.progress_bar.setValue(self.progress_bar.maximum())
+        self.progress_group.setTitle("⏳ Download Progress")
         if error_msg:
+            self.progress_status.setText(f"Stopped: {error_msg}")
             self.log(f"Dataset generation stopped: {error_msg}")
         else:
+            self.progress_status.setText(f"Complete: {saved_count} saved from {total_processed} processed")
             self.log(f"✅ Dataset generation complete: {saved_count} trajectory file(s) saved from {total_processed} processed")
     
     def validate_dataset_path(self, path: str, file_type: str):

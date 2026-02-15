@@ -114,6 +114,40 @@ def project_point_onto_polyline_with_segment(
     return (best, best_seg)
 
 
+def project_point_onto_polyline_with_segment_and_t(
+    px: float, py: float, shape_points: List[List[float]]
+) -> Tuple[Tuple[float, float], int, float]:
+    """Closest point on the polyline to (px, py). Returns ((proj_x, proj_y), segment_idx, t).
+    t is the fractional position along the segment (0=start, 1=end)."""
+    if len(shape_points) < 2:
+        if len(shape_points) == 1:
+            return ((float(shape_points[0][0]), float(shape_points[0][1])), 0, 0.0)
+        return ((px, py), 0, 0.0)
+    best = (px, py)
+    best_seg = 0
+    best_t = 0.0
+    best_dist_sq = float("inf")
+    for i in range(len(shape_points) - 1):
+        x1, y1 = shape_points[i][0], shape_points[i][1]
+        x2, y2 = shape_points[i + 1][0], shape_points[i + 1][1]
+        seg_dx, seg_dy = x2 - x1, y2 - y1
+        seg_len_sq = seg_dx * seg_dx + seg_dy * seg_dy
+        if seg_len_sq == 0:
+            cx, cy = x1, y1
+            t = 0.0
+        else:
+            t = ((px - x1) * seg_dx + (py - y1) * seg_dy) / seg_len_sq
+            t = max(0.0, min(1.0, t))
+            cx, cy = x1 + t * seg_dx, y1 + t * seg_dy
+        d_sq = (px - cx) ** 2 + (py - cy) ** 2
+        if d_sq < best_dist_sq:
+            best_dist_sq = d_sq
+            best = (cx, cy)
+            best_seg = i
+            best_t = t
+    return (best, best_seg, best_t)
+
+
 def build_edges_data(network_parser: Any) -> EdgesData:
     """Build list of (edge_id, edge_data, shape_points) with shape in original SUMO coords.
     Includes all edges from the network.
@@ -139,17 +173,33 @@ def compute_green_orange_edges(
     top_per_segment: int = 5,
     direction_threshold: float = math.pi / 9,
     angle_weight: float = 5.0,
+    spatial_index: Optional[Any] = None,
+    filter_radius: float = 800.0,
 ) -> Tuple[Set[str], Set[str], Optional[str], Optional[str], List[str]]:
     """Compute orange/green edge IDs and start/end edge for route finding (no drawing).
     sumo_points_flipped: trajectory points in display coords (Y-flipped).
     Returns (orange_edge_ids, green_edge_ids, start_edge_id, end_edge_id, start_edge_candidates).
     Same logic as view_network draw_green_edges_for_segments.
+    When spatial_index is provided, filters edges to candidates near trajectory for speed.
     """
     if not sumo_points_flipped or len(sumo_points_flipped) < 2:
         return (set(), set(), None, None, [])
 
     def flip_y(y: float) -> float:
         return y_max + y_min - y
+
+    # Optional: filter edges by spatial index for faster processing
+    if spatial_index is not None:
+        candidate_ids: Set[str] = set()
+        for px, py in sumo_points_flipped:
+            py_sumo = flip_y(py)
+            candidate_ids.update(spatial_index.get_candidates_in_radius(px, py_sumo, filter_radius))
+        edge_id_set = {eid for eid, _, _ in edges_data}
+        candidate_ids &= edge_id_set
+        if candidate_ids:
+            edges_data = [(eid, ed, sp) for eid, ed, sp in edges_data if eid in candidate_ids]
+        if not edges_data:
+            return (set(), set(), None, None, [])
 
     all_orange_ids: Set[str] = set()
     all_green_ids: Set[str] = set()

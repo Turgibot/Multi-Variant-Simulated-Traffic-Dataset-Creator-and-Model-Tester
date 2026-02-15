@@ -139,3 +139,6 @@ Porto/dataset/invalid_trips.csv
 2025-12-21-10-08-57/osm.net.xml.gz
 2025-12-21-10-08-57/osm.netccfg
 2025-12-21-10-08-57/osm.view.xml
+
+output_dir/
+output/

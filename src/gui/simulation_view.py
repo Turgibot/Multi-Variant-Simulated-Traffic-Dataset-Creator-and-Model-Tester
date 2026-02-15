@@ -421,20 +421,29 @@ class SimulationView(QGraphicsView):
                     if self.scene is not None:
                         self.scene.setItemIndexMethod(QGraphicsScene.BspTreeIndex)
                     self.setUpdatesEnabled(True)
+                    # Apply initial map offset to network (may have been set before load)
+                    if self.map_offset_x != 0 or self.map_offset_y != 0:
+                        for edge_item in self.edge_items.values():
+                            pos = edge_item.pos()
+                            edge_item.setPos(pos.x() + self.map_offset_x, pos.y() + self.map_offset_y)
+                        for node_item in self.node_items.values():
+                            pos = node_item.pos()
+                            node_item.setPos(pos.x() + self.map_offset_x, pos.y() + self.map_offset_y)
                     conv_boundary = self._network_prepare_conv_boundary
                     bounds = self._network_prepare_bounds
+                    ox, oy = self.map_offset_x, self.map_offset_y
                     if conv_boundary:
                         rect = QRectF(
-                            conv_boundary['x_min'],
-                            conv_boundary['y_min'],
+                            conv_boundary['x_min'] + ox,
+                            conv_boundary['y_min'] + oy,
                             conv_boundary['x_max'] - conv_boundary['x_min'],
                             conv_boundary['y_max'] - conv_boundary['y_min']
                         )
                         self.fitInView(rect, Qt.KeepAspectRatio)
                     elif bounds:
                         rect = QRectF(
-                            bounds['x_min'],
-                            bounds['y_min'],
+                            bounds['x_min'] + ox,
+                            bounds['y_min'] + oy,
                             bounds['x_max'] - bounds['x_min'],
                             bounds['y_max'] - bounds['y_min']
                         )
@@ -481,13 +490,19 @@ class SimulationView(QGraphicsView):
         old_y = self.map_offset_y
         self.map_offset_x = x_offset
         self.map_offset_y = y_offset
-        
-        # If tiles are already loaded, reposition them with the new offset
+        delta_x = x_offset - old_x
+        delta_y = y_offset - old_y
+
+        # Always apply offset to network (edges and nodes) so it's visible regardless of OSM
+        for edge_item in self.edge_items.values():
+            pos = edge_item.pos()
+            edge_item.setPos(pos.x() + delta_x, pos.y() + delta_y)
+        for node_item in self.node_items.values():
+            pos = node_item.pos()
+            node_item.setPos(pos.x() + delta_x, pos.y() + delta_y)
+
+        # If tiles are loaded, reposition them too (keeps alignment when both visible)
         if self.show_osm_map and self.tile_items:
-            # Calculate offset difference and apply to all tiles
-            delta_x = x_offset - old_x
-            delta_y = y_offset - old_y
-            
             for item in self.tile_items.values():
                 current_pos = item.pos()
                 item.setPos(current_pos.x() + delta_x, current_pos.y() + delta_y)
