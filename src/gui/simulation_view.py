@@ -421,29 +421,20 @@ class SimulationView(QGraphicsView):
                     if self.scene is not None:
                         self.scene.setItemIndexMethod(QGraphicsScene.BspTreeIndex)
                     self.setUpdatesEnabled(True)
-                    # Apply initial map offset to network (may have been set before load)
-                    if self.map_offset_x != 0 or self.map_offset_y != 0:
-                        for edge_item in self.edge_items.values():
-                            pos = edge_item.pos()
-                            edge_item.setPos(pos.x() + self.map_offset_x, pos.y() + self.map_offset_y)
-                        for node_item in self.node_items.values():
-                            pos = node_item.pos()
-                            node_item.setPos(pos.x() + self.map_offset_x, pos.y() + self.map_offset_y)
                     conv_boundary = self._network_prepare_conv_boundary
                     bounds = self._network_prepare_bounds
-                    ox, oy = self.map_offset_x, self.map_offset_y
                     if conv_boundary:
                         rect = QRectF(
-                            conv_boundary['x_min'] + ox,
-                            conv_boundary['y_min'] + oy,
+                            conv_boundary['x_min'],
+                            conv_boundary['y_min'],
                             conv_boundary['x_max'] - conv_boundary['x_min'],
                             conv_boundary['y_max'] - conv_boundary['y_min']
                         )
                         self.fitInView(rect, Qt.KeepAspectRatio)
                     elif bounds:
                         rect = QRectF(
-                            bounds['x_min'] + ox,
-                            bounds['y_min'] + oy,
+                            bounds['x_min'],
+                            bounds['y_min'],
                             bounds['x_max'] - bounds['x_min'],
                             bounds['y_max'] - bounds['y_min']
                         )
@@ -480,32 +471,11 @@ class SimulationView(QGraphicsView):
             node_item.setVisible(visible)
     
     def set_map_offset(self, x_offset: float, y_offset: float):
-        """Set map offset for manual alignment adjustment.
-        
-        Args:
-            x_offset: X offset in meters (positive = move map right)
-            y_offset: Y offset in meters (positive = move map down)
+        """Store GPS offset for trajectory alignment (meters).
+        Map and network stay fixed. Offset is applied only to trajectory GPS coords.
         """
-        old_x = self.map_offset_x
-        old_y = self.map_offset_y
         self.map_offset_x = x_offset
         self.map_offset_y = y_offset
-        delta_x = x_offset - old_x
-        delta_y = y_offset - old_y
-
-        # Always apply offset to network (edges and nodes) so it's visible regardless of OSM
-        for edge_item in self.edge_items.values():
-            pos = edge_item.pos()
-            edge_item.setPos(pos.x() + delta_x, pos.y() + delta_y)
-        for node_item in self.node_items.values():
-            pos = node_item.pos()
-            node_item.setPos(pos.x() + delta_x, pos.y() + delta_y)
-
-        # If tiles are loaded, reposition them too (keeps alignment when both visible)
-        if self.show_osm_map and self.tile_items:
-            for item in self.tile_items.values():
-                current_pos = item.pos()
-                item.setPos(current_pos.x() + delta_x, current_pos.y() + delta_y)
     
     def set_osm_map_visible(self, visible: bool):
         """Show or hide OSM map tiles.
@@ -749,9 +719,8 @@ class SimulationView(QGraphicsView):
         
         # Position at the top-left corner in flipped coordinates
         # After Y-flip: nw_y_flipped < se_y_flipped (north is now at lower Y)
-        # Apply manual offset for alignment adjustment
-        pos_x = min(nw_x, se_x) + self.map_offset_x
-        pos_y = min(nw_y_flipped, se_y_flipped) + self.map_offset_y
+        pos_x = min(nw_x, se_x)
+        pos_y = min(nw_y_flipped, se_y_flipped)
         
         item.setPos(pos_x, pos_y)
         item.setZValue(-10)  # Behind everything else

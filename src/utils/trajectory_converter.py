@@ -44,6 +44,22 @@ def _deduplicate_consecutive(items: List[str]) -> List[str]:
     return result
 
 
+def apply_gps_offset(lon: float, lat: float, offset_x_m: float, offset_y_m: float) -> Tuple[float, float]:
+    """Apply meter offset to GPS coords. X=east-west, Y=north-south.
+    Returns (adjusted_lon, adjusted_lat). Used for trajectory display and route finding.
+    """
+    if offset_x_m == 0 and offset_y_m == 0:
+        return lon, lat
+    # Meters per degree: lat ~110540m, lon ~111320*cos(lat)m
+    m_per_deg_lat = 110540.0
+    m_per_deg_lon = 111320.0 * math.cos(math.radians(lat)) if lat != 90 else 0.0
+    if m_per_deg_lon < 1e-6:
+        m_per_deg_lon = 111320.0
+    delta_lon = offset_x_m / m_per_deg_lon
+    delta_lat = offset_y_m / m_per_deg_lat
+    return lon + delta_lon, lat + delta_lat
+
+
 def iter_trajectories_from_csv(
     csv_path: str, start_traj: int, last_traj: int
 ):
@@ -160,10 +176,15 @@ def convert_trajectory(
     y_min: float,
     y_max: float,
     use_polygon: bool = False,
+    offset_x: float = 0.0,
+    offset_y: float = 0.0,
     cancelled_callback: Optional[Any] = None,
 ) -> Optional[Dict]:
     """
     Convert a single trajectory to JSON record. Returns None if no valid route.
+
+    offset_x, offset_y: GPS offset in meters (X=east, Y=north). Applied to trajectory
+    GPS coords before conversion. Map and network stay fixed; only trajectory moves.
     """
     def flip_y(y: float) -> float:
         return y_max + y_min - y
@@ -205,7 +226,9 @@ def convert_trajectory(
             return None
         sumo_points_flipped = []
         for lon, lat in segment:
-            coords = network_parser.gps_to_sumo_coords(lon, lat)
+            # Apply GPS offset to trajectory coords (map/network stay fixed)
+            adj_lon, adj_lat = apply_gps_offset(lon, lat, offset_x, offset_y)
+            coords = network_parser.gps_to_sumo_coords(adj_lon, adj_lat)
             if coords:
                 x, y = coords
                 sumo_points_flipped.append((x, flip_y(y)))

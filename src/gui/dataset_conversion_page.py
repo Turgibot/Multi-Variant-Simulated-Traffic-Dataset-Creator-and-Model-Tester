@@ -30,6 +30,7 @@ from src.utils.route_finding import (build_edges_data, build_node_positions,
                                      shortest_path_dijkstra)
 from src.utils.dataset_conversion_mp import run_multiprocess
 from src.utils.trajectory_converter import (
+    apply_gps_offset,
     convert_trajectory,
     iter_trajectories_from_csv,
 )
@@ -574,6 +575,8 @@ class DatasetGenerationWorker(QThread):
         y_min: float,
         y_max: float,
         workers: int,
+        offset_x: float,
+        offset_y: float,
         cancelled_callback,
         parent=None,
     ):
@@ -587,6 +590,8 @@ class DatasetGenerationWorker(QThread):
         self.y_min = y_min
         self.y_max = y_max
         self.workers = max(1, workers)
+        self.offset_x = offset_x
+        self.offset_y = offset_y
         self._cancelled = cancelled_callback
 
     def run(self):
@@ -626,6 +631,8 @@ class DatasetGenerationWorker(QThread):
             self.output_path,
             self.workers,
             use_polygon=False,
+            offset_x=self.offset_x,
+            offset_y=self.offset_y,
             progress_callback=on_progress,
             cancelled_callback=self._cancelled,
         )
@@ -664,6 +671,8 @@ class DatasetGenerationWorker(QThread):
                 self.y_min,
                 self.y_max,
                 use_polygon=False,
+                offset_x=self.offset_x,
+                offset_y=self.offset_y,
                 cancelled_callback=self._cancelled,
             )
             if rec:
@@ -879,7 +888,7 @@ class DatasetConversionPage(QWidget):
         map_header_layout.addSpacing(10)
         
         # Map offset controls
-        self.map_offset_label = QLabel("Map offset:")
+        self.map_offset_label = QLabel("GPS offset:")
         self.map_offset_label.setStyleSheet("color: #333; font-size: 11px;")
         self.map_offset_label.setVisible(False)  # Hidden until map is loaded
         map_header_layout.addWidget(self.map_offset_label)
@@ -896,7 +905,7 @@ class DatasetConversionPage(QWidget):
         self.map_offset_x_spinbox.setSingleStep(10.0)
         self.map_offset_x_spinbox.setValue(0.0)
         self.map_offset_x_spinbox.setSuffix(" m")
-        self.map_offset_x_spinbox.setToolTip("Adjust alignment: X offset in meters (positive = move network right)")
+        self.map_offset_x_spinbox.setToolTip("GPS offset: X in meters (positive = move trajectory east)")
         self.map_offset_x_spinbox.setStyleSheet("""
             QDoubleSpinBox {
                 color: #333;
@@ -922,7 +931,7 @@ class DatasetConversionPage(QWidget):
         self.map_offset_y_spinbox.setSingleStep(10.0)
         self.map_offset_y_spinbox.setValue(0.0)
         self.map_offset_y_spinbox.setSuffix(" m")
-        self.map_offset_y_spinbox.setToolTip("Adjust alignment: Y offset in meters (positive = move network down)")
+        self.map_offset_y_spinbox.setToolTip("GPS offset: Y in meters (positive = move trajectory north)")
         self.map_offset_y_spinbox.setStyleSheet("""
             QDoubleSpinBox {
                 color: #333;
@@ -2237,14 +2246,14 @@ class DatasetConversionPage(QWidget):
             self.map_view.set_network_visible(show_network)
     
     def on_map_offset_changed(self, value: float):
-        """Handle map offset change."""
+        """Store GPS offset values. Applied when user clicks Show route."""
         self._schedule_save_settings()
         
         if self.map_view:
             x_offset = self.map_offset_x_spinbox.value()
             y_offset = self.map_offset_y_spinbox.value()
             self.map_view.set_map_offset(x_offset, y_offset)
-            self.log(f"Map offset: X={x_offset:.1f}m, Y={y_offset:.1f}m")
+            self.log(f"GPS offset: X={x_offset:.1f}m, Y={y_offset:.1f}m")
     
     def is_map_ready(self) -> bool:
         """Check if the map is loaded."""
@@ -2489,6 +2498,8 @@ class DatasetConversionPage(QWidget):
             QMessageBox.warning(self, "Dataset Error", "Network bounds not ready. Please wait for map to load.")
             return
 
+        offset_x = self.map_offset_x_spinbox.value()
+        offset_y = self.map_offset_y_spinbox.value()
         self._dataset_gen_cancelled = False
         self._dataset_gen_worker = DatasetGenerationWorker(
             train_path=train_path,
@@ -2500,6 +2511,8 @@ class DatasetConversionPage(QWidget):
             y_min=y_min,
             y_max=y_max,
             workers=workers,
+            offset_x=offset_x,
+            offset_y=offset_y,
             cancelled_callback=lambda: self._dataset_gen_cancelled,
         )
         self._dataset_gen_worker.progress.connect(self._on_dataset_gen_progress)
@@ -4270,14 +4283,18 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
         
         total_points = 0
         point_counter = 0  # Global counter across all segments (starts from 0)
+        ox = self.map_offset_x_spinbox.value()
+        oy = self.map_offset_y_spinbox.value()
         
         for seg_idx, segment in enumerate(segments):
             if not segment:
                 continue
             
             for point_idx, (lon, lat) in enumerate(segment):
+                # Apply GPS offset for display (trajectory moves, map/network stay fixed)
+                adj_lon, adj_lat = apply_gps_offset(lon, lat, ox, oy)
                 # Convert GPS to SUMO coordinates
-                sumo_coords = self.network_parser.gps_to_sumo_coords(lon, lat)
+                sumo_coords = self.network_parser.gps_to_sumo_coords(adj_lon, adj_lat)
                 if not sumo_coords:
                     continue
                 
@@ -6191,10 +6208,13 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
             if not validation_result.is_valid:
                 self.log(f"⚠️ Route #{route_num} Segment {seg_idx + 1} has {validation_result.invalid_segment_count} invalid segment(s) (>1000m)")
             
-            # Convert GPS coordinates to SUMO coordinates
+            # Apply GPS offset and convert to SUMO coordinates
+            ox = self.map_offset_x_spinbox.value()
+            oy = self.map_offset_y_spinbox.value()
             sumo_points = []
             for lon, lat in polyline:
-                result = self.network_parser.gps_to_sumo_coords(lon, lat)
+                adj_lon, adj_lat = apply_gps_offset(lon, lat, ox, oy)
+                result = self.network_parser.gps_to_sumo_coords(adj_lon, adj_lat)
                 if result is not None:
                     sumo_x, sumo_y = result
                     # Flip Y to match the flipped network map

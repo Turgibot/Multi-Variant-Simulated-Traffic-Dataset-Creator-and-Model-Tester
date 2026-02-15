@@ -47,6 +47,8 @@ def run_single_process(
     start_traj: int,
     last_traj: int,
     use_polygon: bool = False,
+    offset_x: float = 0.0,
+    offset_y: float = 0.0,
     verbose: bool = True,
 ) -> Tuple[int, int]:
     """Run conversion in single process. Returns (saved_count, total_processed)."""
@@ -88,6 +90,8 @@ def run_single_process(
             y_min,
             y_max,
             use_polygon=use_polygon,
+            offset_x=offset_x,
+            offset_y=offset_y,
         )
         if rec:
             out_file = Path(output_path) / f"traj_{trip_num}.json"
@@ -102,7 +106,13 @@ def run_single_process(
 _worker_state: Optional[Tuple] = None
 
 
-def _init_worker(net_path: str, out_path: str, use_polygon: bool = False) -> None:
+def _init_worker(
+    net_path: str,
+    out_path: str,
+    use_polygon: bool = False,
+    offset_x: float = 0.0,
+    offset_y: float = 0.0,
+) -> None:
     """Initialize worker with network (called once per worker process)."""
     global _worker_state
     np_local = NetworkParser(net_path)
@@ -113,14 +123,36 @@ def _init_worker(net_path: str, out_path: str, use_polygon: bool = False) -> Non
     edges_data = build_edges_data(np_local)
     edge_shapes = {eid: shape for eid, _ed, shape in edges_data}
     node_positions = build_node_positions(np_local)
-    _worker_state = (np_local, edges_data, edge_shapes, node_positions, y_min, y_max, out_path, use_polygon)
+    _worker_state = (
+        np_local,
+        edges_data,
+        edge_shapes,
+        node_positions,
+        y_min,
+        y_max,
+        out_path,
+        use_polygon,
+        offset_x,
+        offset_y,
+    )
 
 
 def _process_one_trajectory(task: Tuple[int, List, Optional[int]]) -> Tuple[int, int]:
     """Process a single trajectory. Worker must be initialized. Returns (saved, 1)."""
     global _worker_state
     trip_num, polyline, base_ts = task
-    np_local, edges_data, edge_shapes, node_positions, y_min, y_max, out_path, use_polygon = _worker_state
+    (
+        np_local,
+        edges_data,
+        edge_shapes,
+        node_positions,
+        y_min,
+        y_max,
+        out_path,
+        use_polygon,
+        offset_x,
+        offset_y,
+    ) = _worker_state
     rec = convert_trajectory(
         trip_num,
         polyline,
@@ -132,6 +164,8 @@ def _process_one_trajectory(task: Tuple[int, List, Optional[int]]) -> Tuple[int,
         y_min,
         y_max,
         use_polygon=use_polygon,
+        offset_x=offset_x,
+        offset_y=offset_y,
     )
     if rec:
         out_file = Path(out_path) / f"traj_{trip_num}.json"
@@ -149,6 +183,8 @@ def run_multiprocess(
     last_traj: int,
     workers: int,
     use_polygon: bool = False,
+    offset_x: float = 0.0,
+    offset_y: float = 0.0,
     verbose: bool = True,
 ) -> Tuple[int, int]:
     """Run conversion with multiprocessing. Returns (saved_count, total_processed)."""
@@ -167,7 +203,7 @@ def run_multiprocess(
     with Pool(
         workers,
         initializer=_init_worker,
-        initargs=(network_path, output_path, use_polygon),
+        initargs=(network_path, output_path, use_polygon, offset_x, offset_y),
     ) as pool:
         imap = pool.imap(_process_one_trajectory, trajectories)
         if verbose:
@@ -244,6 +280,8 @@ def main():
     parser.add_argument("--end", "-e", type=int, default=1000, help="Last trajectory index (inclusive)")
     parser.add_argument("--workers", "-w", type=int, default=1, help="Number of parallel workers (1 = single process)")
     parser.add_argument("--use-polygon", action="store_true", help="Restrict Dijkstra to edges inside trajectory polygon (faster, may miss some routes)")
+    parser.add_argument("--offset-x", type=float, default=0.0, help="GPS offset X in meters (positive = move trajectory east)")
+    parser.add_argument("--offset-y", type=float, default=0.0, help="GPS offset Y in meters (positive = move trajectory north)")
     parser.add_argument("--compare", action="store_true", help="Run both modes and compare saved counts (uses --output as base dir)")
     parser.add_argument("--quiet", "-q", action="store_true", help="Suppress progress output")
     args = parser.parse_args()
@@ -277,6 +315,8 @@ def main():
     t0 = time.perf_counter()
 
     use_polygon = getattr(args, "use_polygon", False)
+    offset_x = getattr(args, "offset_x", 0.0)
+    offset_y = getattr(args, "offset_y", 0.0)
     if workers == 1:
         saved, total = run_single_process(
             str(train_path),
@@ -285,6 +325,8 @@ def main():
             start_traj,
             last_traj,
             use_polygon=use_polygon,
+            offset_x=offset_x,
+            offset_y=offset_y,
             verbose=verbose,
         )
     else:
@@ -296,6 +338,8 @@ def main():
             last_traj,
             workers,
             use_polygon=use_polygon,
+            offset_x=offset_x,
+            offset_y=offset_y,
             verbose=verbose,
         )
 

@@ -15,7 +15,13 @@ from src.utils.trajectory_converter import convert_trajectory
 _worker_state: Optional[Tuple] = None
 
 
-def init_worker(net_path: str, out_path: str, use_polygon: bool = False) -> None:
+def init_worker(
+    net_path: str,
+    out_path: str,
+    use_polygon: bool = False,
+    offset_x: float = 0.0,
+    offset_y: float = 0.0,
+) -> None:
     """Initialize worker process. Called once per worker."""
     global _worker_state
     np_local = NetworkParser(net_path)
@@ -35,6 +41,8 @@ def init_worker(net_path: str, out_path: str, use_polygon: bool = False) -> None
         y_max,
         out_path,
         use_polygon,
+        offset_x,
+        offset_y,
     )
 
 
@@ -53,6 +61,8 @@ def process_one_trajectory(
         y_max,
         out_path,
         use_polygon,
+        offset_x,
+        offset_y,
     ) = _worker_state
     rec = convert_trajectory(
         trip_num,
@@ -65,6 +75,8 @@ def process_one_trajectory(
         y_min,
         y_max,
         use_polygon=use_polygon,
+        offset_x=offset_x,
+        offset_y=offset_y,
     )
     if rec:
         out_file = Path(out_path) / f"traj_{trip_num}.json"
@@ -80,6 +92,8 @@ def run_multiprocess(
     output_path: str,
     workers: int,
     use_polygon: bool = False,
+    offset_x: float = 0.0,
+    offset_y: float = 0.0,
     progress_callback: Optional[Callable[[int, int], None]] = None,
     cancelled_callback: Optional[Callable[[], bool]] = None,
 ) -> Tuple[int, int]:
@@ -103,7 +117,7 @@ def run_multiprocess(
     with Pool(
         workers,
         initializer=init_worker,
-        initargs=(network_path, output_path, use_polygon),
+        initargs=(network_path, output_path, use_polygon, offset_x, offset_y),
     ) as pool:
         for i, result in enumerate(pool.imap(process_one_trajectory, trajectories, chunksize=chunk_size)):
             if cancelled_callback and cancelled_callback():
