@@ -4,10 +4,38 @@ Used by view_network.py and debug_trajectory_page.py.
 """
 
 import math
+from collections import defaultdict
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 # Type alias for edges_data: list of (edge_id, edge_data, shape_points)
 EdgesData = List[Tuple[str, Dict[str, Any], List[List[float]]]]
+
+
+class EdgeSpatialIndex:
+    """Grid-based spatial index for fast edge lookups. Reduces O(edges) to O(nearby)."""
+
+    def __init__(self, edges_data: EdgesData, cell_size: float = 500.0):
+        self.cell_size = cell_size
+        self.grid: Dict[Tuple[int, int], Set[str]] = defaultdict(set)
+        for edge_id, _ed, shape_points in edges_data:
+            if len(shape_points) < 2:
+                continue
+            xs = [p[0] for p in shape_points]
+            ys = [p[1] for p in shape_points]
+            min_x, max_x = min(xs), max(xs)
+            min_y, max_y = min(ys), max(ys)
+            for gx in range(int(min_x / cell_size), int(max_x / cell_size) + 1):
+                for gy in range(int(min_y / cell_size), int(max_y / cell_size) + 1):
+                    self.grid[(gx, gy)].add(edge_id)
+
+    def get_candidates_in_radius(self, x: float, y: float, radius: float) -> Set[str]:
+        min_x, max_x = x - radius, x + radius
+        min_y, max_y = y - radius, y + radius
+        out: Set[str] = set()
+        for gx in range(int(min_x / self.cell_size), int(max_x / self.cell_size) + 1):
+            for gy in range(int(min_y / self.cell_size), int(max_y / self.cell_size) + 1):
+                out.update(self.grid.get((gx, gy), set()))
+        return out
 
 
 def apply_trimming(

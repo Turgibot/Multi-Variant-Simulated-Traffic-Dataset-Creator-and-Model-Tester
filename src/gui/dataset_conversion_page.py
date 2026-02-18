@@ -23,7 +23,8 @@ from PySide6.QtWidgets import (QCheckBox, QFileDialog, QFrame,
 
 from src.gui.simulation_view import SimulationView
 from src.utils.network_parser import NetworkParser
-from src.utils.route_finding import (build_edges_data, build_node_positions,
+from src.utils.route_finding import (EdgeSpatialIndex, build_edges_data,
+                                     build_node_positions,
                                      compute_green_orange_edges,
                                      project_point_onto_polyline,
                                      project_point_onto_polyline_with_segment,
@@ -646,6 +647,7 @@ class DatasetGenerationWorker(QThread):
         edges_data = build_edges_data(self.network_parser)
         edge_shapes = {eid: shape for eid, _ed, shape in edges_data}
         node_positions = build_node_positions(self.network_parser)
+        spatial_index = EdgeSpatialIndex(edges_data, cell_size=500.0)
         os.makedirs(self.output_path, exist_ok=True)
 
         iterator = iter_trajectories_from_csv(self.train_path, self.start_traj, self.last_traj)
@@ -673,6 +675,7 @@ class DatasetGenerationWorker(QThread):
                 use_polygon=False,
                 offset_x=self.offset_x,
                 offset_y=self.offset_y,
+                spatial_index=spatial_index,
                 cancelled_callback=self._cancelled,
             )
             if rec:

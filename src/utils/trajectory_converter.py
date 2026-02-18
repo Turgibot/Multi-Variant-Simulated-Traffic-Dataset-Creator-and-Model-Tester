@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from src.utils.network_parser import NetworkParser
 from src.utils.route_finding import (
+    EdgeSpatialIndex,
     build_edges_data,
     build_node_positions,
     compute_green_orange_edges,
@@ -178,6 +179,7 @@ def convert_trajectory(
     use_polygon: bool = False,
     offset_x: float = 0.0,
     offset_y: float = 0.0,
+    spatial_index: Optional[Any] = None,
     cancelled_callback: Optional[Any] = None,
 ) -> Optional[Dict]:
     """
@@ -241,6 +243,8 @@ def convert_trajectory(
             y_min,
             y_max,
             top_per_segment=5,
+            spatial_index=spatial_index,
+            filter_radius=400.0,
         )
         if not start_id or not end_id:
             continue

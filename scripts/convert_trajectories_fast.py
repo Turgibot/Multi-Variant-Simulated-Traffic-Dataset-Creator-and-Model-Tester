@@ -33,7 +33,11 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from tqdm import tqdm
 
 from src.utils.network_parser import NetworkParser
-from src.utils.route_finding import build_edges_data, build_node_positions
+from src.utils.route_finding import (
+    EdgeSpatialIndex,
+    build_edges_data,
+    build_node_positions,
+)
 from src.utils.trajectory_converter import (
     convert_trajectory,
     iter_trajectories_from_csv,
@@ -63,10 +67,11 @@ def run_single_process(
     y_max = conv["y_max"] if conv else (bounds["y_max"] if bounds else 0.0)
 
     if verbose:
-        print("Building edges data...")
+        print("Building edges data and spatial index...")
     edges_data = build_edges_data(network_parser)
     edge_shapes = {eid: shape for eid, _ed, shape in edges_data}
     node_positions = build_node_positions(network_parser)
+    spatial_index = EdgeSpatialIndex(edges_data, cell_size=500.0)
 
     saved_count = 0
     total_processed = 0
@@ -92,11 +97,12 @@ def run_single_process(
             use_polygon=use_polygon,
             offset_x=offset_x,
             offset_y=offset_y,
+            spatial_index=spatial_index,
         )
         if rec:
             out_file = Path(output_path) / f"traj_{trip_num}.json"
             with open(out_file, "w", encoding="utf-8") as f:
-                json.dump(rec, f, indent=2)
+                json.dump(rec, f, separators=(",", ":"))
             saved_count += 1
 
     return saved_count, total_processed
@@ -123,6 +129,7 @@ def _init_worker(
     edges_data = build_edges_data(np_local)
     edge_shapes = {eid: shape for eid, _ed, shape in edges_data}
     node_positions = build_node_positions(np_local)
+    spatial_index = EdgeSpatialIndex(edges_data, cell_size=500.0)
     _worker_state = (
         np_local,
         edges_data,
@@ -134,6 +141,7 @@ def _init_worker(
         use_polygon,
         offset_x,
         offset_y,
+        spatial_index,
     )
 
 
@@ -152,6 +160,7 @@ def _process_one_trajectory(task: Tuple[int, List, Optional[int]]) -> Tuple[int,
         use_polygon,
         offset_x,
         offset_y,
+        spatial_index,
     ) = _worker_state
     rec = convert_trajectory(
         trip_num,
@@ -166,11 +175,12 @@ def _process_one_trajectory(task: Tuple[int, List, Optional[int]]) -> Tuple[int,
         use_polygon=use_polygon,
         offset_x=offset_x,
         offset_y=offset_y,
+        spatial_index=spatial_index,
     )
     if rec:
         out_file = Path(out_path) / f"traj_{trip_num}.json"
         with open(out_file, "w", encoding="utf-8") as f:
-            json.dump(rec, f, indent=2)
+            json.dump(rec, f, separators=(",", ":"))
         return 1, 1
     return 0, 1
 
@@ -192,22 +202,20 @@ def run_multiprocess(
 
     os.makedirs(output_path, exist_ok=True)
 
-    # Collect all trajectories in memory (needed for parallel distribution)
+    # Stream trajectories (no full load into memory)
     if verbose:
-        print("Loading trajectories from CSV (single pass)...")
-    trajectories = list(iter_trajectories_from_csv(train_path, start_traj, last_traj))
-    total = len(trajectories)
-    if total == 0:
-        return 0, 0
-
+        print("Converting trajectories (streaming from CSV)...")
+    iterator = iter_trajectories_from_csv(train_path, start_traj, last_traj)
+    total_estimate = max(0, last_traj - start_traj + 1)
+    chunk_size = max(1, total_estimate // (workers * 8))
     with Pool(
         workers,
         initializer=_init_worker,
         initargs=(network_path, output_path, use_polygon, offset_x, offset_y),
     ) as pool:
-        imap = pool.imap(_process_one_trajectory, trajectories)
+        imap = pool.imap(_process_one_trajectory, iterator, chunksize=chunk_size)
         if verbose:
-            imap = tqdm(imap, total=total, desc="Converting", unit="traj")
+            imap = tqdm(imap, total=total_estimate, desc="Converting", unit="traj")
         results = list(imap)
 
     saved_count = sum(r[0] for r in results)
@@ -278,7 +286,7 @@ def main():
     parser.add_argument("--output", "-o", required=True, help="Output directory for JSON files")
     parser.add_argument("--start", "-s", type=int, default=1, help="First trajectory index (1-based)")
     parser.add_argument("--end", "-e", type=int, default=1000, help="Last trajectory index (inclusive)")
-    parser.add_argument("--workers", "-w", type=int, default=1, help="Number of parallel workers (1 = single process)")
+    parser.add_argument("--workers", "-w", type=int, default=os.cpu_count() or 8, help="Number of parallel workers (default: all CPUs)")
     parser.add_argument("--use-polygon", action="store_true", help="Restrict Dijkstra to edges inside trajectory polygon (faster, may miss some routes)")
     parser.add_argument("--offset-x", type=float, default=0.0, help="GPS offset X in meters (positive = move trajectory east)")
     parser.add_argument("--offset-y", type=float, default=0.0, help="GPS offset Y in meters (positive = move trajectory north)")

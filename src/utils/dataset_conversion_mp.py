@@ -9,7 +9,11 @@ from pathlib import Path
 from typing import Any, Callable, List, Optional, Tuple
 
 from src.utils.network_parser import NetworkParser
-from src.utils.route_finding import build_edges_data, build_node_positions
+from src.utils.route_finding import (
+    EdgeSpatialIndex,
+    build_edges_data,
+    build_node_positions,
+)
 from src.utils.trajectory_converter import convert_trajectory
 
 _worker_state: Optional[Tuple] = None
@@ -32,6 +36,7 @@ def init_worker(
     edges_data = build_edges_data(np_local)
     edge_shapes = {eid: shape for eid, _ed, shape in edges_data}
     node_positions = build_node_positions(np_local)
+    spatial_index = EdgeSpatialIndex(edges_data, cell_size=500.0)
     _worker_state = (
         np_local,
         edges_data,
@@ -43,6 +48,7 @@ def init_worker(
         use_polygon,
         offset_x,
         offset_y,
+        spatial_index,
     )
 
 
@@ -63,6 +69,7 @@ def process_one_trajectory(
         use_polygon,
         offset_x,
         offset_y,
+        spatial_index,
     ) = _worker_state
     rec = convert_trajectory(
         trip_num,
@@ -77,11 +84,12 @@ def process_one_trajectory(
         use_polygon=use_polygon,
         offset_x=offset_x,
         offset_y=offset_y,
+        spatial_index=spatial_index,
     )
     if rec:
         out_file = Path(out_path) / f"traj_{trip_num}.json"
         with open(out_file, "w", encoding="utf-8") as f:
-            json.dump(rec, f, indent=2)
+            json.dump(rec, f, separators=(",", ":"))
         return 1, 1
     return 0, 1
 
