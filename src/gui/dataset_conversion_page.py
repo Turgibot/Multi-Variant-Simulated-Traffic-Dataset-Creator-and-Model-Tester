@@ -18,8 +18,8 @@ from PySide6.QtWidgets import (QCheckBox, QFileDialog, QFrame,
                                QGraphicsDropShadowEffect, QGraphicsPolygonItem,
                                QGroupBox, QHBoxLayout, QLabel, QLineEdit,
                                QMessageBox, QProgressBar, QPushButton,
-                               QScrollArea, QStackedWidget, QTextEdit,
-                               QVBoxLayout, QWidget)
+                               QScrollArea, QSizePolicy, QStackedWidget,
+                               QTextEdit, QVBoxLayout, QWidget)
 
 from src.gui.simulation_view import SimulationView
 from src.utils.network_parser import NetworkParser
@@ -1184,6 +1184,8 @@ class DatasetConversionPage(QWidget):
         
         controls_container = QWidget()
         controls_container.setStyleSheet("background-color: #fafafa;")
+        controls_container.setMinimumWidth(0)
+        controls_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         controls_layout = QVBoxLayout(controls_container)
         controls_layout.setContentsMargins(15, 15, 15, 15)
         controls_layout.setSpacing(15)
@@ -1199,6 +1201,7 @@ class DatasetConversionPage(QWidget):
         
         # ---- SUMO_HOME Section ----
         sumo_group = QGroupBox("🔧 SUMO Configuration")
+        sumo_group.setMinimumWidth(0)
         sumo_group.setStyleSheet("""
             QGroupBox {
                 font-weight: bold;
@@ -1230,6 +1233,7 @@ class DatasetConversionPage(QWidget):
         self.sumo_home_input = QLineEdit()
         self.sumo_home_input.setText(DEFAULT_SUMO_HOME)
         self.sumo_home_input.setPlaceholderText("e.g., /usr/share/sumo")
+        self.sumo_home_input.setMinimumWidth(0)
         self.sumo_home_input.setStyleSheet("""
             QLineEdit {
                 padding: 8px;
@@ -1297,6 +1301,7 @@ class DatasetConversionPage(QWidget):
         
         # ---- Map Download Section ----
         map_group = QGroupBox("📍 Network Map")
+        map_group.setMinimumWidth(0)
         map_group.setStyleSheet("""
             QGroupBox {
                 font-weight: bold;
@@ -1350,6 +1355,7 @@ class DatasetConversionPage(QWidget):
         
         # ---- Dataset Path Section ----
         dataset_group = QGroupBox("📊 Taxi Dataset")
+        dataset_group.setMinimumWidth(0)
         dataset_group.setStyleSheet("""
             QGroupBox {
                 font-weight: bold;
@@ -1435,6 +1441,7 @@ class DatasetConversionPage(QWidget):
         
         self.train_path_input = QLineEdit()
         self.train_path_input.setPlaceholderText("Select train.csv...")
+        self.train_path_input.setMinimumWidth(0)
         self.train_path_input.setStyleSheet(path_input_style)
         self.train_path_input.textChanged.connect(lambda p: self.on_train_path_changed(p))
         train_path_layout.addWidget(self.train_path_input, stretch=1)
@@ -1455,6 +1462,7 @@ class DatasetConversionPage(QWidget):
         # Train status
         self.train_status = QLabel("")
         self.train_status.setStyleSheet("color: #666; font-size: 9px; margin-bottom: 5px;")
+        self.train_status.setWordWrap(True)
         dataset_group_layout.addWidget(self.train_status)
         
         # ---- Test.csv path ----
@@ -1467,6 +1475,7 @@ class DatasetConversionPage(QWidget):
         
         self.test_path_input = QLineEdit()
         self.test_path_input.setPlaceholderText("Select test.csv...")
+        self.test_path_input.setMinimumWidth(0)
         self.test_path_input.setStyleSheet(path_input_style)
         self.test_path_input.textChanged.connect(lambda p: self.on_test_path_changed(p))
         test_path_layout.addWidget(self.test_path_input, stretch=1)
@@ -1487,6 +1496,7 @@ class DatasetConversionPage(QWidget):
         # Test status
         self.test_status = QLabel("")
         self.test_status.setStyleSheet("color: #666; font-size: 9px;")
+        self.test_status.setWordWrap(True)
         dataset_group_layout.addWidget(self.test_status)
         
         dataset_group.setLayout(dataset_group_layout)
@@ -1494,6 +1504,7 @@ class DatasetConversionPage(QWidget):
         
         # ---- Number of Zones Section (hidden until map and dataset ready) ----
         self.zones_group = QGroupBox("🗂️ Zone Configuration")
+        self.zones_group.setMinimumWidth(0)
         self.zones_group.setStyleSheet("""
             QGroupBox {
                 font-weight: bold;
@@ -1587,6 +1598,7 @@ class DatasetConversionPage(QWidget):
         
         # ---- Route Display Section (hidden until map and dataset ready) ----
         self.route_group = QGroupBox("🛣️ Route Display")
+        self.route_group.setMinimumWidth(0)
         self.route_group.setStyleSheet("""
             QGroupBox {
                 font-weight: bold;
@@ -1851,6 +1863,7 @@ class DatasetConversionPage(QWidget):
         
         # ---- Dataset Generation Section ----
         self.dataset_gen_group = QGroupBox("📦 Dataset Generation")
+        self.dataset_gen_group.setMinimumWidth(0)
         self.dataset_gen_group.setStyleSheet("""
             QGroupBox {
                 font-weight: bold;
@@ -1871,42 +1884,48 @@ class DatasetConversionPage(QWidget):
         dataset_gen_layout = QVBoxLayout()
         dataset_gen_layout.setSpacing(8)
         
-        # Trajectory range: start number, count, and last number (linked)
-        traj_range_layout = QHBoxLayout()
-        traj_range_layout.addWidget(QLabel("Start trajectory:"))
+        # Trajectory range: split into 2 rows to fit narrow panels
+        traj_range_layout = QVBoxLayout()
+        traj_row1 = QHBoxLayout()
+        traj_row1.addWidget(QLabel("Start:"))
         self.dataset_start_traj_spin = QLineEdit()
         self.dataset_start_traj_spin.setPlaceholderText("1")
-        self.dataset_start_traj_spin.setFixedWidth(60)
+        self.dataset_start_traj_spin.setMaximumWidth(80)
         self.dataset_start_traj_spin.setToolTip("Starting trajectory number (1-based)")
-        traj_range_layout.addWidget(self.dataset_start_traj_spin)
-        traj_range_layout.addWidget(QLabel("Count:"))
+        traj_row1.addWidget(self.dataset_start_traj_spin)
+        traj_row1.addWidget(QLabel("Count:"))
         self.dataset_count_spin = QLineEdit()
         self.dataset_count_spin.setPlaceholderText("10")
-        self.dataset_count_spin.setFixedWidth(50)
+        self.dataset_count_spin.setMaximumWidth(60)
         self.dataset_count_spin.setToolTip("Number of trajectories to process")
-        traj_range_layout.addWidget(self.dataset_count_spin)
-        traj_range_layout.addWidget(QLabel("Last:"))
+        traj_row1.addWidget(self.dataset_count_spin)
+        traj_row1.addStretch()
+        traj_range_layout.addLayout(traj_row1)
+        traj_row2 = QHBoxLayout()
+        traj_row2.addWidget(QLabel("Last:"))
         self.dataset_last_traj_spin = QLineEdit()
         self.dataset_last_traj_spin.setPlaceholderText("10")
-        self.dataset_last_traj_spin.setFixedWidth(60)
+        self.dataset_last_traj_spin.setMaximumWidth(80)
         self.dataset_last_traj_spin.setToolTip("Last trajectory number to process")
-        traj_range_layout.addWidget(self.dataset_last_traj_spin)
-        traj_range_layout.addWidget(QLabel("Workers:"))
+        traj_row2.addWidget(self.dataset_last_traj_spin)
+        traj_row2.addWidget(QLabel("Workers:"))
         self.dataset_workers_spin = QLineEdit()
         self.dataset_workers_spin.setPlaceholderText("4")
-        self.dataset_workers_spin.setFixedWidth(40)
+        self.dataset_workers_spin.setMaximumWidth(50)
         self.dataset_workers_spin.setToolTip("Number of parallel workers (1=single-threaded, 4=faster)")
-        traj_range_layout.addWidget(self.dataset_workers_spin)
-        traj_range_layout.addStretch()
+        traj_row2.addWidget(self.dataset_workers_spin)
+        traj_row2.addStretch()
+        traj_range_layout.addLayout(traj_row2)
         dataset_gen_layout.addLayout(traj_range_layout)
         
         # Output folder path
         output_layout = QHBoxLayout()
-        output_layout.addWidget(QLabel("Output folder:"))
+        output_layout.addWidget(QLabel("Output:"))
         self.dataset_output_path = QLineEdit()
         self.dataset_output_path.setPlaceholderText("Select output folder...")
         self.dataset_output_path.setReadOnly(True)
-        output_layout.addWidget(self.dataset_output_path)
+        self.dataset_output_path.setMinimumWidth(0)
+        output_layout.addWidget(self.dataset_output_path, stretch=1)
         browse_output_btn = QPushButton("📁")
         browse_output_btn.setFixedWidth(36)
         browse_output_btn.setToolTip("Browse for output folder")
@@ -2050,6 +2069,7 @@ class DatasetConversionPage(QWidget):
         
         # ---- Log Section (at bottom, resizable) ----
         log_group = QGroupBox("📝 Activity Log")
+        log_group.setMinimumWidth(0)
         log_group.setStyleSheet("""
             QGroupBox {
                 font-weight: bold;

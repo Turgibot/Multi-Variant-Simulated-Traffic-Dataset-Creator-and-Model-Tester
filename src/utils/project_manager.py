@@ -51,6 +51,31 @@ def _get_project_root() -> Path:
     return current
 
 
+def _print_sample_trajectory(project_root: Path) -> None:
+    """Print a single trajectory from CSV in key-value format (key = CSV header)."""
+    import csv
+    for name in ("test.csv", "train.csv"):
+        csv_path = project_root / "Porto" / "dataset" / name
+        if csv_path.exists():
+            try:
+                with open(csv_path, "r", encoding="utf-8") as f:
+                    reader = csv.reader(f)
+                    header = next(reader, None)
+                    row = next(reader, None)
+                    if header and row:
+                        print("DEBUG Sample trajectory (key=header):")
+                        for k, v in zip(header, row):
+                            key = str(k).strip('"')
+                            val = str(v).strip('"')
+                            if len(val) > 80:
+                                val = val[:77] + "..."
+                            print(f"  {key}: {val}")
+                    break
+            except Exception as e:
+                print(f"DEBUG Sample trajectory: {e}")
+            break
+
+
 class ProjectManager:
     """Manages projects and their registry."""
     
@@ -82,7 +107,10 @@ class ProjectManager:
         if self.registry_file.exists():
             registry = self._load_registry()
             print(f"DEBUG ProjectManager: registry has {len(registry)} projects: {list(registry.keys())}")
-        
+
+        # Print a single trajectory in key-value format (key = CSV header)
+        _print_sample_trajectory(_get_project_root())
+
         self._ensure_registry()
     
     def _ensure_registry(self):
