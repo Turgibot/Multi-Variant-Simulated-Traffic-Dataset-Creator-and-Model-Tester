@@ -44,6 +44,7 @@ pyarrow>=12.0.0  # For Parquet support
 
 # Additional Utilities
 pyyaml>=6.0  # For configuration files
+sortedcontainers>=2.4.0  # SortedDict for timestamp_to_vehicles
 scipy>=1.10.0  # For statistical analysis
 
 # Development Tools (optional, can be in requirements-dev.txt)

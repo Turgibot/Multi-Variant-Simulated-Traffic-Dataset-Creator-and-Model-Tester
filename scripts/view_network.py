@@ -309,6 +309,40 @@ def draw_green_edges_for_segments(view, network_parser, sumo_points_flipped, top
     return (all_orange_ids, all_green_ids, start_edge_id, end_edge_id, start_edge_candidates)
 
 
+def draw_path_on_view(view, network_parser, path_edge_ids):
+    """Draw the computed shortest path (route) on the map view. Uses purple pen for visibility."""
+    if not path_edge_ids:
+        return
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QColor, QPen
+
+    y_min = getattr(view, "_network_y_min", 0)
+    y_max = getattr(view, "_network_y_max", 0)
+
+    def flip_y(y):
+        return y_max + y_min - y
+
+    edges_data = _build_edges_data(network_parser)
+    edge_shapes = {eid: sp for eid, _ed, sp in edges_data}
+
+    path_pen = QPen(QColor(128, 0, 128), 5)
+    path_pen.setStyle(Qt.SolidLine)
+    path_pen.setCapStyle(Qt.RoundCap)
+    path_pen.setJoinStyle(Qt.RoundJoin)
+
+    for eid in path_edge_ids:
+        shape_points = edge_shapes.get(eid)
+        if not shape_points or len(shape_points) < 2:
+            continue
+        for i in range(len(shape_points) - 1):
+            x1, y1 = shape_points[i][0], shape_points[i][1]
+            x2, y2 = shape_points[i + 1][0], shape_points[i + 1][1]
+            y1_d = flip_y(y1)
+            y2_d = flip_y(y2)
+            line = view.scene.addLine(x1, y1_d, x2, y2_d, path_pen)
+            line.setZValue(25)
+
+
 def _build_node_positions(network_parser):
     """Build node_id -> (x, y) in same coords as trajectory (flip_y applied). For A* heuristic."""
     conv = network_parser.conv_boundary
@@ -1033,6 +1067,7 @@ def main():
                         break
                 if path_edges:
                     print(f"Shortest path: {len(path_edges)} edges")
+                    draw_path_on_view(view, network_parser, path_edges)
                 else:
                     print("No route found from start edge to end edge (tried up to 5 start candidates).", file=sys.stderr)
         window.resize(1000, 700)
@@ -1094,6 +1129,7 @@ def main():
                 break
         if seg_path:
             print(f"Segment {seg_idx + 1}: shortest path {len(seg_path)} edges")
+            draw_path_on_view(view, network_parser, seg_path)
         else:
             print(f"Segment {seg_idx + 1}: no route (tried up to 5 start candidates).", file=sys.stderr)
         window.resize(1000, 700)
