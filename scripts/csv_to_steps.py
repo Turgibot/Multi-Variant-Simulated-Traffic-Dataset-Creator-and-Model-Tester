@@ -8,11 +8,15 @@ Converts train CSV to step JSONs without intermediate traj files.
 import argparse
 import csv
 import gzip
+import hashlib
 import json
 import math
+import multiprocessing
 import os
 import sys
+import threading
 from pathlib import Path
+from queue import Queue
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -40,9 +44,77 @@ except ImportError:
             return _NullPbar()
         return iterable
 
-from src.utils.route_finding import project_point_onto_polyline_with_segment_and_t
-from src.utils.trajectory_converter import _parse_csv_row
+from src.utils.route_finding import (
+    EdgeSpatialIndex,
+    build_edges_data,
+    build_node_positions,
+    project_point_onto_polyline_with_segment_and_t,
+)
+from src.utils.trajectory_converter import _parse_csv_row, convert_trajectory
 from src.utils.traffic_db import TrafficDB
+
+# Multiprocessing worker state (set by init, used by _mp_convert_one)
+_mp_worker_state: Optional[Tuple] = None
+
+
+def _mp_init_worker(net_path: str) -> None:
+    """Initialize worker process. Load network once per worker."""
+    global _mp_worker_state
+    from src.utils.network_parser import NetworkParser
+
+    np_local = NetworkParser(net_path)
+    conv = np_local.conv_boundary
+    bounds = np_local.get_bounds()
+    y_min = conv["y_min"] if conv else (bounds["y_min"] if bounds else 0.0)
+    y_max = conv["y_max"] if conv else (bounds["y_max"] if bounds else 0.0)
+    edges_data = build_edges_data(np_local)
+    edge_shapes = {eid: shape for eid, _ed, shape in edges_data}
+    node_positions = build_node_positions(np_local)
+    spatial_index = EdgeSpatialIndex(edges_data, cell_size=500.0)
+    _mp_worker_state = (
+        np_local,
+        edges_data,
+        edge_shapes,
+        node_positions,
+        y_min,
+        y_max,
+        spatial_index,
+    )
+
+
+def _mp_convert_one(task: Tuple[int, List, Optional[int]]) -> Optional[Tuple[int, List, Optional[int], Any]]:
+    """Convert one trajectory. Returns (trip_num, polyline, ts, rec) or None if conversion failed."""
+    global _mp_worker_state
+    if _mp_worker_state is None:
+        return None
+    trip_num, polyline, ts = task
+    if ts is None:
+        return None
+    (
+        np_local,
+        edges_data,
+        edge_shapes,
+        node_positions,
+        y_min,
+        y_max,
+        spatial_index,
+    ) = _mp_worker_state
+    rec = convert_trajectory(
+        trip_num,
+        polyline,
+        ts,
+        np_local,
+        edges_data,
+        edge_shapes,
+        node_positions,
+        y_min,
+        y_max,
+        use_polygon=False,
+        spatial_index=spatial_index,
+    )
+    if rec:
+        return (trip_num, polyline, ts, rec)
+    return None
 
 
 def count_csv_rows(
@@ -249,6 +321,23 @@ def parse_args():
         action="store_true",
         help="Disable progress bar (cleaner output with print statements)",
     )
+    parser.add_argument(
+        "--no-parallel",
+        action="store_true",
+        help="Disable parallel conversion. Use single-threaded mode.",
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=max(1, multiprocessing.cpu_count() - 1),
+        metavar="N",
+        help="Number of worker processes for conversion (default: CPU count - 1). Only used when parallel.",
+    )
+    parser.add_argument(
+        "--compress",
+        action="store_true",
+        help="Use gzip compression and compact JSON. Default: readable JSON (.json, indented).",
+    )
     return parser.parse_args()
 
 
@@ -421,6 +510,13 @@ def build_edges_map(net: Any) -> Dict[str, Dict[str, Any]]:
     return edges
 
 
+def _dyn_edge_id(from_id: str, to_id: str) -> str:
+    """Generate unique 9-digit dynamic edge ID from source and target node IDs."""
+    sig = f"{from_id}_{to_id}"
+    h = int(hashlib.md5(sig.encode()).hexdigest(), 16) % (10 ** 9)
+    return f"dyn_{h:09d}"
+
+
 def create_dynamic_edges(
     edges: Dict[str, Dict[str, Any]],
     vehicles: Dict[str, Dict[str, Any]],
@@ -437,7 +533,6 @@ def create_dynamic_edges(
     Returns list of dynamic edge dicts with: id, from, to, edge_type, ...
     """
     dynamic: List[Dict[str, Any]] = []
-    dyn_idx = 0
 
     for edge_id, edge_data in edges.items():
         veh_ids = edge_data.get("vehicles_on_road", [])
@@ -463,8 +558,7 @@ def create_dynamic_edges(
             else:
                 edge_type = 2  # vehicle -> vehicle
 
-            dyn_id = f"dyn_{dyn_idx}"
-            dyn_idx += 1
+            dyn_id = _dyn_edge_id(prev, vid)
             dynamic.append({
                 "id": dyn_id,
                 "from": prev,
@@ -481,8 +575,9 @@ def create_dynamic_edges(
             prev = vid
 
         # Last: last vehicle -> junction_to
+        dyn_id = _dyn_edge_id(prev, junction_to)
         dynamic.append({
-            "id": f"dyn_{dyn_idx}",
+            "id": dyn_id,
             "from": prev,
             "to": junction_to,
             "edge_type": 3,  # vehicle -> junction
@@ -494,7 +589,6 @@ def create_dynamic_edges(
             "avg_speed": 0.0,
             "vehicles_on_road": [],
         })
-        dyn_idx += 1
 
     return dynamic
 
@@ -529,19 +623,22 @@ def update_db_from_vehicle_infos(db: TrafficDB, vehicle_infos: List[Dict[str, An
         vehicle["current_edge"] = new_edge
         vehicle["current_position"] = info.get("current_position", 0.0)
 
-        # 2. Update route_left: edges after current edge (exclusive)
+        # 2. Update route_left: edges after current edge (exclusive), but empty when on destination
         current_edge = info.get("current_edge", "")
+        dest_edge = vehicle.get("destination_edge", "")
         full_route = vehicle.get("route", [])
         if current_edge and current_edge in full_route:
             idx = full_route.index(current_edge)
             route_left = full_route[idx + 1:]
+            # If we're on the destination edge, we've arrived; route_left should be empty
+            if current_edge == dest_edge:
+                route_left = []
         else:
             route_left = info.get("route_left", [])
         vehicle["route_left"] = route_left
 
         # 3. Update route_length_left: from current_position to destination_position along route
         route_length_left = 0.0
-        dest_edge = vehicle.get("destination_edge", "")
         dest_position = vehicle.get("destination_position", 0.0)
         curr_pos = info.get("current_position", 0.0)
         if current_edge == dest_edge:
@@ -573,6 +670,10 @@ def update_db_from_vehicle_infos(db: TrafficDB, vehicle_infos: List[Dict[str, An
                 db.add_vehicle_to_edge(vid, new_edge)
         elif new_edge:
             db.update_road_stats(new_edge)  # same edge, speed changed
+
+        # 7. Remove if arrived at destination (step JSONs reflect only active vehicles)
+        if current_edge == dest_edge and route_length_left <= 0.0:
+            db.remove_vehicle(vid)
 
 
 def _update_edge_demand(db: TrafficDB) -> None:
@@ -616,13 +717,22 @@ def _update_edge_demand(db: TrafficDB) -> None:
             t += length / speed
 
 
-def _calculate_eta_and_labels(db: TrafficDB, snapshot_timestamp: int) -> None:
+def build_label_json(
+    db: TrafficDB,
+    snapshot_timestamp: int,
+    vehicle_seg_last_ts: Dict[str, int],
+) -> Dict[str, Any]:
     """
-    Calculate and add ETA label and other labels for vehicles.
-    TBD: User will define labels and computation.
+    Build label JSON: ETA per vehicle in seconds remaining.
+    ETA = destination_timestamp - snapshot_timestamp.
     """
-    # Placeholder
-    pass
+    labels = []
+    for vid in db.vehicles:
+        dest_ts = vehicle_seg_last_ts.get(vid)
+        if dest_ts is not None:
+            eta = max(0, dest_ts - snapshot_timestamp)
+            labels.append({"id": vid, "eta": eta})
+    return {"timestamp": snapshot_timestamp, "labels": labels}
 
 
 STATIC_EDGE_EXCLUDE = {"vehicles_on_road", "edge_demand", "avg_speed", "density"}
@@ -750,6 +860,9 @@ def _load_segment_to_map(
     node["destination_x"] = destination_x
     node["destination_y"] = destination_y
     node["route"] = route_edges
+    node["route_length"] = sum(
+        road_edges.get(e, {}).get("length", 0.0) for e in route_edges
+    )
 
     seg_first_ts = sumo_route_gps[0].get("timestamp", start_ts) if sumo_route_gps else start_ts
     seg_last_ts = None
@@ -877,14 +990,22 @@ def main():
         _SortedDict() if _USE_SORTED_DICT else {}
     )
     args.output.mkdir(parents=True, exist_ok=True)
+    snapshots_dir = args.output / "snapshots"
+    labels_dir = args.output / "labels"
+    snapshots_dir.mkdir(parents=True, exist_ok=True)
+    labels_dir.mkdir(parents=True, exist_ok=True)
 
     # Save static JSON once (junctions + road edges with static features only)
     static_data = build_static_json(db)
-    static_path = args.output / "static.json.gz"
-    with gzip.open(static_path, "wt", encoding="utf-8") as f:
-        json.dump(static_data, f, separators=(",", ":"))
-
-    from src.utils.trajectory_converter import convert_trajectory
+    compress = args.compress
+    if compress:
+        static_path = args.output / "static.json.gz"
+        with gzip.open(static_path, "wt", encoding="utf-8") as f:
+            json.dump(static_data, f, separators=(",", ":"))
+    else:
+        static_path = args.output / "static.json"
+        with open(static_path, "w", encoding="utf-8") as f:
+            json.dump(static_data, f, indent=2)
 
     def _traj_first_ts(rec: Any, base_ts: int) -> Optional[int]:
         t = None
@@ -927,37 +1048,128 @@ def main():
         first_ts = min(timestamp_to_vehicles.keys())
         return first_ts, timestamp_to_vehicles.pop(first_ts)
 
-    trajectory_iter = iter(
-        tqdm(sorted_rows, desc="Processing", unit="traj", disable=args.no_progress)
-    )
+    use_parallel = not args.no_parallel
+    trajectory_iter: Optional[Iterator] = None
+    if not use_parallel:
+        trajectory_iter = iter(
+            tqdm(sorted_rows, desc="Processing", unit="traj", disable=args.no_progress)
+        )
     pending_traj: Optional[Tuple[int, List, Optional[int], Any]] = None
     last_ts: Optional[int] = None
 
-    while True:
-        next_ts_in_map = _first_ts_key()
+    def _write_step_json(ts_val: int, data: Dict[str, Any], label_data: Dict[str, Any]) -> None:
+        nodes = data.get("nodes", [])
+        if not nodes:
+            print(f"skipping empty step at ts {ts_val} (no vehicles)", flush=True)
+            return
+        if compress:
+            step_path = snapshots_dir / f"step_{ts_val:012d}.json.gz"
+            with gzip.open(step_path, "wt", encoding="utf-8") as f:
+                json.dump(data, f, separators=(",", ":"))
+            label_path = labels_dir / f"label_{ts_val:012d}.json.gz"
+            with gzip.open(label_path, "wt", encoding="utf-8") as f:
+                json.dump(label_data, f, separators=(",", ":"))
+        else:
+            step_path = snapshots_dir / f"step_{ts_val:012d}.json"
+            with open(step_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+            label_path = labels_dir / f"label_{ts_val:012d}.json"
+            with open(label_path, "w", encoding="utf-8") as f:
+                json.dump(label_data, f, indent=2)
+        print(f"creating {step_path.name} and {label_path.name} at ts {ts_val}", flush=True)
 
-        if pending_traj is None:
-            try:
-                trip_num, polyline, ts = next(trajectory_iter)
-                if ts is None:
-                    sys.exit(1)
+    json_queue: Optional[Queue] = None
+    json_thread: Optional[threading.Thread] = None
+    conversion_results_iter: Optional[Iterator] = None
+    _mp_pool: Optional[multiprocessing.Pool] = None
+
+    if use_parallel:
+        json_queue = Queue(maxsize=8)
+
+        def _json_writer() -> None:
+            while True:
+                item = json_queue.get()
+                if item is None:
+                    return
+                ts_val, data, label_data = item
+                _write_step_json(ts_val, data, label_data)
+
+        json_thread = threading.Thread(target=_json_writer, daemon=False)
+        json_thread.start()
+
+        def _trajectory_tasks() -> Iterator[Tuple[int, List, Optional[int]]]:
+            for trip_num, polyline, ts in tqdm(
+                sorted_rows, desc="Processing", unit="traj", disable=args.no_progress
+            ):
+                if ts is not None:
+                    yield (trip_num, polyline, ts)
+
+        _mp_pool = multiprocessing.Pool(
+            processes=args.workers,
+            initializer=_mp_init_worker,
+            initargs=(str(args.network),),
+        )
+        conversion_results_iter = _mp_pool.imap(
+            _mp_convert_one, _trajectory_tasks(), chunksize=2
+        )
+
+    def _get_next_trajectory() -> Optional[Tuple[int, List, Optional[int], Any]]:
+        nonlocal last_ts
+        if use_parallel and conversion_results_iter is not None:
+            while True:
+                try:
+                    item = next(conversion_results_iter)
+                except StopIteration:
+                    return None
+                if item is None:
+                    continue
+                trip_num, polyline, ts, rec = item
                 if last_ts is not None and ts < last_ts:
                     print(
                         f"Error: CSV is not sorted by timestamp. Trajectory {trip_num} has ts {ts} < previous ts {last_ts}. "
-                        "Use --sorted False to sort by timestamp, or ensure the CSV is pre-sorted by timestamp.",
+                        "Use --no-sorted to sort by timestamp, or ensure the CSV is pre-sorted by timestamp.",
                         file=sys.stderr,
                     )
                     sys.exit(1)
                 last_ts = ts
-                if network_parser and edges_data:
-                    rec = convert_trajectory(
-                        trip_num, polyline, ts, network_parser,
-                        edges_data, edge_shapes, node_positions, y_min, y_max, use_polygon=False,
-                    )
-                    if rec:
-                        pending_traj = (trip_num, polyline, ts, rec)
-            except StopIteration:
-                pass
+                return item
+        try:
+            trip_num, polyline, ts = next(trajectory_iter)
+            if ts is None:
+                return None
+            if last_ts is not None and ts < last_ts:
+                print(
+                    f"Error: CSV is not sorted by timestamp. Trajectory {trip_num} has ts {ts} < previous ts {last_ts}. "
+                    "Use --no-sorted to sort by timestamp, or ensure the CSV is pre-sorted by timestamp.",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            last_ts = ts
+            if network_parser and edges_data:
+                rec = convert_trajectory(
+                    trip_num, polyline, ts, network_parser,
+                    edges_data, edge_shapes, node_positions, y_min, y_max, use_polygon=False,
+                )
+                if rec:
+                    return (trip_num, polyline, ts, rec)
+        except StopIteration:
+            pass
+        return None
+
+    def _emit_step_json(ts_val: int, data: Dict[str, Any], label_data: Dict[str, Any]) -> None:
+        if use_parallel and json_queue is not None:
+            json_queue.put((ts_val, data, label_data))
+        else:
+            _write_step_json(ts_val, data, label_data)
+
+    conversion_done = False
+    while True:
+        next_ts_in_map = _first_ts_key()
+
+        if pending_traj is None and not conversion_done:
+            pending_traj = _get_next_trajectory()
+            if pending_traj is None:
+                conversion_done = True
 
         if pending_traj is not None:
             _, _, traj_ts, rec = pending_traj
@@ -967,7 +1179,12 @@ def main():
             )
             if load_now:
                 for vid in list(db.vehicles.keys()):
-                    if vehicle_last_ts.get(vid, 0) < traj_ts:
+                    # Only remove if we've seen the vehicle's last point (trajectory ended).
+                    # vehicle_last_ts[vid] is set when we pop the batch with its last point.
+                    # If vid not in vehicle_last_ts, trajectory is still active - do NOT remove.
+                    last_ts_val = vehicle_last_ts.get(vid)
+                    will_remove = last_ts_val is not None and last_ts_val < traj_ts
+                    if will_remove:
                         db.remove_vehicle(vid)
                         vehicle_last_ts.pop(vid, None)
                 _load_trajectory(*pending_traj)
@@ -979,7 +1196,14 @@ def main():
                 _load_trajectory(*pending_traj)
                 pending_traj = None
                 continue
-            break
+            if conversion_done:
+                break
+            if use_parallel:
+                pending_traj = _get_next_trajectory()
+                if pending_traj is None:
+                    conversion_done = True
+                    continue
+            continue
 
         if global_ts == 0:
             global_ts = next_ts_in_map
@@ -991,9 +1215,11 @@ def main():
                 for info in vehicle_infos:
                     vid = info.get("id", "")
                     if vid in vehicle_pending and vehicle_pending[vid][1] == first_ts:
-                        db.add_vehicle(vid, vehicle_pending[vid][0])
+                        _node, seg_first, seg_last = vehicle_pending[vid]
+                        db.add_vehicle(vid, _node)
                         del vehicle_pending[vid]
-                        print(f"vehicle id : {vid} added to db with ts {first_ts}", flush=True)
+                        last_ts_str = str(seg_last) if seg_last is not None else "?"
+                        print(f"vehicle {vid} added to db | route ts: {seg_first} .. {last_ts_str}", flush=True)
                     if vehicle_seg_last_ts.get(vid) == first_ts:
                         vehicle_last_ts[vid] = first_ts
                 ids = [v.get("id", "") for v in vehicle_infos]
@@ -1001,21 +1227,29 @@ def main():
                 update_db_from_vehicle_infos(db, vehicle_infos)
             global_ts = next_json_boundary
             _update_edge_demand(db)
-            _calculate_eta_and_labels(db, global_ts)
+            label_data = build_label_json(db, global_ts, vehicle_seg_last_ts)
             step_data = build_step_json(db, global_ts)
-            out_path = args.output / f"step_{global_ts:012d}.json.gz"
-            with gzip.open(out_path, "wt", encoding="utf-8") as f:
-                json.dump(step_data, f, separators=(",", ":"))
-            print(f"creating json {out_path.name} at ts {global_ts}", flush=True)
+            _emit_step_json(global_ts, step_data, label_data)
             continue
+
+        # next_ts_in_map > next_json_boundary: emit JSON for each skipped boundary before popping
+        while next_json_boundary < next_ts_in_map:
+            global_ts = next_json_boundary
+            _update_edge_demand(db)
+            label_data = build_label_json(db, global_ts, vehicle_seg_last_ts)
+            step_data = build_step_json(db, global_ts)
+            _emit_step_json(global_ts, step_data, label_data)
+            next_json_boundary = global_ts + sampling_period
 
         first_ts, vehicle_infos = _pop_first()
         for info in vehicle_infos:
             vid = info.get("id", "")
             if vid in vehicle_pending and vehicle_pending[vid][1] == first_ts:
-                db.add_vehicle(vid, vehicle_pending[vid][0])
+                _node, seg_first, seg_last = vehicle_pending[vid]
+                db.add_vehicle(vid, _node)
                 del vehicle_pending[vid]
-                print(f"vehicle id : {vid} added to db with ts {first_ts}", flush=True)
+                last_ts_str = str(seg_last) if seg_last is not None else "?"
+                print(f"vehicle {vid} added to db | route ts: {seg_first} .. {last_ts_str}", flush=True)
             if vehicle_seg_last_ts.get(vid) == first_ts:
                 vehicle_last_ts[vid] = first_ts
         ids = [v.get("id", "") for v in vehicle_infos]
@@ -1029,9 +1263,11 @@ def main():
             for info in vehicle_infos:
                 vid = info.get("id", "")
                 if vid in vehicle_pending and vehicle_pending[vid][1] == first_ts:
-                    db.add_vehicle(vid, vehicle_pending[vid][0])
+                    _node, seg_first, seg_last = vehicle_pending[vid]
+                    db.add_vehicle(vid, _node)
                     del vehicle_pending[vid]
-                    print(f"vehicle id : {vid} added to db with ts {first_ts}", flush=True)
+                    last_ts_str = str(seg_last) if seg_last is not None else "?"
+                    print(f"vehicle {vid} added to db | route ts: {seg_first} .. {last_ts_str}", flush=True)
                 if vehicle_seg_last_ts.get(vid) == first_ts:
                     vehicle_last_ts[vid] = first_ts
             ids = [v.get("id", "") for v in vehicle_infos]
@@ -1039,12 +1275,16 @@ def main():
             update_db_from_vehicle_infos(db, vehicle_infos)
         global_ts = next_json_boundary
         _update_edge_demand(db)
-        _calculate_eta_and_labels(db, global_ts)
+        label_data = build_label_json(db, global_ts, vehicle_seg_last_ts)
         step_data = build_step_json(db, global_ts)
-        out_path = args.output / f"step_{global_ts:012d}.json.gz"
-        with gzip.open(out_path, "wt", encoding="utf-8") as f:
-            json.dump(step_data, f, separators=(",", ":"))
-        print(f"creating json {out_path.name} at ts {global_ts}", flush=True)
+        _emit_step_json(global_ts, step_data, label_data)
+
+    if use_parallel and json_queue is not None and json_thread is not None:
+        json_queue.put(None)
+        json_thread.join()
+    if _mp_pool is not None:
+        _mp_pool.close()
+        _mp_pool.join()
 
 
 if __name__ == "__main__":
