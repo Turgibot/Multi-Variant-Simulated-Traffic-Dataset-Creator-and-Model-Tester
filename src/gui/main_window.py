@@ -71,7 +71,7 @@ class WelcomePage(QWidget):
         
         # Simulation projects header
         sim_header = QHBoxLayout()
-        sim_label = QLabel("🚗 Simulation Projects")
+        sim_label = QLabel("Simulation Projects")
         sim_label_font = QFont()
         sim_label_font.setPointSize(14)
         sim_label_font.setBold(True)
@@ -127,7 +127,7 @@ class WelcomePage(QWidget):
         
         # Porto projects header
         porto_header = QHBoxLayout()
-        porto_label = QLabel("🚕 Porto Conversion Projects")
+        porto_label = QLabel("Trajectory Dataset Conversion Projects")
         porto_label_font = QFont()
         porto_label_font.setPointSize(14)
         porto_label_font.setBold(True)
@@ -319,7 +319,7 @@ class WelcomePage(QWidget):
         info_layout.addWidget(name_label)
         
         if not project.get('exists', True):
-            status_label = QLabel("⚠ Folder not found")
+            status_label = QLabel("Warning: Folder not found")
             status_label.setStyleSheet("color: #f44336; font-size: 9px;")
             info_layout.addWidget(status_label)
         
@@ -414,7 +414,7 @@ class WelcomePage(QWidget):
         info_layout.addWidget(name_label)
         
         if not project.get('exists', True):
-            status_label = QLabel("⚠ Folder not found")
+            status_label = QLabel("Warning: Folder not found")
             status_label.setStyleSheet("color: #f44336; font-size: 9px;")
             info_layout.addWidget(status_label)
         
@@ -604,7 +604,7 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout()
         
         # Back button
-        back_btn = QPushButton("← Back to Home")
+        back_btn = QPushButton("Back to Home")
         back_btn.clicked.connect(self.show_welcome)
         back_btn.setStyleSheet("""
             QPushButton {

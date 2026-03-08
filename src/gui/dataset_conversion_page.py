@@ -683,7 +683,7 @@ class DatasetConversionPage(QWidget):
         header_layout = QHBoxLayout()
         header_layout.setContentsMargins(0, 0, 0, 10)
         
-        back_btn = QPushButton("← Back to Home")
+        back_btn = QPushButton("Back to Home")
         back_btn.setStyleSheet("""
             QPushButton {
                 background-color: #2196F3;
@@ -703,7 +703,7 @@ class DatasetConversionPage(QWidget):
         
         header_layout.addStretch()
         
-        title = QLabel(f"Dataset Conversion - {self.project_name}")
+        title = QLabel("Trajectory to Graph dataset converstion")
         title_font = QFont()
         title_font.setPointSize(20)
         title_font.setBold(True)
@@ -736,7 +736,7 @@ class DatasetConversionPage(QWidget):
         map_header_layout.setContentsMargins(0, 0, 0, 5)
         
         # Map title
-        map_title = QLabel("🗺️ Porto Network Map")
+        map_title = QLabel("Porto Network Map")
         map_title_font = QFont()
         map_title_font.setPointSize(14)
         map_title_font.setBold(True)
@@ -924,14 +924,14 @@ class DatasetConversionPage(QWidget):
         map_header_layout.addSpacing(8)
         
         # Default zoom button (Porto city center)
-        self.zoom_default_btn = QPushButton("🏙️")
+        self.zoom_default_btn = QPushButton("City")
         self.zoom_default_btn.setToolTip("Zoom to Porto city center")
         self.zoom_default_btn.setStyleSheet(zoom_btn_style)
         self.zoom_default_btn.clicked.connect(self.zoom_to_default)
         map_header_layout.addWidget(self.zoom_default_btn)
         
         # Reset zoom button (show entire map)
-        self.zoom_reset_btn = QPushButton("🗺️")
+        self.zoom_reset_btn = QPushButton("Fit")
         self.zoom_reset_btn.setToolTip("Show entire map")
         self.zoom_reset_btn.setStyleSheet(zoom_btn_style)
         self.zoom_reset_btn.clicked.connect(self.zoom_to_full)
@@ -981,7 +981,7 @@ class DatasetConversionPage(QWidget):
         loading_card_layout.setSpacing(15)
         
         # Loading icon/text
-        self.loading_label = QLabel("🗺️ Loading Map...")
+        self.loading_label = QLabel("Loading map...")
         self.loading_label.setAlignment(Qt.AlignCenter)
         self.loading_label.setStyleSheet("""
             QLabel {
@@ -1052,7 +1052,7 @@ class DatasetConversionPage(QWidget):
         busy_card_layout.setAlignment(Qt.AlignCenter)
         busy_card_layout.setSpacing(8)
         
-        self.busy_label = QLabel("⏳ Processing...")
+        self.busy_label = QLabel("Processing...")
         self.busy_label.setAlignment(Qt.AlignCenter)
         self.busy_label.setStyleSheet("""
             QLabel {
@@ -1121,7 +1121,7 @@ class DatasetConversionPage(QWidget):
         controls_layout.setSpacing(15)
         
         # Panel title
-        panel_title = QLabel("🚕 Porto Dataset Controls")
+        panel_title = QLabel("Dataset and Conversion configuration.")
         panel_title_font = QFont()
         panel_title_font.setPointSize(14)
         panel_title_font.setBold(True)
@@ -1130,7 +1130,7 @@ class DatasetConversionPage(QWidget):
         controls_layout.addWidget(panel_title)
         
         # ---- SUMO_HOME Section ----
-        sumo_group = QGroupBox("🔧 SUMO Configuration")
+        sumo_group = QGroupBox("Simulation Configuration")
         sumo_group.setMinimumWidth(0)
         sumo_group.setStyleSheet("""
             QGroupBox {
@@ -1199,7 +1199,7 @@ class DatasetConversionPage(QWidget):
         sumo_path_layout.addWidget(browse_btn)
         
         # Reset button
-        reset_btn = QPushButton("↺")
+        reset_btn = QPushButton("Reset")
         reset_btn.setToolTip("Reset to default path (/usr/share/sumo)")
         reset_btn.setStyleSheet("""
             QPushButton {
@@ -1227,10 +1227,9 @@ class DatasetConversionPage(QWidget):
         sumo_group_layout.addWidget(self.sumo_status_label)
         
         sumo_group.setLayout(sumo_group_layout)
-        controls_layout.addWidget(sumo_group)
         
         # ---- Map Download Section ----
-        map_group = QGroupBox("📍 Network Map")
+        map_group = QGroupBox("Network Map")
         map_group.setMinimumWidth(0)
         map_group.setStyleSheet("""
             QGroupBox {
@@ -1257,7 +1256,7 @@ class DatasetConversionPage(QWidget):
         self.map_status.setStyleSheet("color: #666; font-size: 11px;")
         map_group_layout.addWidget(self.map_status)
         
-        self.download_map_btn = QPushButton("⬇️ Download & Render Map")
+        self.download_map_btn = QPushButton("Download & Render Map")
         self.download_map_btn.setStyleSheet("""
             QPushButton {
                 background-color: #4CAF50;
@@ -1282,9 +1281,10 @@ class DatasetConversionPage(QWidget):
         
         map_group.setLayout(map_group_layout)
         controls_layout.addWidget(map_group)
+        controls_layout.addWidget(sumo_group)
         
         # ---- Dataset Path Section ----
-        dataset_group = QGroupBox("📊 Taxi Dataset")
+        dataset_group = QGroupBox("Trajectory Dataset")
         dataset_group.setMinimumWidth(0)
         dataset_group.setStyleSheet("""
             QGroupBox {
@@ -1314,7 +1314,7 @@ class DatasetConversionPage(QWidget):
         dataset_header_layout.addStretch()
         
         # Help button
-        help_btn = QPushButton("❓")
+        help_btn = QPushButton("?")
         help_btn.setToolTip("How to download the Porto taxi dataset")
         help_btn.setFixedSize(28, 28)
         help_btn.setStyleSheet("""
@@ -1433,7 +1433,7 @@ class DatasetConversionPage(QWidget):
         controls_layout.addWidget(dataset_group)
         
         # ---- Number of Zones Section (hidden until map and dataset ready) ----
-        self.zones_group = QGroupBox("🗂️ Zone Configuration")
+        self.zones_group = QGroupBox("Zone Configuration")
         self.zones_group.setMinimumWidth(0)
         self.zones_group.setStyleSheet("""
             QGroupBox {
@@ -1527,7 +1527,7 @@ class DatasetConversionPage(QWidget):
         controls_layout.addWidget(self.zones_group)
         
         # ---- Route Display Section (hidden until map and dataset ready) ----
-        self.route_group = QGroupBox("🛣️ Route Display")
+        self.route_group = QGroupBox("Route Display")
         self.route_group.setMinimumWidth(0)
         self.route_group.setStyleSheet("""
             QGroupBox {
@@ -1598,7 +1598,7 @@ class DatasetConversionPage(QWidget):
         """)
         route_input_layout.addWidget(self.route_spinbox, stretch=1)
         
-        self.show_route_btn = QPushButton("🗺️ Show")
+        self.show_route_btn = QPushButton("Show")
         self.show_route_btn.setToolTip("Display selected route on map")
         self.show_route_btn.setStyleSheet("""
             QPushButton {
@@ -1620,7 +1620,7 @@ class DatasetConversionPage(QWidget):
         self.show_route_btn.clicked.connect(self.show_selected_route)
         route_input_layout.addWidget(self.show_route_btn)
         
-        self.clear_route_btn = QPushButton("🗑️ Clear")
+        self.clear_route_btn = QPushButton("Clear")
         self.clear_route_btn.setToolTip("Clear route from map")
         self.clear_route_btn.setStyleSheet("""
             QPushButton {
@@ -1792,7 +1792,7 @@ class DatasetConversionPage(QWidget):
         controls_layout.addWidget(self.route_group)
         
         # ---- Dataset Generation Section ----
-        self.dataset_gen_group = QGroupBox("📦 Dataset Generation")
+        self.dataset_gen_group = QGroupBox("Dataset Generation")
         self.dataset_gen_group.setMinimumWidth(0)
         self.dataset_gen_group.setStyleSheet("""
             QGroupBox {
@@ -1899,7 +1899,7 @@ class DatasetConversionPage(QWidget):
         
         # Start/Stop buttons (hidden until start and output are set)
         self.dataset_buttons_layout = QHBoxLayout()
-        self.dataset_start_btn = QPushButton("▶ Start")
+        self.dataset_start_btn = QPushButton("Start")
         self.dataset_start_btn.setStyleSheet("""
             QPushButton {
                 background-color: #4CAF50;
@@ -1913,7 +1913,7 @@ class DatasetConversionPage(QWidget):
             QPushButton:disabled { background-color: #cccccc; }
         """)
         self.dataset_start_btn.clicked.connect(self._on_dataset_start_clicked)
-        self.dataset_stop_btn = QPushButton("⏹ Stop")
+        self.dataset_stop_btn = QPushButton("Stop")
         self.dataset_stop_btn.setStyleSheet("""
             QPushButton {
                 background-color: #f44336;
@@ -1984,7 +1984,7 @@ class DatasetConversionPage(QWidget):
         controls_layout.addWidget(self.dataset_gen_group)
         
         # ---- Progress Section (hidden by default) ----
-        self.progress_group = QGroupBox("⏳ Download Progress")
+        self.progress_group = QGroupBox("Download Progress")
         self.progress_group.setStyleSheet("""
             QGroupBox {
                 font-weight: bold;
@@ -2037,7 +2037,7 @@ class DatasetConversionPage(QWidget):
         controls_layout.addStretch()
         
         # ---- Log Section (at bottom, resizable) ----
-        log_group = QGroupBox("📝 Activity Log")
+        log_group = QGroupBox("Activity Log")
         log_group.setMinimumWidth(0)
         log_group.setStyleSheet("""
             QGroupBox {
@@ -2144,14 +2144,14 @@ class DatasetConversionPage(QWidget):
         sumo_home = self.sumo_home_input.text().strip()
         
         if not sumo_home:
-            self.sumo_status_label.setText("⚠️ Path is empty")
+            self.sumo_status_label.setText("Path is empty")
             self.sumo_status_label.setStyleSheet("color: #f44336; font-size: 10px;")
             return False
         
         sumo_path = Path(sumo_home)
         
         if not sumo_path.exists():
-            self.sumo_status_label.setText(f"❌ Path does not exist")
+            self.sumo_status_label.setText("Path does not exist")
             self.sumo_status_label.setStyleSheet("color: #f44336; font-size: 10px;")
             return False
         
@@ -2160,14 +2160,14 @@ class DatasetConversionPage(QWidget):
         
         if netconvert_path.exists():
             if typemap_path.exists():
-                self.sumo_status_label.setText(f"✅ SUMO found (netconvert + typemap)")
+                self.sumo_status_label.setText("SUMO found (netconvert + typemap)")
                 self.sumo_status_label.setStyleSheet("color: #4CAF50; font-size: 10px;")
             else:
-                self.sumo_status_label.setText(f"✅ SUMO found (typemap missing)")
+                self.sumo_status_label.setText("SUMO found (typemap missing)")
                 self.sumo_status_label.setStyleSheet("color: #FF9800; font-size: 10px;")
             return True
         else:
-            self.sumo_status_label.setText(f"⚠️ netconvert not found in {sumo_home}/bin/")
+            self.sumo_status_label.setText(f"netconvert not found in {sumo_home}/bin/")
             self.sumo_status_label.setStyleSheet("color: #FF9800; font-size: 10px;")
             return False
     
@@ -2201,7 +2201,7 @@ class DatasetConversionPage(QWidget):
             
             # Show loading indicator
             if show_osm_map:
-                self.osm_map_loading_label.setText("⏳")
+                self.osm_map_loading_label.setText("...")
                 self.osm_map_checkbox.setEnabled(False)
                 
                 # Connect to the finished signal (disconnect first to avoid duplicate connections)
@@ -2290,7 +2290,7 @@ class DatasetConversionPage(QWidget):
         porto_net_file = porto_config / 'porto.net.xml'
         
         if net_file.exists():
-            self.map_status.setText("✅ Network map available")
+            self.map_status.setText("Network map available")
             self.map_status.setStyleSheet("color: #4CAF50; font-size: 11px; font-weight: bold;")
             self.download_map_btn.setVisible(False)  # Hide the button when map is available
             self.osm_map_checkbox.setVisible(True)  # Show the OSM map checkbox
@@ -2303,7 +2303,7 @@ class DatasetConversionPage(QWidget):
             self.map_offset_y_spinbox.setVisible(True)
             self.load_network_async(net_file)
         elif porto_net_file.exists():
-            self.map_status.setText("✅ Network map available (Porto folder)")
+            self.map_status.setText("Network map available (Porto folder)")
             self.map_status.setStyleSheet("color: #4CAF50; font-size: 11px; font-weight: bold;")
             self.download_map_btn.setVisible(False)  # Hide the button when map is available
             self.osm_map_checkbox.setVisible(True)  # Show the OSM map checkbox
@@ -2316,7 +2316,7 @@ class DatasetConversionPage(QWidget):
             self.map_offset_y_spinbox.setVisible(True)
             self.load_network_async(porto_net_file)
         else:
-            self.map_status.setText("❌ Network map not found\nClick to download from OpenStreetMap")
+            self.map_status.setText("Network map not found\nClick to download from OpenStreetMap")
             self.map_status.setStyleSheet("color: #f44336; font-size: 11px;")
             self.download_map_btn.setVisible(True)
             self.download_map_btn.setEnabled(True)
@@ -2530,10 +2530,10 @@ class DatasetConversionPage(QWidget):
         self.dataset_start_btn.setEnabled(False)
         self.dataset_stop_btn.setEnabled(True)
         self.progress_group.setVisible(True)
-        self.progress_group.setTitle("⏳ Step Conversion")
+        self.progress_group.setTitle("Step Conversion")
         self.progress_bar.setMaximum(max(1, last_traj - start_traj + 1))
         self.progress_bar.setValue(0)
-        self.progress_status.setText(f"Converting trajectories {start_traj}–{last_traj}...")
+        self.progress_status.setText(f"Converting trajectories {start_traj}-{last_traj}...")
         self.log(f"▶ Starting dataset generation: trajectories {start_traj}–{last_traj} → {output_path}")
         self._dataset_gen_worker.start()
 
@@ -2556,7 +2556,7 @@ class DatasetConversionPage(QWidget):
         self.dataset_start_btn.setEnabled(True)
         self.dataset_stop_btn.setEnabled(False)
         self.progress_bar.setValue(self.progress_bar.maximum())
-        self.progress_group.setTitle("⏳ Download Progress")
+        self.progress_group.setTitle("Download Progress")
         if error_msg:
             self.progress_status.setText(f"Stopped: {error_msg}")
             self.log(f"Step conversion stopped: {error_msg}")
@@ -2590,19 +2590,19 @@ class DatasetConversionPage(QWidget):
         file_path = Path(path)
         
         if not file_path.exists():
-            valid_label.setText("❌")
+            valid_label.setText("X")
             status_label.setText("File does not exist")
             status_label.setStyleSheet("color: #f44336; font-size: 9px;")
             return
         
         if not file_path.is_file():
-            valid_label.setText("❌")
+            valid_label.setText("X")
             status_label.setText("Path is not a file")
             status_label.setStyleSheet("color: #f44336; font-size: 9px;")
             return
         
         if file_path.suffix.lower() != '.csv':
-            valid_label.setText("⚠️")
+            valid_label.setText("!")
             status_label.setText("File is not a CSV file")
             status_label.setStyleSheet("color: #FF9800; font-size: 9px;")
             return
@@ -2623,7 +2623,7 @@ class DatasetConversionPage(QWidget):
                         status_label.setStyleSheet("color: #4CAF50; font-size: 9px;")
                         self.log(f"Train dataset validated: {file_path.name} ({size_mb:.1f} MB)")
                     else:
-                        valid_label.setText("⚠️")
+                        valid_label.setText("!")
                         status_label.setText(f"CSV ({size_mb:.1f} MB) - missing expected columns")
                         status_label.setStyleSheet("color: #FF9800; font-size: 9px;")
                 else:
@@ -2634,17 +2634,17 @@ class DatasetConversionPage(QWidget):
                         status_label.setStyleSheet("color: #4CAF50; font-size: 9px;")
                         self.log(f"Test dataset validated: {file_path.name} ({size_mb:.1f} MB)")
                     else:
-                        valid_label.setText("⚠️")
+                        valid_label.setText("!")
                         status_label.setText(f"CSV ({size_mb:.1f} MB) - missing TRIP_ID")
                         status_label.setStyleSheet("color: #FF9800; font-size: 9px;")
         except Exception as e:
-            valid_label.setText("❌")
+            valid_label.setText("X")
             status_label.setText(f"Error: {str(e)[:25]}")
             status_label.setStyleSheet("color: #f44336; font-size: 9px;")
     
     def show_dataset_help(self):
         """Show help dialog with instructions for downloading the dataset."""
-        help_text = """<h3>📊 Porto Taxi Dataset Download Instructions</h3>
+        help_text = """<h3>Porto Taxi Dataset Download Instructions</h3>
         
 <p>The Porto taxi trajectory dataset is available from Kaggle:</p>
 
@@ -2663,7 +2663,7 @@ class DatasetConversionPage(QWidget):
    Unzip <code>train.csv.zip</code> to get <code>train.csv</code></li>
 <br/>
 <li><b>Select the file:</b><br/>
-   Use the browse button (📁) to select the extracted <code>train.csv</code> file</li>
+   Use the Browse button to select the extracted <code>train.csv</code> file</li>
 </ol>
 
 <p><b>Note:</b> The dataset is approximately 1.7 million taxi trips with GPS trajectories 
@@ -2684,12 +2684,12 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
             return
         
         self.log(f"Loading network: {net_file.name}...")
-        self.map_status_label.setText("🔄 Loading map...")
+        self.map_status_label.setText("Loading map...")
         self.map_status_label.setStyleSheet("color: #FF9800; font-size: 12px; font-weight: bold;")
         
         # Show loading overlay
         self.map_loading_progress.setValue(0)
-        self.loading_label.setText("🗺️ Loading Map...")
+        self.loading_label.setText("Loading map...")
         self.loading_status_label.setText("Initializing...")
         self.map_stack.setCurrentIndex(1)  # Show loading overlay
         
@@ -2786,7 +2786,7 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
             self.log(f"Error loading network: {message}")
             self.map_status_label.setText(f"Error loading map: {message}")
             self.map_status_label.setStyleSheet("color: #f44336; font-size: 12px;")
-            self.loading_label.setText("❌ Loading Failed")
+            self.loading_label.setText("Loading failed")
             self.loading_status_label.setText(message[:50] + "..." if len(message) > 50 else message)
     
     def _zoom_to_porto_center(self):
@@ -2826,7 +2826,7 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
     def _show_busy_indicator(self, message: str = "Processing..."):
         """Show busy indicator overlay on the map."""
         # Update busy label text
-        self.busy_label.setText(f"⏳ {message}")
+        self.busy_label.setText(message)
         # Show busy overlay (page 2)
         self.map_stack.setCurrentIndex(2)
         # Disable zoom buttons
@@ -2959,7 +2959,7 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
             project_path = Path(self.project_path)
             net_file = project_path / 'config' / 'porto.net.xml'
             if net_file.exists():
-                self.map_status.setText("✅ Network map available")
+                self.map_status.setText("Network map available")
                 self.map_status.setStyleSheet("color: #4CAF50; font-size: 11px; font-weight: bold;")
                 self.download_map_btn.setVisible(False)  # Hide the button when map is available
                 self.osm_map_checkbox.setVisible(True)  # Show the OSM map checkbox

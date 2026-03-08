@@ -150,7 +150,7 @@ class DebugTrajectoryPage(QWidget):
         header_layout = QHBoxLayout()
         header_layout.setContentsMargins(0, 0, 0, 10)
         
-        back_btn = QPushButton("← Back to Home")
+        back_btn = QPushButton("Back to Home")
         back_btn.setStyleSheet("""
             QPushButton {
                 background-color: #2196F3;
@@ -171,7 +171,7 @@ class DebugTrajectoryPage(QWidget):
         header_layout.addStretch()
         
         # Title
-        title = QLabel(f"🔧 Debug: First Trajectory - {self.project_name}")
+        title = QLabel(f"Debug: First Trajectory - {self.project_name}")
         title_font = QFont()
         title_font.setPointSize(16)
         title_font.setBold(True)

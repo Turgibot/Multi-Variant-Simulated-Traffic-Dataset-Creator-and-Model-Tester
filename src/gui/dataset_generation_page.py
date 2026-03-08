@@ -43,7 +43,7 @@ class DatasetGenerationPage(QWidget):
         # Header
         header_layout = QHBoxLayout()
         
-        back_btn = QPushButton("← Back to Projects")
+        back_btn = QPushButton("Back to Projects")
         back_btn.setStyleSheet("""
             QPushButton {
                 background-color: #2196F3;
@@ -71,7 +71,7 @@ class DatasetGenerationPage(QWidget):
         header_layout.addStretch()
         
         # Run Simulation button (top right corner)
-        self.run_simulation_btn = QPushButton("▶ Run SUMO Simulation")
+        self.run_simulation_btn = QPushButton("Run Simulation")
         self.run_simulation_btn.setStyleSheet("""
             QPushButton {
                 background-color: #4CAF50;
@@ -105,7 +105,7 @@ class DatasetGenerationPage(QWidget):
         route_gen_label.setStyleSheet("color: #666; font-size: 14px;")
         route_gen_layout.addWidget(route_gen_label)
         
-        route_gen_btn = QPushButton("🛣️ Generate Routes")
+        route_gen_btn = QPushButton("Generate Routes")
         route_gen_btn.setStyleSheet("""
             QPushButton {
                 background-color: #9C27B0;
@@ -259,7 +259,7 @@ class DatasetGenerationPage(QWidget):
         output_folder_layout.addWidget(self.output_folder_check)
         
         # Browse button
-        browse_folder_btn = QPushButton("Browse...")
+        browse_folder_btn = QPushButton("📁")
         browse_folder_btn.setStyleSheet("""
             QPushButton {
                 background-color: #2196F3;

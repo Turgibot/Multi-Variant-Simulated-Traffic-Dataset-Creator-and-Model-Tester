@@ -47,10 +47,10 @@ class NewProjectDialog(QDialog):
         
         # Project type indicator
         if self.project_type == "porto":
-            type_label = QLabel("🚕 Porto Taxi Dataset Conversion")
+            type_label = QLabel("Porto Taxi Dataset Conversion")
             type_label.setStyleSheet("color: #FF9800; font-size: 12px; font-weight: bold; padding: 5px; background-color: #FFF3E0; border-radius: 3px;")
         else:
-            type_label = QLabel("🚗 SUMO Traffic Simulation")
+            type_label = QLabel("SUMO Traffic Simulation")
             type_label.setStyleSheet("color: #4CAF50; font-size: 12px; font-weight: bold; padding: 5px; background-color: #E8F5E9; border-radius: 3px;")
         layout.addWidget(type_label)
         

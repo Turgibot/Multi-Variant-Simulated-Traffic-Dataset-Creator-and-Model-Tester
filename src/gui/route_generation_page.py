@@ -14,9 +14,8 @@ from PySide6.QtCore import QPointF, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import (QBrush, QColor, QFont, QGuiApplication, QPainter,
                            QPen)
 from PySide6.QtWidgets import (QFrame, QGraphicsView, QGroupBox, QHBoxLayout,
-                               QLabel, QLineEdit, QMessageBox,
-                               QPushButton, QScrollArea, QSizePolicy,
-                               QVBoxLayout, QWidget)
+                               QLabel, QLineEdit, QMessageBox, QPushButton,
+                               QScrollArea, QSizePolicy, QVBoxLayout, QWidget)
 
 from src.gui.simulation_view import SimulationView
 from src.utils.network_parser import NetworkParser
@@ -284,7 +283,7 @@ class RouteGenerationPage(QWidget):
         header_layout.addWidget(title)
         header_layout.addStretch()
         
-        back_btn = QPushButton("← Back")
+        back_btn = QPushButton("Back")
         back_btn.clicked.connect(self.back_clicked.emit)
         header_layout.addWidget(back_btn)
         main_layout.addLayout(header_layout)
@@ -693,7 +692,7 @@ class RouteGenerationPage(QWidget):
         zone_layout.addWidget(display_btn)
         
         # Delete button (smaller)
-        delete_btn = QPushButton("×")
+        delete_btn = QPushButton("✗")
         delete_btn.setStyleSheet("""
             QPushButton {
                 background-color: #f44336;

@@ -40,7 +40,7 @@ class SimulationPage(QWidget):
         header_layout = QHBoxLayout()
         header_layout.setContentsMargins(0, 0, 0, 10)
         
-        back_btn = QPushButton("← Back to Settings")
+        back_btn = QPushButton("Back to Settings")
         back_btn.setStyleSheet("""
             QPushButton {
                 background-color: #2196F3;
@@ -74,7 +74,7 @@ class SimulationPage(QWidget):
         controls_layout.setSpacing(10)
         controls_layout.setContentsMargins(0, 0, 0, 10)
         
-        self.start_btn = QPushButton("▶ Start Simulation")
+        self.start_btn = QPushButton("Start Simulation")
         self.start_btn.setStyleSheet("""
             QPushButton {
                 background-color: #4CAF50;
@@ -96,7 +96,7 @@ class SimulationPage(QWidget):
         self.start_btn.clicked.connect(self.start_simulation)
         controls_layout.addWidget(self.start_btn)
         
-        self.pause_btn = QPushButton("⏸ Pause")
+        self.pause_btn = QPushButton("Pause")
         self.pause_btn.setStyleSheet("""
             QPushButton {
                 background-color: #FF9800;
@@ -119,7 +119,7 @@ class SimulationPage(QWidget):
         self.pause_btn.clicked.connect(self.pause_simulation)
         controls_layout.addWidget(self.pause_btn)
         
-        self.stop_btn = QPushButton("⏹ Stop")
+        self.stop_btn = QPushButton("Stop")
         self.stop_btn.setStyleSheet("""
             QPushButton {
                 background-color: #f44336;
@@ -468,13 +468,13 @@ class SimulationPage(QWidget):
             self.log_text.append("Resuming simulation...")
             self.status_label.setText("Status: Running")
             self.status_label.setStyleSheet("color: #4CAF50; padding: 10px; font-size: 14px; font-weight: bold;")
-            self.pause_btn.setText("⏸ Pause")
+            self.pause_btn.setText("Pause")
             self.simulation_paused = False
         else:
             self.log_text.append("Pausing simulation...")
             self.status_label.setText("Status: Paused")
             self.status_label.setStyleSheet("color: #FF9800; padding: 10px; font-size: 14px; font-weight: bold;")
-            self.pause_btn.setText("▶ Resume")
+            self.pause_btn.setText("Resume")
             self.simulation_paused = True
         
         # TODO: Implement actual SUMO simulation pause/resume
@@ -515,7 +515,7 @@ class SimulationPage(QWidget):
         
         self.start_btn.setEnabled(True)
         self.pause_btn.setEnabled(False)
-        self.pause_btn.setText("⏸ Pause")
+        self.pause_btn.setText("Pause")
         self.stop_btn.setEnabled(False)
         self.simulation_running = False
         self.simulation_paused = False
