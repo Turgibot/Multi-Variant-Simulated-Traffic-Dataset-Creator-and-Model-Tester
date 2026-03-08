@@ -1133,10 +1133,13 @@ def main():
                     sys.exit(1)
                 last_ts = ts
                 return item
-        try:
-            trip_num, polyline, ts = next(trajectory_iter)
-            if ts is None:
+        while True:
+            try:
+                trip_num, polyline, ts = next(trajectory_iter)
+            except StopIteration:
                 return None
+            if ts is None:
+                continue
             if last_ts is not None and ts < last_ts:
                 print(
                     f"Error: CSV is not sorted by timestamp. Trajectory {trip_num} has ts {ts} < previous ts {last_ts}. "
@@ -1152,9 +1155,6 @@ def main():
                 )
                 if rec:
                     return (trip_num, polyline, ts, rec)
-        except StopIteration:
-            pass
-        return None
 
     def _emit_step_json(ts_val: int, data: Dict[str, Any], label_data: Dict[str, Any]) -> None:
         if use_parallel and json_queue is not None:
