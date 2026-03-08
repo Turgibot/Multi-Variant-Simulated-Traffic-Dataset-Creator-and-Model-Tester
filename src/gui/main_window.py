@@ -27,7 +27,6 @@ class WelcomePage(QWidget):
     
     # Signals
     dataset_generation_clicked = Signal(str)  # Emits project name
-    model_testing_clicked = Signal(str)  # Emits project name
     new_project_created = Signal(str, str)  # Emits project name and type
     porto_conversion_clicked = Signal(str)  # Emits project name for Porto conversion
     debug_trajectory_clicked = Signal(str)  # Emits project name for debug trajectory page
@@ -45,7 +44,7 @@ class WelcomePage(QWidget):
         main_layout.setContentsMargins(30, 20, 30, 20)
         
         # Title section
-        title = QLabel("Traffic Simulation Tool")
+        title = QLabel("Traffic Graph Dataset Builder")
         title_font = QFont()
         title_font.setPointSize(24)
         title_font.setBold(True)
@@ -54,7 +53,7 @@ class WelcomePage(QWidget):
         main_layout.addWidget(title)
         
         # Subtitle
-        subtitle = QLabel("Multi-Variant Dataset Creator and Model Tester")
+        subtitle = QLabel("Build Graph Traffic Datasets from Simulated or Real Trajectories.")
         subtitle_font = QFont()
         subtitle_font.setPointSize(14)
         subtitle.setFont(subtitle_font)
@@ -352,27 +351,6 @@ class WelcomePage(QWidget):
         )
         action_layout.addWidget(dataset_btn)
         
-        # Model Testing button
-        model_btn = QPushButton("Model Testing")
-        model_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #2196F3;
-                color: white;
-                border: none;
-                padding: 6px 12px;
-                border-radius: 4px;
-                font-weight: bold;
-                font-size: 11px;
-            }
-            QPushButton:hover {
-                background-color: #1976D2;
-            }
-        """)
-        model_btn.clicked.connect(
-            lambda: self.model_testing_clicked.emit(project['name'])
-        )
-        action_layout.addWidget(model_btn)
-        
         layout.addLayout(action_layout)
         
         card.setLayout(layout)
@@ -467,27 +445,6 @@ class WelcomePage(QWidget):
             lambda: self.porto_conversion_clicked.emit(project['name'])
         )
         action_layout.addWidget(convert_btn)
-        
-        # Model Testing button
-        model_btn = QPushButton("Model Testing")
-        model_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #2196F3;
-                color: white;
-                border: none;
-                padding: 6px 12px;
-                border-radius: 4px;
-                font-weight: bold;
-                font-size: 11px;
-            }
-            QPushButton:hover {
-                background-color: #1976D2;
-            }
-        """)
-        model_btn.clicked.connect(
-            lambda: self.model_testing_clicked.emit(project['name'])
-        )
-        action_layout.addWidget(model_btn)
         
         layout.addLayout(action_layout)
         
@@ -598,7 +555,7 @@ class MainWindow(QMainWindow):
     
     def init_ui(self):
         """Initialize the main window UI."""
-        self.setWindowTitle("Traffic Simulation Tool - Multi-Variant Dataset Creator and Model Tester")
+        self.setWindowTitle("Traffic Graph Dataset Builder")
         self.setGeometry(100, 100, 1200, 800)
         
         # Set maximum size to screen size to prevent overflow
@@ -616,7 +573,6 @@ class MainWindow(QMainWindow):
         # Welcome page
         self.welcome_page = WelcomePage()
         self.welcome_page.dataset_generation_clicked.connect(self.open_dataset_generation)
-        self.welcome_page.model_testing_clicked.connect(self.open_model_testing)
         self.welcome_page.new_project_created.connect(self.on_new_project_created)
         self.welcome_page.porto_conversion_clicked.connect(self.open_porto_conversion)
         self.welcome_page.debug_trajectory_clicked.connect(self.open_debug_trajectory)
@@ -638,10 +594,6 @@ class MainWindow(QMainWindow):
         
         # Simulation page (will be created when needed)
         self.simulation_page = None
-        
-        # Placeholder page for model testing
-        self.model_page = self.create_placeholder_page("Model Testing", "Coming soon...")
-        self.central_widget.addWidget(self.model_page)
         
         # Show welcome page
         self.central_widget.setCurrentWidget(self.welcome_page)
@@ -841,18 +793,6 @@ class MainWindow(QMainWindow):
         else:
             # If dataset page doesn't exist, go back to welcome
             self.show_welcome()
-    
-    def open_model_testing(self, project_name: str):
-        """Open model testing for a project."""
-        # TODO: Implement model testing page
-        # For now, show a placeholder
-        QMessageBox.information(
-            self,
-            "Model Testing",
-            f"Opening Model Testing for project: {project_name}\n\n"
-            "This feature will be implemented next."
-        )
-        # self.central_widget.setCurrentWidget(self.model_page)
     
     def on_new_project_created(self, project_name: str, project_type: str):
         """Handle new project creation."""

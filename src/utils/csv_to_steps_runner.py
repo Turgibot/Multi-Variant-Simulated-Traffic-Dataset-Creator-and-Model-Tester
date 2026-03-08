@@ -1,0 +1,1094 @@
+"""
+CSV → Step (Snapshot) Files — Reusable conversion logic.
+
+Converts train CSV to step JSONs (snapshots, labels, static) without intermediate traj files.
+Used by both the CLI script and the GUI application.
+"""
+
+import csv
+import gzip
+import hashlib
+import json
+import math
+import multiprocessing
+import os
+import sys
+import threading
+from pathlib import Path
+from queue import Queue
+from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
+
+try:
+    from sortedcontainers import SortedDict as _SortedDict
+    _USE_SORTED_DICT = True
+except ImportError:
+    _SortedDict = None
+    _USE_SORTED_DICT = False
+
+from src.utils.route_finding import (
+    EdgeSpatialIndex,
+    build_edges_data,
+    build_node_positions,
+    project_point_onto_polyline_with_segment_and_t,
+)
+from src.utils.trajectory_converter import _parse_csv_row, convert_trajectory
+from src.utils.traffic_db import TrafficDB
+
+# Multiprocessing worker state (set by init, used by _mp_convert_one)
+_mp_worker_state: Optional[Tuple] = None
+
+
+def _mp_init_worker(net_path: str) -> None:
+    """Initialize worker process. Load network once per worker."""
+    global _mp_worker_state
+    from src.utils.network_parser import NetworkParser
+
+    np_local = NetworkParser(net_path)
+    conv = np_local.conv_boundary
+    bounds = np_local.get_bounds()
+    y_min = conv["y_min"] if conv else (bounds["y_min"] if bounds else 0.0)
+    y_max = conv["y_max"] if conv else (bounds["y_max"] if bounds else 0.0)
+    edges_data = build_edges_data(np_local)
+    edge_shapes = {eid: shape for eid, _ed, shape in edges_data}
+    node_positions = build_node_positions(np_local)
+    spatial_index = EdgeSpatialIndex(edges_data, cell_size=500.0)
+    _mp_worker_state = (
+        np_local,
+        edges_data,
+        edge_shapes,
+        node_positions,
+        y_min,
+        y_max,
+        spatial_index,
+    )
+
+
+def _mp_convert_one(task: Tuple[int, List, Optional[int]]) -> Optional[Tuple[int, List, Optional[int], Any]]:
+    """Convert one trajectory. Returns (trip_num, polyline, ts, rec) or None if conversion failed."""
+    global _mp_worker_state
+    if _mp_worker_state is None:
+        return None
+    trip_num, polyline, ts = task
+    if ts is None:
+        return None
+    (
+        np_local,
+        edges_data,
+        edge_shapes,
+        node_positions,
+        y_min,
+        y_max,
+        spatial_index,
+    ) = _mp_worker_state
+    rec = convert_trajectory(
+        trip_num,
+        polyline,
+        ts,
+        np_local,
+        edges_data,
+        edge_shapes,
+        node_positions,
+        y_min,
+        y_max,
+        use_polygon=False,
+        spatial_index=spatial_index,
+    )
+    if rec:
+        return (trip_num, polyline, ts, rec)
+    return None
+
+
+def count_csv_rows(
+    csv_path: Path,
+    start_traj: int,
+    last_traj: Optional[int],
+) -> Optional[int]:
+    """Count data rows in range [start_traj, last_traj] without loading into memory."""
+    try:
+        with open(csv_path, "r", encoding="utf-8") as f:
+            reader = csv.reader(f)
+            next(reader, None)
+            count = 0
+            for i, _ in enumerate(reader, 1):
+                if i < start_traj:
+                    continue
+                if last_traj is not None and i > last_traj:
+                    break
+                count += 1
+        return count
+    except (OSError, csv.Error):
+        return None
+
+
+def _stream_sorted_rows(
+    sorted_csv_path: Path,
+    ts_idx: Optional[int],
+) -> Iterator[Tuple[int, List, Optional[int]]]:
+    """Stream (trip_num, polyline, timestamp) from sorted file."""
+    with open(sorted_csv_path, "r", encoding="utf-8", newline="") as csv_f:
+        reader = csv.reader(csv_f)
+        next(reader, None)
+        for i, row in enumerate(reader, 1):
+            polyline, timestamp = _parse_csv_row(row, ts_idx)
+            if polyline:
+                yield i, polyline, timestamp
+
+
+def _stream_csv_rows(
+    csv_path: Path,
+    start_traj: int,
+    last_traj: Optional[int],
+    ts_idx: Optional[int],
+) -> Iterator[Tuple[int, List, Optional[int]]]:
+    """Stream (trip_num, polyline, timestamp) from CSV when already sorted."""
+    with open(csv_path, "r", encoding="utf-8", newline="") as f:
+        reader = csv.reader(f)
+        next(reader, None)
+        for i, row in enumerate(reader, 1):
+            if i < start_traj:
+                continue
+            if last_traj is not None and i > last_traj:
+                break
+            polyline, timestamp = _parse_csv_row(row, ts_idx)
+            if polyline:
+                yield i, polyline, timestamp
+
+
+def load_and_sort_csv(
+    csv_path: Path,
+    start_traj: int,
+    last_traj: Optional[int],
+    is_sorted: bool,
+    save_sorted_path: Optional[Path],
+    progress_callback: Optional[Callable[[int, int, str], None]] = None,
+    cancelled_callback: Optional[Callable[[], bool]] = None,
+) -> Iterator[Tuple[int, List, Optional[int]]]:
+    """
+    Sort CSV by timestamp, then return an iterator that streams one row at a time.
+    progress_callback(current, total, message) - total may be 0 when unknown.
+    """
+    rows_with_raw: List[Tuple[List[str], int, Optional[int]]] = []
+    header = None
+    ts_idx = None
+
+    with open(csv_path, "r", encoding="utf-8") as f:
+        reader = csv.reader(f)
+        header = next(reader, None)
+        if not header:
+            return iter([])
+        for i, h in enumerate(header):
+            if str(h).strip('"') == "TIMESTAMP":
+                ts_idx = i
+                break
+
+    if is_sorted:
+        return _stream_csv_rows(csv_path, start_traj, last_traj, ts_idx)
+
+    total = count_csv_rows(csv_path, start_traj, last_traj) or 0
+    with open(csv_path, "r", encoding="utf-8") as f:
+        reader = csv.reader(f)
+        next(reader, None)
+        current = 0
+        for i, row in enumerate(reader, 1):
+            if cancelled_callback and cancelled_callback():
+                return iter([])
+            if i > (last_traj or float("inf")):
+                break
+            if i < start_traj:
+                continue
+            polyline, timestamp = _parse_csv_row(row, ts_idx)
+            if polyline:
+                rows_with_raw.append((row, i, timestamp))
+            current += 1
+            if progress_callback and total and current % 100 == 0:
+                progress_callback(min(current, total), total, f"Reading CSV... {current}/{total}")
+
+    if progress_callback:
+        progress_callback(1, 1, "Sorting by timestamp...")
+    rows_with_raw.sort(key=lambda x: (x[2] if x[2] is not None else 0, x[1]))
+
+    if save_sorted_path is None:
+        raise ValueError("save_sorted_path required when sorting")
+
+    save_sorted_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(save_sorted_path, "w", encoding="utf-8", newline="") as out:
+        writer = csv.writer(out)
+        writer.writerow(header)
+        for idx, (raw_row, _, _) in enumerate(rows_with_raw):
+            if progress_callback and total and idx % 100 == 0:
+                progress_callback(min(idx, total), total, f"Saving sorted... {idx}/{len(rows_with_raw)}")
+            writer.writerow(raw_row)
+
+    return _stream_sorted_rows(save_sorted_path, ts_idx)
+
+
+def _resolve_sumo_home(sumo_home_arg: Optional[Path]) -> Optional[Path]:
+    """Resolve SUMO_HOME: arg > env > /usr/shared/sumo > /usr/share/sumo."""
+    for candidate in (
+        sumo_home_arg,
+        (Path(os.environ["SUMO_HOME"]) if os.environ.get("SUMO_HOME") else None),
+        Path("/usr/shared/sumo"),
+        Path("/usr/share/sumo"),
+    ):
+        if candidate and (Path(candidate) / "tools").exists():
+            return Path(candidate)
+    return None
+
+
+# Re-export all build/update functions from the script (they live in csv_to_steps.py for now)
+# We'll import them from a shared module. For now, duplicate the minimal set needed.
+# Actually - the script has all the logic. The cleanest approach: have the runner IMPORT from
+# a new module that has the pure logic. Let me instead put ALL the logic in the runner and
+# have the script call run_csv_to_steps(). That way we have one source of truth.
+
+def _strip_lane_suffix(edge_id: str) -> str:
+    if "#" in edge_id:
+        return edge_id.split("#")[0]
+    return edge_id
+
+
+def build_junctions_map(net: Any) -> Dict[str, Dict[str, Any]]:
+    junctions: Dict[str, Dict[str, Any]] = {}
+    for node in net.getNodes():
+        nid = node.getID()
+        if nid.startswith(":"):
+            continue
+        coord = node.getCoord()
+        junctions[nid] = {
+            "id": nid,
+            "x": coord[0],
+            "y": coord[1],
+            "type": node.getType() or "priority",
+            "zone": "",
+            "incoming": [e.getID() for e in node.getIncoming()],
+            "outgoing": [e.getID() for e in node.getOutgoing()],
+        }
+    return junctions
+
+
+def build_edges_map(net: Any) -> Dict[str, Dict[str, Any]]:
+    by_base: Dict[str, List[Any]] = {}
+    for edge in net.getEdges():
+        eid = edge.getID()
+        if edge.getFunction() == "internal":
+            continue
+        base_id = _strip_lane_suffix(eid)
+        by_base.setdefault(base_id, []).append(edge)
+
+    edges: Dict[str, Dict[str, Any]] = {}
+    for base_id, lane_edges in by_base.items():
+        first = lane_edges[0]
+        from_node = first.getFromNode()
+        to_node = first.getToNode()
+        edges[base_id] = {
+            "id": base_id,
+            "from": from_node.getID() if from_node else "",
+            "to": to_node.getID() if to_node else "",
+            "edge_type": 0,
+            "speed": first.getSpeed(),
+            "length": first.getLength(),
+            "num_lanes": sum(e.getLaneNumber() for e in lane_edges),
+            "zone": "",
+            "density": 0.0,
+            "avg_speed": 0.0,
+            "edge_demand": 0.0,
+            "vehicles_on_road": [],
+        }
+    return edges
+
+
+def create_vehicle_node(vehicle_id: str) -> Dict[str, Any]:
+    return {
+        "id": vehicle_id,
+        "vehicle_type": "passenger",
+        "length": 0.0,
+        "width": 0.0,
+        "height": 0.0,
+        "speed": 0.0,
+        "acceleration": 0.0,
+        "current_x": 0.0,
+        "current_y": 0.0,
+        "current_zone": "",
+        "current_edge": "",
+        "current_position": 0.0,
+        "origin_name": "",
+        "origin_zone": "",
+        "origin_edge": "",
+        "origin_position": 0.0,
+        "origin_x": 0.0,
+        "origin_y": 0.0,
+        "origin_start_sec": 0,
+        "route": [],
+        "route_length": 0.0,
+        "route_left": [],
+        "route_length_left": 0.0,
+        "destination_name": "",
+        "destination_edge": "",
+        "destination_position": 0.0,
+        "destination_x": 0.0,
+        "destination_y": 0.0,
+    }
+
+
+def _get_edge_shape(edge_id: str, edge_shapes: Dict[str, List]) -> Optional[List]:
+    if edge_id in edge_shapes:
+        return edge_shapes[edge_id]
+    for eid, shape in edge_shapes.items():
+        if "#" in eid and eid.split("#")[0] == edge_id:
+            return shape
+    if "#" not in edge_id and f"{edge_id}#0" in edge_shapes:
+        return edge_shapes[f"{edge_id}#0"]
+    return None
+
+
+def _build_vehicle_info(
+    vehicle_id: str,
+    speed: float,
+    acceleration: float,
+    current_x: float,
+    current_y: float,
+    current_zone: str,
+    current_edge: str,
+    current_position: float,
+    route_left: List[str],
+    route_length_left: float,
+) -> Dict[str, Any]:
+    return {
+        "id": vehicle_id,
+        "speed": speed,
+        "acceleration": acceleration,
+        "current_x": current_x,
+        "current_y": current_y,
+        "current_zone": current_zone,
+        "current_edge": current_edge,
+        "current_position": current_position,
+        "route_left": route_left,
+        "route_length_left": route_length_left,
+    }
+
+
+def _position_on_edge_from_coords(
+    x: float, y: float, edge_id: str, edge_shapes: Dict[str, List]
+) -> Optional[float]:
+    shape = _get_edge_shape(edge_id, edge_shapes)
+    if not shape or len(shape) < 2:
+        return None
+    (_, _), seg_idx, t = project_point_onto_polyline_with_segment_and_t(x, y, shape)
+    dist = 0.0
+    for i in range(len(shape) - 1):
+        x1, y1 = shape[i][0], shape[i][1]
+        x2, y2 = shape[i + 1][0], shape[i + 1][1]
+        seg_len = math.hypot(x2 - x1, y2 - y1)
+        if i < seg_idx:
+            dist += seg_len
+        elif i == seg_idx:
+            dist += t * seg_len
+            break
+    return dist
+
+
+def _dyn_edge_id(from_id: str, to_id: str) -> str:
+    sig = f"{from_id}_{to_id}"
+    h = int(hashlib.md5(sig.encode()).hexdigest(), 16) % (10 ** 9)
+    return f"dyn_{h:09d}"
+
+
+def create_dynamic_edges(
+    edges: Dict[str, Dict[str, Any]],
+    vehicles: Dict[str, Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    dynamic: List[Dict[str, Any]] = []
+    for edge_id, edge_data in edges.items():
+        veh_ids = edge_data.get("vehicles_on_road", [])
+        if not veh_ids:
+            continue
+        junction_from = edge_data.get("from", "")
+        junction_to = edge_data.get("to", "")
+        sorted_vehicles = sorted(
+            (vid for vid in veh_ids if vid in vehicles),
+            key=lambda vid: vehicles[vid].get("current_position", 0.0),
+        )
+        if not sorted_vehicles:
+            continue
+        prev = junction_from
+        for i, vid in enumerate(sorted_vehicles):
+            edge_type = 1 if i == 0 else 2
+            dyn_id = _dyn_edge_id(prev, vid)
+            dynamic.append({
+                "id": dyn_id,
+                "from": prev,
+                "to": vid,
+                "edge_type": edge_type,
+                "speed": 0.0,
+                "length": 0.0,
+                "num_lanes": 0,
+                "zone": "",
+                "density": 0.0,
+                "avg_speed": 0.0,
+                "vehicles_on_road": [],
+            })
+            prev = vid
+        dyn_id = _dyn_edge_id(prev, junction_to)
+        dynamic.append({
+            "id": dyn_id,
+            "from": prev,
+            "to": junction_to,
+            "edge_type": 3,
+            "speed": 0.0,
+            "length": 0.0,
+            "num_lanes": 0,
+            "zone": "",
+            "density": 0.0,
+            "avg_speed": 0.0,
+            "vehicles_on_road": [],
+        })
+    return dynamic
+
+
+ACCELERATION_INTERVAL_SEC = 15.0
+EDGE_DEMAND_TAU_SEC = 600.0
+
+
+def update_db_from_vehicle_infos(db: TrafficDB, vehicle_infos: List[Dict[str, Any]]) -> None:
+    for info in vehicle_infos:
+        vid = info.get("id", "")
+        if vid not in db.vehicles:
+            continue
+        vehicle = db.vehicles[vid]
+        old_edge = vehicle.get("current_edge", "")
+        new_edge = info.get("current_edge", "")
+        vehicle["current_x"] = info.get("current_x", 0.0)
+        vehicle["current_y"] = info.get("current_y", 0.0)
+        vehicle["current_zone"] = info.get("current_zone", "")
+        vehicle["current_edge"] = new_edge
+        vehicle["current_position"] = info.get("current_position", 0.0)
+
+        current_edge = info.get("current_edge", "")
+        dest_edge = vehicle.get("destination_edge", "")
+        full_route = vehicle.get("route", [])
+        if current_edge and current_edge in full_route:
+            idx = full_route.index(current_edge)
+            route_left = full_route[idx + 1:]
+            if current_edge == dest_edge:
+                route_left = []
+        else:
+            route_left = info.get("route_left", [])
+        vehicle["route_left"] = route_left
+
+        route_length_left = 0.0
+        dest_position = vehicle.get("destination_position", 0.0)
+        curr_pos = info.get("current_position", 0.0)
+        if current_edge == dest_edge:
+            route_length_left = max(0.0, dest_position - curr_pos)
+        elif current_edge:
+            edge_len = db.road_edges.get(current_edge, {}).get("length", 0.0)
+            route_length_left = max(0.0, edge_len - curr_pos)
+            for e in route_left[:-1]:
+                route_length_left += db.road_edges.get(e, {}).get("length", 0.0)
+            if route_left and route_left[-1] == dest_edge:
+                route_length_left += dest_position
+        vehicle["route_length_left"] = route_length_left
+
+        old_speed = vehicle.get("speed", 0.0)
+        new_speed = info.get("speed", 0.0)
+        vehicle["acceleration"] = (
+            (new_speed - old_speed) / ACCELERATION_INTERVAL_SEC
+            if ACCELERATION_INTERVAL_SEC > 0
+            else 0.0
+        )
+        vehicle["speed"] = new_speed
+
+        if old_edge != new_edge:
+            if old_edge:
+                db.remove_vehicle_from_edge(vid, old_edge)
+            if new_edge:
+                db.add_vehicle_to_edge(vid, new_edge)
+        elif new_edge:
+            db.update_road_stats(new_edge)
+
+        if current_edge == dest_edge and route_length_left <= 0.0:
+            db.remove_vehicle(vid)
+
+
+def _update_edge_demand(db: TrafficDB) -> None:
+    for edge in db.road_edges.values():
+        edge["edge_demand"] = 0.0
+    for vehicle in db.vehicles.values():
+        route_left = vehicle.get("route_left", [])
+        if not route_left:
+            continue
+        current_edge = vehicle.get("current_edge", "")
+        current_position = vehicle.get("current_position", 0.0)
+        t = 0.0
+        if current_edge and len(route_left) > 0:
+            e = db.road_edges.get(current_edge, {})
+            length = e.get("length", 0.0)
+            speed = e.get("avg_speed", 0.0) or e.get("speed", 1.0) or 1.0
+            remaining = max(0.0, length - current_position)
+            t += remaining / speed
+        for edge_id in route_left:
+            e = db.road_edges.get(edge_id, {})
+            if not e:
+                continue
+            length = e.get("length", 0.0)
+            speed = e.get("avg_speed", 0.0) or e.get("speed", 1.0) or 1.0
+            contribution = 1.0 / (1.0 + t / EDGE_DEMAND_TAU_SEC)
+            e["edge_demand"] = e.get("edge_demand", 0.0) + contribution
+            t += length / speed
+
+
+def build_label_json(
+    db: TrafficDB,
+    snapshot_timestamp: int,
+    vehicle_seg_last_ts: Dict[str, int],
+) -> Dict[str, Any]:
+    labels = []
+    for vid in db.vehicles:
+        dest_ts = vehicle_seg_last_ts.get(vid)
+        if dest_ts is not None:
+            eta = max(0, dest_ts - snapshot_timestamp)
+            labels.append({"id": vid, "eta": eta})
+    return {"timestamp": snapshot_timestamp, "labels": labels}
+
+
+STATIC_EDGE_EXCLUDE = {"vehicles_on_road", "edge_demand", "avg_speed", "density"}
+
+
+def build_static_json(db: TrafficDB) -> Dict[str, Any]:
+    junctions = list(db.junctions.values())
+    road_edges_static = [
+        {k: v for k, v in e.items() if k not in STATIC_EDGE_EXCLUDE}
+        for e in db.road_edges.values()
+    ]
+    return {"junctions": junctions, "road_edges": road_edges_static}
+
+
+def build_step_json(db: TrafficDB, snapshot_timestamp: int) -> Dict[str, Any]:
+    dynamic_edges = create_dynamic_edges(db.road_edges, db.vehicles)
+    road_edges_dynamic = [
+        {
+            "id": e["id"],
+            "vehicles_on_road": e.get("vehicles_on_road", []),
+            "edge_demand": e.get("edge_demand", 0.0),
+            "avg_speed": e.get("avg_speed", 0.0),
+            "density": e.get("density", 0.0),
+        }
+        for e in db.road_edges.values()
+        if e.get("vehicles_on_road")
+        or e.get("edge_demand", 0.0) != 0.0
+        or e.get("avg_speed", 0.0) != 0.0
+        or e.get("density", 0.0) != 0.0
+    ]
+    return {
+        "step": snapshot_timestamp,
+        "nodes": list(db.vehicles.values()),
+        "road_edges_dynamic": road_edges_dynamic,
+        "dynamic_edges": dynamic_edges,
+    }
+
+
+def _load_segment_to_map(
+    vehicle_id: str,
+    seg: Dict[str, Any],
+    base_ts: int,
+    road_edges: Dict[str, Dict[str, Any]],
+    timestamp_to_vehicles: Any,
+    network_parser: Any,
+    edge_shapes: Dict[str, List],
+) -> Optional[Tuple[Dict[str, Any], int, Optional[int]]]:
+    route_edges = seg.get("route_edges", [])
+    sumo_route_gps = seg.get("sumo_route_gps", [])
+    if not sumo_route_gps:
+        return None
+
+    start_ts = seg.get("starting_timestamp", base_ts)
+    prev_speed = 0.0
+    GPS_INTERVAL = 15
+
+    first_pt = sumo_route_gps[0]
+    last_pt = sumo_route_gps[-1]
+    origin_edge = first_pt.get("edge_id", "")
+    destination_edge = last_pt.get("edge_id", "")
+    origin_x, origin_y = 0.0, 0.0
+    destination_x, destination_y = 0.0, 0.0
+    fc = first_pt.get("coordinates", [])
+    if fc and len(fc) >= 2:
+        oxy = network_parser.gps_to_sumo_coords(fc[0], fc[1])
+        if oxy:
+            origin_x, origin_y = oxy[0], oxy[1]
+    origin_position = _position_on_edge_from_coords(
+        origin_x, origin_y, origin_edge, edge_shapes
+    ) or 0.0
+    if origin_edge:
+        L = road_edges.get(origin_edge, {}).get("length", 0.0)
+        origin_position = min(max(origin_position, 0.0), L)
+    lc = last_pt.get("coordinates", [])
+    if lc and len(lc) >= 2:
+        dxy = network_parser.gps_to_sumo_coords(lc[0], lc[1])
+        if dxy:
+            destination_x, destination_y = dxy[0], dxy[1]
+    destination_position = _position_on_edge_from_coords(
+        destination_x, destination_y, destination_edge, edge_shapes
+    ) or 0.0
+    if destination_edge:
+        L = road_edges.get(destination_edge, {}).get("length", 0.0)
+        destination_position = min(max(destination_position, 0.0), L)
+
+    node = create_vehicle_node(vehicle_id)
+    node["origin_start_sec"] = base_ts
+    node["origin_edge"] = origin_edge
+    node["origin_position"] = origin_position
+    node["origin_x"] = origin_x
+    node["origin_y"] = origin_y
+    node["destination_edge"] = destination_edge
+    node["destination_position"] = destination_position
+    node["destination_x"] = destination_x
+    node["destination_y"] = destination_y
+    node["route"] = route_edges
+    node["route_length"] = sum(
+        road_edges.get(e, {}).get("length", 0.0) for e in route_edges
+    )
+
+    seg_first_ts = sumo_route_gps[0].get("timestamp", start_ts) if sumo_route_gps else start_ts
+    seg_last_ts = None
+
+    for i, pt in enumerate(sumo_route_gps):
+        edge_id = pt.get("edge_id", "")
+        coords = pt.get("coordinates", [])
+        speed = pt.get("speed", 0.0)
+        ts = pt.get("timestamp", start_ts + i * GPS_INTERVAL)
+
+        current_x, current_y = 0.0, 0.0
+        if coords and len(coords) >= 2:
+            sumo_xy = network_parser.gps_to_sumo_coords(coords[0], coords[1])
+            if sumo_xy:
+                current_x, current_y = sumo_xy[0], sumo_xy[1]
+
+        position_on_edge = _position_on_edge_from_coords(
+            current_x, current_y, edge_id, edge_shapes
+        )
+        edge_len = road_edges.get(edge_id, {}).get("length", 0.0)
+        if position_on_edge is None:
+            position_on_edge = 0.0 if edge_len <= 0 else min(0.5 * edge_len, edge_len)
+        else:
+            position_on_edge = min(max(position_on_edge, 0.0), edge_len)
+
+        route_left = route_edges[route_edges.index(edge_id):] if edge_id in route_edges else route_edges
+        if route_left:
+            edge_lengths = [road_edges.get(e, {}).get("length", 0.0) for e in route_left]
+            route_length_left = (edge_len - position_on_edge) + sum(edge_lengths[1:])
+        else:
+            route_length_left = 0.0
+
+        acceleration = (speed - prev_speed) / GPS_INTERVAL if GPS_INTERVAL > 0 else 0.0
+        prev_speed = speed
+        current_zone = road_edges.get(edge_id, {}).get("zone", "") or ""
+
+        vehicle_info = _build_vehicle_info(
+            vehicle_id=vehicle_id,
+            speed=speed,
+            acceleration=acceleration,
+            current_x=current_x,
+            current_y=current_y,
+            current_zone=current_zone,
+            current_edge=edge_id,
+            current_position=position_on_edge,
+            route_left=route_left,
+            route_length_left=route_length_left,
+        )
+        if ts not in timestamp_to_vehicles:
+            timestamp_to_vehicles[ts] = []
+        timestamp_to_vehicles[ts].append(vehicle_info)
+
+        pt_ts = pt.get("timestamp", ts)
+        if pt_ts is not None and (seg_last_ts is None or pt_ts > seg_last_ts):
+            seg_last_ts = pt_ts
+
+    return (node, seg_first_ts, seg_last_ts)
+
+
+def run_csv_to_steps(
+    csv_path: Path,
+    network_path: Path,
+    output_path: Path,
+    start_traj: int = 1,
+    last_traj: Optional[int] = None,
+    is_sorted: bool = True,
+    save_sorted_path: Optional[Path] = None,
+    sampling_period: int = 30,
+    compress: bool = False,
+    sumo_home: Optional[Path] = None,
+    use_parallel: bool = True,
+    workers: int = None,
+    progress_callback: Optional[Callable[[int, int, str], None]] = None,
+    cancelled_callback: Optional[Callable[[], bool]] = None,
+    log_callback: Optional[Callable[[str], None]] = None,
+) -> Tuple[int, int, str]:
+    """
+    Run CSV → Step conversion. Returns (steps_emitted, trajectories_processed, error_msg).
+    progress_callback(current, total, message) - called during processing.
+    log_callback(message) - optional, for status messages.
+    """
+    def _log(msg: str) -> None:
+        if log_callback:
+            log_callback(msg)
+
+    sumo_home_resolved = _resolve_sumo_home(sumo_home)
+    if sumo_home_resolved:
+        sys.path.insert(0, str(sumo_home_resolved / "tools"))
+
+    net = None
+    junctions = {}
+    road_edges = {}
+    try:
+        import sumolib
+        net = sumolib.net.readNet(str(network_path))
+        junctions = build_junctions_map(net)
+        road_edges = build_edges_map(net)
+    except ImportError:
+        if progress_callback:
+            progress_callback(0, 1, "sumolib not available; network loading skipped")
+    except Exception:
+        pass
+
+    if not junctions or not road_edges:
+        return 0, 0, "Failed to load network (sumolib or network file error)"
+
+    db = TrafficDB(junctions, road_edges)
+
+    network_parser = None
+    edges_data = []
+    edge_shapes = {}
+    node_positions = {}
+    y_min, y_max = 0.0, 0.0
+    try:
+        from src.utils.network_parser import NetworkParser
+        from src.utils.route_finding import build_edges_data, build_node_positions
+        network_parser = NetworkParser(str(network_path))
+        conv = network_parser.conv_boundary
+        bounds = network_parser.get_bounds()
+        y_min = conv["y_min"] if conv else (bounds["y_min"] if bounds else 0.0)
+        y_max = conv["y_max"] if conv else (bounds["y_max"] if bounds else 0.0)
+        edges_data = build_edges_data(network_parser)
+        edge_shapes = {eid: shape for eid, _ed, shape in edges_data}
+        node_positions = build_node_positions(network_parser)
+    except Exception:
+        return 0, 0, "Failed to load NetworkParser for trajectory conversion"
+
+    save_sorted = save_sorted_path
+    if not is_sorted and save_sorted is None:
+        save_sorted = csv_path.parent / f"{csv_path.stem}_sorted{csv_path.suffix}"
+
+    total_traj = count_csv_rows(csv_path, start_traj, last_traj)
+    if last_traj is not None and total_traj is not None:
+        total_traj = min(total_traj, last_traj - start_traj + 1)
+    if total_traj is None or total_traj <= 0:
+        total_traj = (last_traj - start_traj + 1) if last_traj else 1000
+
+    def _progress(c: int, t: int, m: str) -> None:
+        if progress_callback:
+            progress_callback(c, t, m)
+
+    sorted_rows = load_and_sort_csv(
+        csv_path=csv_path,
+        start_traj=start_traj,
+        last_traj=last_traj,
+        is_sorted=is_sorted,
+        save_sorted_path=save_sorted,
+        progress_callback=_progress,
+        cancelled_callback=cancelled_callback,
+    )
+
+    output_path.mkdir(parents=True, exist_ok=True)
+    snapshots_dir = output_path / "snapshots"
+    labels_dir = output_path / "labels"
+    snapshots_dir.mkdir(parents=True, exist_ok=True)
+    labels_dir.mkdir(parents=True, exist_ok=True)
+
+    static_data = build_static_json(db)
+    if compress:
+        static_path = output_path / "static.json.gz"
+        with gzip.open(static_path, "wt", encoding="utf-8") as f:
+            json.dump(static_data, f, separators=(",", ":"))
+    else:
+        static_path = output_path / "static.json"
+        with open(static_path, "w", encoding="utf-8") as f:
+            json.dump(static_data, f, indent=2)
+
+    global_ts = 0
+    vehicle_last_ts: Dict[str, int] = {}
+    vehicle_pending: Dict[str, Tuple[Dict[str, Any], int, Optional[int]]] = {}
+    vehicle_seg_last_ts: Dict[str, int] = {}
+    timestamp_to_vehicles: Dict[int, List[Dict[str, Any]]] = (
+        _SortedDict() if _USE_SORTED_DICT else {}
+    )
+
+    def _traj_first_ts(rec: Any, base_ts: int) -> Optional[int]:
+        t = None
+        for seg in rec.get("segments", []):
+            srp = seg.get("sumo_route_gps", [])
+            if srp:
+                ts = srp[0].get("timestamp", base_ts)
+                if t is None or ts < t:
+                    t = ts
+        return t
+
+    def _load_trajectory(trip_num: int, polyline: List, ts: Optional[int], rec: Any) -> None:
+        if not rec or ts is None:
+            return
+        trajectory_id = rec.get("trajectory_id", trip_num)
+        base_ts = ts
+        for seg_idx, seg in enumerate(rec.get("segments", [])):
+            vehicle_id = f"veh_{trajectory_id}_{seg_idx}"
+            result = _load_segment_to_map(
+                vehicle_id, seg, base_ts, db.road_edges,
+                timestamp_to_vehicles, network_parser, edge_shapes,
+            )
+            if result:
+                node, seg_first_ts, seg_last_ts = result
+                vehicle_pending[vehicle_id] = (node, seg_first_ts, seg_last_ts)
+                if seg_last_ts is not None:
+                    vehicle_seg_last_ts[vehicle_id] = seg_last_ts
+
+    def _first_ts_key() -> Optional[int]:
+        if not timestamp_to_vehicles:
+            return None
+        if _USE_SORTED_DICT:
+            return next(iter(timestamp_to_vehicles.keys()))
+        return min(timestamp_to_vehicles.keys())
+
+    def _pop_first() -> Tuple[int, List[Dict[str, Any]]]:
+        if _USE_SORTED_DICT:
+            k, v = timestamp_to_vehicles.popitem(last=False)
+            return k, v
+        first_ts = min(timestamp_to_vehicles.keys())
+        return first_ts, timestamp_to_vehicles.pop(first_ts)
+
+    workers_val = workers if workers is not None else max(1, multiprocessing.cpu_count() - 1)
+    trajectory_iter: Optional[Iterator] = None
+    if not use_parallel:
+        trajectory_iter = iter(sorted_rows)
+    pending_traj: Optional[Tuple[int, List, Optional[int], Any]] = None
+    last_ts: Optional[int] = None
+    traj_processed = [0]
+    steps_emitted = [0]
+
+    def _write_step_json(ts_val: int, data: Dict[str, Any], label_data: Dict[str, Any]) -> None:
+        nodes = data.get("nodes", [])
+        if not nodes:
+            return
+        if compress:
+            step_path = snapshots_dir / f"step_{ts_val:012d}.json.gz"
+            with gzip.open(step_path, "wt", encoding="utf-8") as f:
+                json.dump(data, f, separators=(",", ":"))
+            label_path = labels_dir / f"label_{ts_val:012d}.json.gz"
+            with gzip.open(label_path, "wt", encoding="utf-8") as f:
+                json.dump(label_data, f, separators=(",", ":"))
+        else:
+            step_path = snapshots_dir / f"step_{ts_val:012d}.json"
+            with open(step_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+            label_path = labels_dir / f"label_{ts_val:012d}.json"
+            with open(label_path, "w", encoding="utf-8") as f:
+                json.dump(label_data, f, indent=2)
+        steps_emitted[0] += 1
+
+    json_queue: Optional[Queue] = None
+    json_thread: Optional[threading.Thread] = None
+    conversion_results_iter: Optional[Iterator] = None
+    _mp_pool: Optional[multiprocessing.Pool] = None
+
+    if use_parallel:
+        json_queue = Queue(maxsize=8)
+
+        def _json_writer() -> None:
+            while True:
+                item = json_queue.get()
+                if item is None:
+                    return
+                ts_val, data, label_data = item
+                _write_step_json(ts_val, data, label_data)
+
+        json_thread = threading.Thread(target=_json_writer, daemon=False)
+        json_thread.start()
+
+        def _trajectory_tasks() -> Iterator[Tuple[int, List, Optional[int]]]:
+            for trip_num, polyline, ts in sorted_rows:
+                if cancelled_callback and cancelled_callback():
+                    return
+                if ts is not None:
+                    yield (trip_num, polyline, ts)
+
+        _mp_pool = multiprocessing.Pool(
+            processes=workers_val,
+            initializer=_mp_init_worker,
+            initargs=(str(network_path),),
+        )
+        conversion_results_iter = _mp_pool.imap(
+            _mp_convert_one, _trajectory_tasks(), chunksize=2
+        )
+
+    def _get_next_trajectory() -> Optional[Tuple[int, List, Optional[int], Any]]:
+        nonlocal last_ts
+        if use_parallel and conversion_results_iter is not None:
+            while True:
+                try:
+                    item = next(conversion_results_iter)
+                except StopIteration:
+                    return None
+                if item is None:
+                    continue
+                trip_num, polyline, ts, rec = item
+                if last_ts is not None and ts < last_ts:
+                    return None
+                last_ts = ts
+                traj_processed[0] += 1
+                if progress_callback and total_traj:
+                    _progress(traj_processed[0], total_traj, f"Processing trajectory {trip_num}... ({traj_processed[0]}/{total_traj})")
+                return item
+        while True:
+            try:
+                trip_num, polyline, ts = next(trajectory_iter)
+            except StopIteration:
+                return None
+            if ts is None:
+                continue
+            if last_ts is not None and ts < last_ts:
+                return None
+            last_ts = ts
+            if network_parser and edges_data:
+                rec = convert_trajectory(
+                    trip_num, polyline, ts, network_parser,
+                    edges_data, edge_shapes, node_positions, y_min, y_max, use_polygon=False,
+                )
+                if rec:
+                    traj_processed[0] += 1
+                    if progress_callback and total_traj:
+                        _progress(traj_processed[0], total_traj, f"Processing trajectory {trip_num}... ({traj_processed[0]}/{total_traj})")
+                    return (trip_num, polyline, ts, rec)
+
+    def _emit_step_json(ts_val: int, data: Dict[str, Any], label_data: Dict[str, Any]) -> None:
+        if use_parallel and json_queue is not None:
+            json_queue.put((ts_val, data, label_data))
+        else:
+            _write_step_json(ts_val, data, label_data)
+
+    conversion_done = False
+    while True:
+        if cancelled_callback and cancelled_callback():
+            break
+
+        next_ts_in_map = _first_ts_key()
+
+        if pending_traj is None and not conversion_done:
+            pending_traj = _get_next_trajectory()
+            if pending_traj is None:
+                conversion_done = True
+
+        if pending_traj is not None:
+            _, _, traj_ts, rec = pending_traj
+            traj_first_ts = _traj_first_ts(rec, traj_ts or 0)
+            load_now = next_ts_in_map is None or (
+                traj_first_ts is not None and traj_first_ts < next_ts_in_map
+            )
+            if load_now:
+                for vid in list(db.vehicles.keys()):
+                    last_ts_val = vehicle_last_ts.get(vid)
+                    will_remove = last_ts_val is not None and last_ts_val < traj_ts
+                    if will_remove:
+                        db.remove_vehicle(vid)
+                        vehicle_last_ts.pop(vid, None)
+                _load_trajectory(*pending_traj)
+                pending_traj = None
+                continue
+
+        if next_ts_in_map is None:
+            if pending_traj is not None:
+                _load_trajectory(*pending_traj)
+                pending_traj = None
+                continue
+            if conversion_done:
+                break
+            if use_parallel:
+                pending_traj = _get_next_trajectory()
+                if pending_traj is None:
+                    conversion_done = True
+                    continue
+            continue
+
+        if global_ts == 0:
+            global_ts = next_ts_in_map
+        next_json_boundary = global_ts + sampling_period
+
+        if next_ts_in_map <= next_json_boundary:
+            while timestamp_to_vehicles and _first_ts_key() is not None and _first_ts_key() <= next_json_boundary:
+                first_ts, vehicle_infos = _pop_first()
+                for info in vehicle_infos:
+                    vid = info.get("id", "")
+                    if vid in vehicle_pending and vehicle_pending[vid][1] == first_ts:
+                        _node, seg_first, seg_last = vehicle_pending[vid]
+                        db.add_vehicle(vid, _node)
+                        del vehicle_pending[vid]
+                        if log_callback:
+                            _log(f"vehicle {vid} added | route ts: {seg_first} .. {seg_last or '?'}")
+                    if vehicle_seg_last_ts.get(vid) == first_ts:
+                        vehicle_last_ts[vid] = first_ts
+                update_db_from_vehicle_infos(db, vehicle_infos)
+            global_ts = next_json_boundary
+            _update_edge_demand(db)
+            label_data = build_label_json(db, global_ts, vehicle_seg_last_ts)
+            step_data = build_step_json(db, global_ts)
+            _emit_step_json(global_ts, step_data, label_data)
+            continue
+
+        while next_json_boundary < next_ts_in_map:
+            global_ts = next_json_boundary
+            _update_edge_demand(db)
+            label_data = build_label_json(db, global_ts, vehicle_seg_last_ts)
+            step_data = build_step_json(db, global_ts)
+            _emit_step_json(global_ts, step_data, label_data)
+            next_json_boundary = global_ts + sampling_period
+
+        first_ts, vehicle_infos = _pop_first()
+        for info in vehicle_infos:
+            vid = info.get("id", "")
+            if vid in vehicle_pending and vehicle_pending[vid][1] == first_ts:
+                _node, seg_first, seg_last = vehicle_pending[vid]
+                db.add_vehicle(vid, _node)
+                del vehicle_pending[vid]
+                if log_callback:
+                    _log(f"vehicle {vid} added | route ts: {seg_first} .. {seg_last or '?'}")
+            if vehicle_seg_last_ts.get(vid) == first_ts:
+                vehicle_last_ts[vid] = first_ts
+        update_db_from_vehicle_infos(db, vehicle_infos)
+
+    while timestamp_to_vehicles and _first_ts_key() is not None:
+        if cancelled_callback and cancelled_callback():
+            break
+        next_json_boundary = global_ts + sampling_period
+        while timestamp_to_vehicles and _first_ts_key() is not None and _first_ts_key() <= next_json_boundary:
+            first_ts, vehicle_infos = _pop_first()
+            for info in vehicle_infos:
+                vid = info.get("id", "")
+                if vid in vehicle_pending and vehicle_pending[vid][1] == first_ts:
+                    _node, seg_first, seg_last = vehicle_pending[vid]
+                    db.add_vehicle(vid, _node)
+                    del vehicle_pending[vid]
+                if vehicle_seg_last_ts.get(vid) == first_ts:
+                    vehicle_last_ts[vid] = first_ts
+            update_db_from_vehicle_infos(db, vehicle_infos)
+        global_ts = next_json_boundary
+        _update_edge_demand(db)
+        label_data = build_label_json(db, global_ts, vehicle_seg_last_ts)
+        step_data = build_step_json(db, global_ts)
+        _emit_step_json(global_ts, step_data, label_data)
+
+    if use_parallel and json_queue is not None and json_thread is not None:
+        json_queue.put(None)
+        json_thread.join()
+    if _mp_pool is not None:
+        _mp_pool.close()
+        _mp_pool.join()
+
+    err = "Cancelled" if (cancelled_callback and cancelled_callback()) else ""
+    return steps_emitted[0], traj_processed[0], err

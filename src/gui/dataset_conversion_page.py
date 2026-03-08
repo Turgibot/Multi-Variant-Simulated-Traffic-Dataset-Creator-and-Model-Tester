@@ -29,7 +29,7 @@ from src.utils.route_finding import (EdgeSpatialIndex, build_edges_data,
                                      project_point_onto_polyline,
                                      project_point_onto_polyline_with_segment,
                                      shortest_path_dijkstra)
-from src.utils.dataset_conversion_mp import run_multiprocess
+from src.utils.csv_to_steps_runner import run_csv_to_steps
 from src.utils.trajectory_converter import (
     apply_gps_offset,
     convert_trajectory,
@@ -557,13 +557,11 @@ class RouteLoadWorker(QThread):
             self.finished.emit(False, None, str(e))
 
 
-class DatasetGenerationWorker(QThread):
-    """Worker thread for batch dataset generation - exports trajectories with SUMO routes to JSON.
-    Uses shared trajectory_converter logic. Supports multiprocessing for speed.
-    """
+class StepGenerationWorker(QThread):
+    """Worker thread for CSV → Step conversion. Produces snapshots, labels, static.json."""
 
     progress = Signal(int, int, str)  # current, total, status
-    finished = Signal(int, int, str)  # saved_count, total_processed, error_msg (empty if ok)
+    finished = Signal(int, int, str)  # steps_emitted, trajectories_processed, error_msg (empty if ok)
 
     def __init__(
         self,
@@ -572,12 +570,13 @@ class DatasetGenerationWorker(QThread):
         start_traj: int,
         last_traj: int,
         network_path: str,
-        network_parser,
-        y_min: float,
-        y_max: float,
+        is_sorted: bool,
+        save_sorted_path: Optional[str],
+        sampling_period: int,
+        compress: bool,
+        sumo_home: Optional[str],
+        use_parallel: bool,
         workers: int,
-        offset_x: float,
-        offset_y: float,
         cancelled_callback,
         parent=None,
     ):
@@ -587,108 +586,39 @@ class DatasetGenerationWorker(QThread):
         self.start_traj = start_traj
         self.last_traj = last_traj
         self.network_path = network_path
-        self.network_parser = network_parser
-        self.y_min = y_min
-        self.y_max = y_max
+        self.is_sorted = is_sorted
+        self.save_sorted_path = Path(save_sorted_path) if save_sorted_path else None
+        self.sampling_period = sampling_period
+        self.compress = compress
+        self.sumo_home = Path(sumo_home) if sumo_home else None
+        self.use_parallel = use_parallel
         self.workers = max(1, workers)
-        self.offset_x = offset_x
-        self.offset_y = offset_y
         self._cancelled = cancelled_callback
 
     def run(self):
-        total = max(0, self.last_traj - self.start_traj + 1)
-        if total == 0:
-            self.finished.emit(0, 0, "")
-            return
-
-        if self.workers > 1:
-            self._run_multiprocess(total)
-        else:
-            self._run_single(total)
-
-    def _run_multiprocess(self, total: int):
-        """Use multiprocessing for parallel conversion."""
-        trajectories = list(
-            iter_trajectories_from_csv(self.train_path, self.start_traj, self.last_traj)
-        )
-        if not trajectories:
-            self.finished.emit(0, 0, "")
-            return
-
-        last_emitted = [0]  # use list to allow closure to mutate
-
-        def on_progress(current: int, tot: int):
-            if self._cancelled():
-                return
-            # Throttle: emit every 5 trajectories or when done
-            if current == 1 or current - last_emitted[0] >= 5 or current == tot:
-                last_emitted[0] = current
-                pct = 100 * current // tot if tot else 0
-                self.progress.emit(current, tot, f"Processing... {current}/{tot} ({pct}%)")
-
-        saved_count, total_processed = run_multiprocess(
-            trajectories,
-            self.network_path,
-            self.output_path,
-            self.workers,
-            use_polygon=False,
-            offset_x=self.offset_x,
-            offset_y=self.offset_y,
-            progress_callback=on_progress,
+        steps, traj, err = run_csv_to_steps(
+            csv_path=Path(self.train_path),
+            network_path=Path(self.network_path),
+            output_path=Path(self.output_path),
+            start_traj=self.start_traj,
+            last_traj=self.last_traj,
+            is_sorted=self.is_sorted,
+            save_sorted_path=self.save_sorted_path,
+            sampling_period=self.sampling_period,
+            compress=self.compress,
+            sumo_home=self.sumo_home,
+            use_parallel=self.use_parallel,
+            workers=self.workers,
+            progress_callback=self._on_progress,
             cancelled_callback=self._cancelled,
+            log_callback=None,
         )
-        err = "Cancelled" if self._cancelled() else ""
-        self.finished.emit(saved_count, total_processed, err)
+        self.finished.emit(steps, traj, err)
 
-    def _run_single(self, total: int):
-        """Single-threaded conversion (supports per-trajectory cancellation)."""
-        saved_count = 0
-        total_processed = 0
-        edges_data = build_edges_data(self.network_parser)
-        edge_shapes = {eid: shape for eid, _ed, shape in edges_data}
-        node_positions = build_node_positions(self.network_parser)
-        spatial_index = EdgeSpatialIndex(edges_data, cell_size=500.0)
-        os.makedirs(self.output_path, exist_ok=True)
-
-        iterator = iter_trajectories_from_csv(self.train_path, self.start_traj, self.last_traj)
-        last_emitted = [0]
-        for current, (trip_num, polyline, base_timestamp) in enumerate(iterator, 1):
-            if self._cancelled():
-                self.finished.emit(saved_count, total_processed, "Cancelled")
-                return
-
-            # Throttle progress: emit every 5 trajectories or when done
-            if current == 1 or current - last_emitted[0] >= 5 or current == total:
-                last_emitted[0] = current
-                self.progress.emit(current, total, f"Processing trajectory {trip_num}...")
-
-            rec = convert_trajectory(
-                trip_num,
-                polyline,
-                base_timestamp,
-                self.network_parser,
-                edges_data,
-                edge_shapes,
-                node_positions,
-                self.y_min,
-                self.y_max,
-                use_polygon=False,
-                offset_x=self.offset_x,
-                offset_y=self.offset_y,
-                spatial_index=spatial_index,
-                cancelled_callback=self._cancelled,
-            )
-            if rec:
-                out_file = Path(self.output_path) / f"traj_{trip_num}.json"
-                try:
-                    with open(out_file, "w", encoding="utf-8") as f:
-                        json.dump(rec, f, indent=2)
-                    saved_count += 1
-                except Exception:
-                    pass
-            total_processed += 1
-
-        self.finished.emit(saved_count, total_processed, "")
+    def _on_progress(self, current: int, total: int, message: str):
+        if self._cancelled():
+            return
+        self.progress.emit(current, total, message)
 
 
 class DatasetConversionPage(QWidget):
@@ -1917,6 +1847,40 @@ class DatasetConversionPage(QWidget):
         traj_row2.addStretch()
         traj_range_layout.addLayout(traj_row2)
         dataset_gen_layout.addLayout(traj_range_layout)
+
+        # Step conversion options
+        step_opts_layout = QVBoxLayout()
+        step_row1 = QHBoxLayout()
+        self.dataset_sorted_check = QCheckBox("Pre-sorted by timestamp")
+        self.dataset_sorted_check.setChecked(True)
+        self.dataset_sorted_check.setToolTip("Assume CSV is already sorted by timestamp. Uncheck to sort before processing.")
+        step_row1.addWidget(self.dataset_sorted_check)
+        step_row1.addWidget(QLabel("Sampling (sec):"))
+        self.dataset_sampling_spin = QLineEdit()
+        self.dataset_sampling_spin.setPlaceholderText("30")
+        self.dataset_sampling_spin.setMaximumWidth(50)
+        self.dataset_sampling_spin.setToolTip("Step snapshot interval in seconds")
+        step_row1.addWidget(self.dataset_sampling_spin)
+        step_row1.addWidget(QLabel("Compress:"))
+        self.dataset_compress_check = QCheckBox()
+        self.dataset_compress_check.setChecked(False)
+        self.dataset_compress_check.setToolTip("Use gzip and compact JSON")
+        step_row1.addWidget(self.dataset_compress_check)
+        step_row1.addStretch()
+        step_opts_layout.addLayout(step_row1)
+        step_row2 = QHBoxLayout()
+        step_row2.addWidget(QLabel("Save sorted to:"))
+        self.dataset_save_sorted_input = QLineEdit()
+        self.dataset_save_sorted_input.setPlaceholderText("(auto: same folder, _sorted suffix)")
+        self.dataset_save_sorted_input.setMinimumWidth(0)
+        self.dataset_save_sorted_input.setToolTip("Path for sorted CSV when Pre-sorted is unchecked")
+        step_row2.addWidget(self.dataset_save_sorted_input, stretch=1)
+        browse_sorted_btn = QPushButton("📁")
+        browse_sorted_btn.setFixedWidth(36)
+        browse_sorted_btn.clicked.connect(self._browse_save_sorted_path)
+        step_row2.addWidget(browse_sorted_btn)
+        step_opts_layout.addLayout(step_row2)
+        dataset_gen_layout.addLayout(step_opts_layout)
         
         # Output folder path
         output_layout = QHBoxLayout()
@@ -2009,6 +1973,11 @@ class DatasetConversionPage(QWidget):
         self.dataset_start_traj_spin.textChanged.connect(self._update_dataset_buttons_visibility)
         self.dataset_output_path.textChanged.connect(self._update_dataset_buttons_visibility)
         self.dataset_output_path.textChanged.connect(lambda _: self._schedule_save_settings())
+        self.dataset_sorted_check.stateChanged.connect(lambda _: self._schedule_save_settings())
+        self.dataset_save_sorted_input.textChanged.connect(lambda _: self._schedule_save_settings())
+        self.dataset_sampling_spin.textChanged.connect(lambda _: self._schedule_save_settings())
+        self.dataset_compress_check.stateChanged.connect(lambda _: self._schedule_save_settings())
+        self.dataset_workers_spin.textChanged.connect(lambda _: self._schedule_save_settings())
 
         self.dataset_gen_group.setLayout(dataset_gen_layout)
         self.dataset_gen_group.setVisible(False)  # Hidden until map and dataset ready
@@ -2475,6 +2444,22 @@ class DatasetConversionPage(QWidget):
             self.dataset_output_path.setText(folder)
             self.log(f"Dataset output folder set to: {folder}")
 
+    def _browse_save_sorted_path(self):
+        """Browse for save-sorted CSV path."""
+        train_path = self.train_path_input.text().strip()
+        default_name = "train_sorted.csv"
+        if train_path:
+            p = Path(train_path)
+            default_dir = str(p.parent)
+            default_name = f"{p.stem}_sorted{p.suffix}"
+        else:
+            default_dir = str(Path.home())
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save Sorted CSV", f"{default_dir}/{default_name}", "CSV (*.csv)"
+        )
+        if path:
+            self.dataset_save_sorted_input.setText(path)
+
     def _on_dataset_start_clicked(self):
         """Start dataset generation."""
         train_path = self.train_path_input.text().strip()
@@ -2514,28 +2499,30 @@ class DatasetConversionPage(QWidget):
         except ValueError:
             workers = 4
 
-        y_min = getattr(self.map_view, '_network_y_min', 0)
-        y_max = getattr(self.map_view, '_network_y_max', 0)
-        if y_min == 0 and y_max == 0:
-            self.log("❌ Network bounds not ready")
-            QMessageBox.warning(self, "Dataset Error", "Network bounds not ready. Please wait for map to load.")
-            return
+        is_sorted = self.dataset_sorted_check.isChecked()
+        save_sorted = self.dataset_save_sorted_input.text().strip() or None
+        try:
+            sampling_period = int(self.dataset_sampling_spin.text().strip() or "30")
+            sampling_period = max(1, min(sampling_period, 300))
+        except ValueError:
+            sampling_period = 30
+        compress = self.dataset_compress_check.isChecked()
+        sumo_home = self.sumo_home_input.text().strip() or None
 
-        offset_x = self.map_offset_x_spinbox.value()
-        offset_y = self.map_offset_y_spinbox.value()
         self._dataset_gen_cancelled = False
-        self._dataset_gen_worker = DatasetGenerationWorker(
+        self._dataset_gen_worker = StepGenerationWorker(
             train_path=train_path,
             output_path=output_path,
             start_traj=start_traj,
             last_traj=last_traj,
             network_path=network_path,
-            network_parser=self.network_parser,
-            y_min=y_min,
-            y_max=y_max,
+            is_sorted=is_sorted,
+            save_sorted_path=save_sorted,
+            sampling_period=sampling_period,
+            compress=compress,
+            sumo_home=sumo_home,
+            use_parallel=(workers > 1),
             workers=workers,
-            offset_x=offset_x,
-            offset_y=offset_y,
             cancelled_callback=lambda: self._dataset_gen_cancelled,
         )
         self._dataset_gen_worker.progress.connect(self._on_dataset_gen_progress)
@@ -2543,10 +2530,10 @@ class DatasetConversionPage(QWidget):
         self.dataset_start_btn.setEnabled(False)
         self.dataset_stop_btn.setEnabled(True)
         self.progress_group.setVisible(True)
-        self.progress_group.setTitle("⏳ Dataset Generation")
+        self.progress_group.setTitle("⏳ Step Conversion")
         self.progress_bar.setMaximum(max(1, last_traj - start_traj + 1))
         self.progress_bar.setValue(0)
-        self.progress_status.setText(f"Processing trajectories {start_traj}–{last_traj}...")
+        self.progress_status.setText(f"Converting trajectories {start_traj}–{last_traj}...")
         self.log(f"▶ Starting dataset generation: trajectories {start_traj}–{last_traj} → {output_path}")
         self._dataset_gen_worker.start()
 
@@ -2556,14 +2543,15 @@ class DatasetConversionPage(QWidget):
         self.log("⏹ Stop requested...")
 
     def _on_dataset_gen_progress(self, current: int, total: int, status: str):
-        """Handle dataset generation progress."""
+        """Handle step conversion progress."""
+        if total > 0:
+            self.progress_bar.setMaximum(total)
         self.progress_bar.setValue(current)
         self.progress_status.setText(status)
-        # Log throttled - status already includes progress when throttled
         self.log(f"  {status}")
 
-    def _on_dataset_gen_finished(self, saved_count: int, total_processed: int, error_msg: str):
-        """Handle dataset generation completion."""
+    def _on_dataset_gen_finished(self, steps_emitted: int, trajectories_processed: int, error_msg: str):
+        """Handle step conversion completion."""
         self._dataset_gen_worker = None
         self.dataset_start_btn.setEnabled(True)
         self.dataset_stop_btn.setEnabled(False)
@@ -2571,10 +2559,10 @@ class DatasetConversionPage(QWidget):
         self.progress_group.setTitle("⏳ Download Progress")
         if error_msg:
             self.progress_status.setText(f"Stopped: {error_msg}")
-            self.log(f"Dataset generation stopped: {error_msg}")
+            self.log(f"Step conversion stopped: {error_msg}")
         else:
-            self.progress_status.setText(f"Complete: {saved_count} saved from {total_processed} processed")
-            self.log(f"✅ Dataset generation complete: {saved_count} trajectory file(s) saved from {total_processed} processed")
+            self.progress_status.setText(f"Complete: {steps_emitted} step files, {trajectories_processed} trajectories")
+            self.log(f"✅ Step conversion complete: {steps_emitted} step file(s), {trajectories_processed} trajectories processed")
     
     def validate_dataset_path(self, path: str, file_type: str):
         """Validate the dataset path and update status.
@@ -3061,6 +3049,11 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
             'show_polygon': self.show_polygon_checkbox.isChecked(),
             'draw_gps_points_path': self.draw_gps_points_path_checkbox.isChecked(),
             'dataset_output_folder': self.dataset_output_path.text().strip(),
+            'dataset_sorted': self.dataset_sorted_check.isChecked(),
+            'dataset_save_sorted': self.dataset_save_sorted_input.text().strip(),
+            'dataset_sampling_period': self.dataset_sampling_spin.text().strip(),
+            'dataset_compress': self.dataset_compress_check.isChecked(),
+            'dataset_workers': self.dataset_workers_spin.text().strip(),
         }
         
         try:
@@ -3154,6 +3147,16 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
                     self.dataset_output_path.blockSignals(True)
                     self.dataset_output_path.setText(settings['dataset_output_folder'])
                     self.dataset_output_path.blockSignals(False)
+                if 'dataset_sorted' in settings:
+                    self.dataset_sorted_check.setChecked(settings['dataset_sorted'])
+                if 'dataset_save_sorted' in settings and settings['dataset_save_sorted']:
+                    self.dataset_save_sorted_input.setText(settings['dataset_save_sorted'])
+                if 'dataset_sampling_period' in settings and settings['dataset_sampling_period']:
+                    self.dataset_sampling_spin.setText(settings['dataset_sampling_period'])
+                if 'dataset_compress' in settings:
+                    self.dataset_compress_check.setChecked(settings['dataset_compress'])
+                if 'dataset_workers' in settings and settings['dataset_workers']:
+                    self.dataset_workers_spin.setText(settings['dataset_workers'])
                 
                 self.check_zones_visibility()
                 self.log("Settings loaded from config")

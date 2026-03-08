@@ -4,5 +4,9 @@
   "PortoForSumo": {
     "path": "/home/guy/Projects/Traffic/Develop/Projects/PortoForSumo",
     "type": "porto"
+  },
+  "Porto2": {
+    "path": "/home/guy/Projects/Traffic/Develop/Projects/Porto2",
+    "type": "porto"
   }
 }
