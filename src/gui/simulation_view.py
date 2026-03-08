@@ -299,6 +299,7 @@ class SimulationView(QGraphicsView):
     
     # Signals
     osm_map_loading_finished = Signal()
+    network_render_finished = Signal()
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -440,6 +441,7 @@ class SimulationView(QGraphicsView):
                         )
                         self.fitInView(rect, Qt.KeepAspectRatio)
                     self.current_zoom = 1.0
+                    self.network_render_finished.emit()
                     return
             QTimer.singleShot(0, self._add_network_batch)
         except RuntimeError:

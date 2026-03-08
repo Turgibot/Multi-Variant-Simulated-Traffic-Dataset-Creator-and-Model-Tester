@@ -1,5 +1,5 @@
 """
-Dataset Conversion page for Porto taxi data.
+Dataset conversion page for trajectory datasets.
 Provides map visualization and dataset conversion controls.
 """
 
@@ -42,11 +42,10 @@ from src.utils.trip_validator import (TripValidationResult,
 DEFAULT_SUMO_HOME = "/usr/share/sumo"
 
 # Settings file name
-SETTINGS_FILE = "porto_settings.json"
+SETTINGS_FILE = "dataset_conversion_settings.json"
 
-# Porto bounding box coordinates (updated to match the new centered network file)
-# Extracted from porto.net.xml origBoundary: lon_min,lat_min,lon_max,lat_max
-PORTO_BBOX = {
+# Default bounding box coordinates (example area)
+DEFAULT_BBOX = {
     'north': 41.271161,   # max_lat
     'south': 41.071545,   # min_lat
     'east': -8.295034,    # max_lon
@@ -188,11 +187,21 @@ class DownloadWorker(QThread):
     status = Signal(str)  # Status message
     finished = Signal(bool, str)  # Success, message
     
-    def __init__(self, task_type: str, output_path: str, sumo_home: str = None, parent=None):
+    def __init__(
+        self,
+        task_type: str,
+        output_path: str,
+        sumo_home: str = None,
+        bbox: dict = None,
+        map_basename: str = "porto",
+        parent=None,
+    ):
         super().__init__(parent)
         self.task_type = task_type
         self.output_path = output_path
         self.sumo_home = sumo_home or DEFAULT_SUMO_HOME
+        self.bbox = bbox or dict(DEFAULT_BBOX)
+        self.map_basename = (map_basename or "porto").strip()
         self._is_cancelled = False
     
     def cancel(self):
@@ -210,16 +219,16 @@ class DownloadWorker(QThread):
             self.finished.emit(False, str(e))
     
     def _download_map(self):
-        """Download Porto OSM data and convert to SUMO network."""
+        """Download OSM data and convert to SUMO network."""
         output_dir = Path(self.output_path)
-        osm_file = output_dir / 'porto.osm'
-        net_file = output_dir / 'porto.net.xml'
+        osm_file = output_dir / f"{self.map_basename}.osm"
+        net_file = output_dir / f"{self.map_basename}.net.xml"
         
         # Ensure output directory exists
         output_dir.mkdir(parents=True, exist_ok=True)
         
         # Step 1: Download OSM data (0-60%)
-        self.status.emit("Downloading Porto OSM data from Overpass API...")
+        self.status.emit("Downloading OSM data from Overpass API...")
         self.progress.emit(5)
         
         if self._is_cancelled:
@@ -229,8 +238,8 @@ class DownloadWorker(QThread):
         query = f"""
         [out:xml][timeout:120];
         (
-          way["highway"]({PORTO_BBOX['south']},{PORTO_BBOX['west']},{PORTO_BBOX['north']},{PORTO_BBOX['east']});
-          relation["highway"]({PORTO_BBOX['south']},{PORTO_BBOX['west']},{PORTO_BBOX['north']},{PORTO_BBOX['east']});
+          way["highway"]({self.bbox['south']},{self.bbox['west']},{self.bbox['north']},{self.bbox['east']});
+          relation["highway"]({self.bbox['south']},{self.bbox['west']},{self.bbox['north']},{self.bbox['east']});
         );
         (._;>;);
         out body;
@@ -352,7 +361,7 @@ class DownloadWorker(QThread):
                 self._create_route_and_config(output_dir)
                 
                 self.progress.emit(100)
-                self.finished.emit(True, "Porto network downloaded and converted successfully!")
+                self.finished.emit(True, "Network downloaded and converted successfully!")
             else:
                 self.finished.emit(False, f"Conversion failed: {result.stderr}")
                 
@@ -363,8 +372,8 @@ class DownloadWorker(QThread):
     
     def _create_route_and_config(self, output_dir: Path):
         """Create route file and SUMO config."""
-        route_file = output_dir / 'porto.rou.xml'
-        sumocfg_file = output_dir / 'porto.sumocfg'
+        route_file = output_dir / f"{self.map_basename}.rou.xml"
+        sumocfg_file = output_dir / f"{self.map_basename}.sumocfg"
         
         # Create empty route file
         if not route_file.exists():
@@ -377,12 +386,12 @@ class DownloadWorker(QThread):
         
         # Create sumocfg
         if not sumocfg_file.exists():
-            config_xml = '''<?xml version="1.0" encoding="UTF-8"?>
+            config_xml = f'''<?xml version="1.0" encoding="UTF-8"?>
 
 <configuration xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/sumoConfiguration.xsd">
     <input>
-        <net-file value="porto.net.xml"/>
-        <route-files value="porto.rou.xml"/>
+        <net-file value="{self.map_basename}.net.xml"/>
+        <route-files value="{self.map_basename}.rou.xml"/>
     </input>
     
     <time>
@@ -622,7 +631,7 @@ class StepGenerationWorker(QThread):
 
 
 class DatasetConversionPage(QWidget):
-    """Page for Porto dataset conversion with map view."""
+    """Page for trajectory dataset conversion with map view."""
     
     back_clicked = Signal()
     
@@ -651,6 +660,8 @@ class DatasetConversionPage(QWidget):
         self._validation_timer.timeout.connect(self._on_validation_timer_fired)
         self._validation_args = None  # (path, file_type) for debounced validation
         self._train_trip_count = None  # Cached trip count
+        self._trip_count_cache = None  # Dict: {path, size, mtime, count}
+        self._trip_count_pending_meta = None
         self._route_items = []  # Graphics items for current route display
         self._candidate_edge_items = []  # Green/orange edge items (separate for fast toggle)
         self._dataset_gen_worker = None
@@ -703,7 +714,7 @@ class DatasetConversionPage(QWidget):
         
         header_layout.addStretch()
         
-        title = QLabel("Trajectory to Graph dataset converstion")
+        title = QLabel(f"Trajectory to Graph dataset converstion - {self.project_name}")
         title_font = QFont()
         title_font.setPointSize(20)
         title_font.setBold(True)
@@ -736,7 +747,7 @@ class DatasetConversionPage(QWidget):
         map_header_layout.setContentsMargins(0, 0, 0, 5)
         
         # Map title
-        map_title = QLabel("Porto Network Map")
+        map_title = QLabel("Network Map")
         map_title_font = QFont()
         map_title_font.setPointSize(14)
         map_title_font.setBold(True)
@@ -923,9 +934,9 @@ class DatasetConversionPage(QWidget):
         
         map_header_layout.addSpacing(8)
         
-        # Default zoom button (Porto city center)
+        # Default zoom button (center view)
         self.zoom_default_btn = QPushButton("City")
-        self.zoom_default_btn.setToolTip("Zoom to Porto city center")
+        self.zoom_default_btn.setToolTip("Zoom to map center")
         self.zoom_default_btn.setStyleSheet(zoom_btn_style)
         self.zoom_default_btn.clicked.connect(self.zoom_to_default)
         map_header_layout.addWidget(self.zoom_default_btn)
@@ -1251,12 +1262,68 @@ class DatasetConversionPage(QWidget):
         map_group_layout = QVBoxLayout()
         map_group_layout.setSpacing(10)
         
+        map_status_layout = QHBoxLayout()
+        map_status_layout.setSpacing(8)
         self.map_status = QLabel("Checking...")
         self.map_status.setWordWrap(True)
         self.map_status.setStyleSheet("color: #666; font-size: 11px;")
-        map_group_layout.addWidget(self.map_status)
+        map_status_layout.addWidget(self.map_status, stretch=1)
+        self.reset_map_btn = QPushButton("Reset")
+        self.reset_map_btn.setToolTip("Remove generated map files and reset map state")
+        self.reset_map_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #f44336;
+                color: white;
+                border: none;
+                padding: 6px 10px;
+                border-radius: 4px;
+                font-size: 10px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #d32f2f;
+            }
+        """)
+        self.reset_map_btn.setVisible(False)
+        self.reset_map_btn.clicked.connect(self.reset_network_map)
+        map_status_layout.addWidget(self.reset_map_btn)
+        map_group_layout.addLayout(map_status_layout)
+
+        # Output file base name
+        map_name_layout = QHBoxLayout()
+        map_name_layout.addWidget(QLabel("Map file base name:"))
+        self.map_name_input = QLineEdit()
+        self.map_name_input.setText("porto")
+        self.map_name_input.setPlaceholderText("e.g., porto, nyc, berlin")
+        self.map_name_input.setToolTip("Output files will be named <name>.osm/.net.xml/.rou.xml/.sumocfg")
+        map_name_layout.addWidget(self.map_name_input, stretch=1)
+        map_group_layout.addLayout(map_name_layout)
+
+        # Bounding box inputs: south, west, north, east
+        bbox_label = QLabel("Bounding box (south, west, north, east):")
+        bbox_label.setStyleSheet("color: #555; font-size: 10px;")
+        map_group_layout.addWidget(bbox_label)
+
+        bbox_row = QHBoxLayout()
+        self.bbox_south_input = QLineEdit(str(DEFAULT_BBOX['south']))
+        self.bbox_south_input.setPlaceholderText("south")
+        self.bbox_south_input.setToolTip("Minimum latitude")
+        bbox_row.addWidget(self.bbox_south_input)
+        self.bbox_west_input = QLineEdit(str(DEFAULT_BBOX['west']))
+        self.bbox_west_input.setPlaceholderText("west")
+        self.bbox_west_input.setToolTip("Minimum longitude")
+        bbox_row.addWidget(self.bbox_west_input)
+        self.bbox_north_input = QLineEdit(str(DEFAULT_BBOX['north']))
+        self.bbox_north_input.setPlaceholderText("north")
+        self.bbox_north_input.setToolTip("Maximum latitude")
+        bbox_row.addWidget(self.bbox_north_input)
+        self.bbox_east_input = QLineEdit(str(DEFAULT_BBOX['east']))
+        self.bbox_east_input.setPlaceholderText("east")
+        self.bbox_east_input.setToolTip("Maximum longitude")
+        bbox_row.addWidget(self.bbox_east_input)
+        map_group_layout.addLayout(bbox_row)
         
-        self.download_map_btn = QPushButton("Download & Render Map")
+        self.download_map_btn = QPushButton("Download and Render Map")
         self.download_map_btn.setStyleSheet("""
             QPushButton {
                 background-color: #4CAF50;
@@ -1276,7 +1343,51 @@ class DatasetConversionPage(QWidget):
             }
         """)
         self.download_map_btn.clicked.connect(self.download_map)
-        map_group_layout.addWidget(self.download_map_btn)
+
+        # Stack that swaps button <-> download progress in the same place
+        self.map_download_stack = QStackedWidget()
+
+        map_download_btn_page = QWidget()
+        map_download_btn_layout = QVBoxLayout(map_download_btn_page)
+        map_download_btn_layout.setContentsMargins(0, 0, 0, 0)
+        map_download_btn_layout.addWidget(self.download_map_btn)
+        self.map_download_stack.addWidget(map_download_btn_page)
+
+        map_download_progress_page = QWidget()
+        map_download_progress_layout = QVBoxLayout(map_download_progress_page)
+        map_download_progress_layout.setContentsMargins(0, 0, 0, 0)
+        map_download_progress_layout.setSpacing(6)
+        self.map_download_progress_bar = QProgressBar()
+        self.map_download_progress_bar.setMinimum(0)
+        self.map_download_progress_bar.setMaximum(100)
+        self.map_download_progress_bar.setValue(0)
+        self.map_download_progress_bar.setStyleSheet("""
+            QProgressBar {
+                border: 1px solid #ddd;
+                border-radius: 5px;
+                text-align: center;
+                background-color: #f0f0f0;
+                height: 20px;
+            }
+            QProgressBar::chunk {
+                background-color: #4CAF50;
+                border-radius: 4px;
+            }
+        """)
+        self.map_download_progress_status = QLabel("Starting download...")
+        self.map_download_progress_status.setStyleSheet("color: #666; font-size: 10px;")
+        self.map_download_progress_status.setWordWrap(True)
+        map_download_progress_layout.addWidget(self.map_download_progress_bar)
+        map_download_progress_layout.addWidget(self.map_download_progress_status)
+        self.map_download_stack.addWidget(map_download_progress_page)
+        self.map_download_stack.setCurrentIndex(0)
+        map_group_layout.addWidget(self.map_download_stack)
+
+        self.map_name_input.textChanged.connect(lambda _: self._schedule_save_settings())
+        self.bbox_south_input.textChanged.connect(lambda _: self._schedule_save_settings())
+        self.bbox_west_input.textChanged.connect(lambda _: self._schedule_save_settings())
+        self.bbox_north_input.textChanged.connect(lambda _: self._schedule_save_settings())
+        self.bbox_east_input.textChanged.connect(lambda _: self._schedule_save_settings())
         
         
         map_group.setLayout(map_group_layout)
@@ -1315,7 +1426,7 @@ class DatasetConversionPage(QWidget):
         
         # Help button
         help_btn = QPushButton("?")
-        help_btn.setToolTip("How to download the Porto taxi dataset")
+        help_btn.setToolTip("How to download trajectory datasets")
         help_btn.setFixedSize(28, 28)
         help_btn.setStyleSheet("""
             QPushButton {
@@ -1360,74 +1471,65 @@ class DatasetConversionPage(QWidget):
                 background-color: #F57C00;
             }
         """
+        self.dataset_path_input_style = path_input_style
+        self.dataset_browse_btn_style = browse_btn_style
         
-        # ---- Train.csv path ----
-        train_label = QLabel("Train CSV (train.csv):")
-        train_label.setStyleSheet("color: #555; font-size: 10px; font-weight: normal; margin-top: 5px;")
-        dataset_group_layout.addWidget(train_label)
-        
-        train_path_layout = QHBoxLayout()
-        train_path_layout.setSpacing(4)
-        
-        self.train_path_input = QLineEdit()
-        self.train_path_input.setPlaceholderText("Select train.csv...")
-        self.train_path_input.setMinimumWidth(0)
-        self.train_path_input.setStyleSheet(path_input_style)
-        self.train_path_input.textChanged.connect(lambda p: self.on_train_path_changed(p))
-        train_path_layout.addWidget(self.train_path_input, stretch=1)
-        
-        browse_train_btn = QPushButton("📁")
-        browse_train_btn.setToolTip("Browse for train.csv")
-        browse_train_btn.setStyleSheet(browse_btn_style)
-        browse_train_btn.clicked.connect(lambda: self.browse_dataset_file("train"))
-        train_path_layout.addWidget(browse_train_btn)
-        
-        self.train_valid_label = QLabel("")
-        self.train_valid_label.setFixedWidth(20)
-        self.train_valid_label.setStyleSheet("font-size: 14px;")
-        train_path_layout.addWidget(self.train_valid_label)
-        
-        dataset_group_layout.addLayout(train_path_layout)
-        
-        # Train status
-        self.train_status = QLabel("")
-        self.train_status.setStyleSheet("color: #666; font-size: 9px; margin-bottom: 5px;")
-        self.train_status.setWordWrap(True)
-        dataset_group_layout.addWidget(self.train_status)
-        
-        # ---- Test.csv path ----
-        test_label = QLabel("Test CSV (test.csv):")
-        test_label.setStyleSheet("color: #555; font-size: 10px; font-weight: normal; margin-top: 3px;")
-        dataset_group_layout.addWidget(test_label)
-        
-        test_path_layout = QHBoxLayout()
-        test_path_layout.setSpacing(4)
-        
-        self.test_path_input = QLineEdit()
-        self.test_path_input.setPlaceholderText("Select test.csv...")
-        self.test_path_input.setMinimumWidth(0)
-        self.test_path_input.setStyleSheet(path_input_style)
-        self.test_path_input.textChanged.connect(lambda p: self.on_test_path_changed(p))
-        test_path_layout.addWidget(self.test_path_input, stretch=1)
-        
-        browse_test_btn = QPushButton("📁")
-        browse_test_btn.setToolTip("Browse for test.csv")
-        browse_test_btn.setStyleSheet(browse_btn_style)
-        browse_test_btn.clicked.connect(lambda: self.browse_dataset_file("test"))
-        test_path_layout.addWidget(browse_test_btn)
-        
-        self.test_valid_label = QLabel("")
-        self.test_valid_label.setFixedWidth(20)
-        self.test_valid_label.setStyleSheet("font-size: 14px;")
-        test_path_layout.addWidget(self.test_valid_label)
-        
-        dataset_group_layout.addLayout(test_path_layout)
-        
-        # Test status
-        self.test_status = QLabel("")
-        self.test_status.setStyleSheet("color: #666; font-size: 9px;")
-        self.test_status.setWordWrap(True)
-        dataset_group_layout.addWidget(self.test_status)
+        # ---- Required main CSV path ----
+        main_label = QLabel("Main CSV file (required):")
+        main_label.setStyleSheet("color: #555; font-size: 10px; font-weight: normal; margin-top: 5px;")
+        dataset_group_layout.addWidget(main_label)
+
+        main_path_layout = QHBoxLayout()
+        main_path_layout.setSpacing(4)
+
+        self.main_csv_input = QLineEdit()
+        self.main_csv_input.setPlaceholderText("Select main trajectory CSV...")
+        self.main_csv_input.setMinimumWidth(0)
+        self.main_csv_input.setStyleSheet(self.dataset_path_input_style)
+        self.main_csv_input.textChanged.connect(lambda p: self.on_train_path_changed(p))
+        main_path_layout.addWidget(self.main_csv_input, stretch=1)
+
+        browse_main_btn = QPushButton("...")
+        browse_main_btn.setToolTip("Browse for main CSV")
+        browse_main_btn.setFixedWidth(36)
+        browse_main_btn.setStyleSheet(self.dataset_browse_btn_style)
+        browse_main_btn.clicked.connect(lambda: self.browse_dataset_file(self.main_csv_input))
+        main_path_layout.addWidget(browse_main_btn)
+
+        self.main_valid_label = QLabel("")
+        self.main_valid_label.setFixedWidth(26)
+        self.main_valid_label.setStyleSheet("font-size: 12px; font-weight: bold;")
+        main_path_layout.addWidget(self.main_valid_label)
+        dataset_group_layout.addLayout(main_path_layout)
+
+        self.main_status = QLabel("")
+        self.main_status.setStyleSheet("color: #666; font-size: 9px; margin-bottom: 5px;")
+        self.main_status.setWordWrap(True)
+        dataset_group_layout.addWidget(self.main_status)
+
+        # Keep legacy attribute names bound to main CSV widgets for compatibility
+        self.train_path_input = self.main_csv_input
+        self.train_valid_label = self.main_valid_label
+        self.train_status = self.main_status
+
+        # ---- Optional CSV files ----
+        optional_header = QHBoxLayout()
+        optional_label = QLabel("Additional CSV files (optional):")
+        optional_label.setStyleSheet("color: #555; font-size: 10px; font-weight: normal; margin-top: 3px;")
+        optional_header.addWidget(optional_label)
+        optional_header.addStretch()
+        self.add_optional_csv_btn = QPushButton("+")
+        self.add_optional_csv_btn.setToolTip("Add optional CSV file")
+        self.add_optional_csv_btn.setFixedWidth(28)
+        self.add_optional_csv_btn.setStyleSheet(self.dataset_browse_btn_style)
+        self.add_optional_csv_btn.clicked.connect(lambda: self._add_optional_csv_row())
+        optional_header.addWidget(self.add_optional_csv_btn)
+        dataset_group_layout.addLayout(optional_header)
+
+        self.optional_csv_rows_layout = QVBoxLayout()
+        self.optional_csv_rows_layout.setSpacing(4)
+        self.optional_csv_rows = []
+        dataset_group_layout.addLayout(self.optional_csv_rows_layout)
         
         dataset_group.setLayout(dataset_group_layout)
         controls_layout.addWidget(dataset_group)
@@ -1523,8 +1625,7 @@ class DatasetConversionPage(QWidget):
         zones_group_layout.addLayout(minmax_layout)
         
         self.zones_group.setLayout(zones_group_layout)
-        self.zones_group.setVisible(False)  # Hidden until map and dataset ready
-        controls_layout.addWidget(self.zones_group)
+        self.zones_group.setVisible(False)  # Zone section removed from UI
         
         # ---- Route Display Section (hidden until map and dataset ready) ----
         self.route_group = QGroupBox("Route Display")
@@ -1556,7 +1657,7 @@ class DatasetConversionPage(QWidget):
         trips_layout.addWidget(trips_label)
         trips_layout.addStretch()
         
-        self.trips_count_label = QLabel("Loading...")
+        self.trips_count_label = QLabel("Counting... 0%")
         self.trips_count_label.setStyleSheet("""
             QLabel {
                 color: #1565C0;
@@ -1788,7 +1889,7 @@ class DatasetConversionPage(QWidget):
         route_group_layout.addWidget(self.segment_subsections_group)
         
         self.route_group.setLayout(route_group_layout)
-        self.route_group.setVisible(False)  # Hidden until map and dataset ready
+        self.route_group.setVisible(True)
         controls_layout.addWidget(self.route_group)
         
         # ---- Dataset Generation Section ----
@@ -1980,7 +2081,7 @@ class DatasetConversionPage(QWidget):
         self.dataset_workers_spin.textChanged.connect(lambda _: self._schedule_save_settings())
 
         self.dataset_gen_group.setLayout(dataset_gen_layout)
-        self.dataset_gen_group.setVisible(False)  # Hidden until map and dataset ready
+        self.dataset_gen_group.setVisible(True)
         controls_layout.addWidget(self.dataset_gen_group)
         
         # ---- Progress Section (hidden by default) ----
@@ -2177,13 +2278,12 @@ class DatasetConversionPage(QWidget):
         self._schedule_save_settings()
     
     def on_train_path_changed(self, path: str):
-        """Handle train CSV path change."""
-        self._schedule_path_validation(path, "train")
+        """Handle main CSV path change."""
+        self._schedule_path_validation(path, "main")
         self._schedule_save_settings()
     
     def on_test_path_changed(self, path: str):
-        """Handle test CSV path change."""
-        self._schedule_path_validation(path, "test")
+        """Legacy handler retained for compatibility."""
         self._schedule_save_settings()
     
     def on_zones_changed(self, value: int):
@@ -2252,27 +2352,104 @@ class DatasetConversionPage(QWidget):
         return self.network_parser is not None
     
     def is_dataset_ready(self) -> bool:
-        """Check if both train and test datasets are valid."""
-        train_valid = self.train_valid_label.text() == "✅"
-        test_valid = self.test_valid_label.text() == "✅"
-        return train_valid and test_valid
+        """Check if the required main dataset is valid."""
+        return self.main_valid_label.text() == "✓"
     
     def check_zones_visibility(self):
-        """Show zones and route sections only when map and dataset are ready."""
+        """Keep route and dataset sections visible; enable extras when ready."""
+        self.route_group.setVisible(True)
+        self.dataset_gen_group.setVisible(True)
         if self.is_map_ready() and self.is_dataset_ready():
-            if not self.zones_group.isVisible():
-                self.zones_group.setVisible(True)
-                self.route_group.setVisible(True)
-                self.dataset_gen_group.setVisible(True)
-                self._update_dataset_buttons_visibility()
-                self.log("✅ Map and dataset ready - Zone and Route configuration enabled")
-                # Load trip count from train dataset
+            self._update_dataset_buttons_visibility()
+            # Load trip count from train dataset once if not already cached
+            if not getattr(self, "_train_trip_count", None):
                 self.load_trip_count()
-        else:
-            self.zones_group.setVisible(False)
-            self.route_group.setVisible(False)
-            self.dataset_gen_group.setVisible(False)
     
+    def _get_map_basename(self) -> str:
+        """Get user-selected map base filename."""
+        name = self.map_name_input.text().strip() if hasattr(self, "map_name_input") else ""
+        return name or "porto"
+
+    def _get_map_bbox_from_inputs(self) -> dict:
+        """Parse bbox inputs and return numeric bbox dictionary."""
+        return {
+            "south": float(self.bbox_south_input.text().strip()),
+            "west": float(self.bbox_west_input.text().strip()),
+            "north": float(self.bbox_north_input.text().strip()),
+            "east": float(self.bbox_east_input.text().strip()),
+        }
+
+    def _find_network_file(self) -> Optional[Path]:
+        """Find network file based on configured map basename, with legacy fallback."""
+        project_path = Path(self.project_path)
+        config_dir = project_path / "config"
+        map_basename = self._get_map_basename()
+        configured_net = config_dir / f"{map_basename}.net.xml"
+        legacy_default_net = config_dir / "porto.net.xml"
+        if configured_net.exists():
+            return configured_net
+        if legacy_default_net.exists():
+            return legacy_default_net
+        return None
+
+    def _collect_map_files_to_remove(self) -> List[Path]:
+        """Collect generated map files for current/active basenames."""
+        config_dir = Path(self.project_path) / "config"
+        basenames = {self._get_map_basename(), "porto"}
+        if self.network_file_path:
+            loaded_name = Path(self.network_file_path).name
+            if loaded_name.endswith(".net.xml"):
+                basenames.add(loaded_name[:-8])
+
+        files: List[Path] = []
+        for base in basenames:
+            files.extend(
+                [
+                    config_dir / f"{base}.osm",
+                    config_dir / f"{base}.net.xml",
+                    config_dir / f"{base}.rou.xml",
+                    config_dir / f"{base}.sumocfg",
+                ]
+            )
+        return files
+
+    def reset_network_map(self):
+        """Remove generated map files and reset map UI."""
+        reply = QMessageBox.question(
+            self,
+            "Reset Network Map",
+            "This will remove generated map files (.osm, .net.xml, .rou.xml, .sumocfg).\n\nContinue?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        removed_count = 0
+        for file_path in self._collect_map_files_to_remove():
+            try:
+                if file_path.exists():
+                    file_path.unlink()
+                    removed_count += 1
+            except Exception as e:
+                self.log(f"Failed to remove {file_path.name}: {e}")
+
+        # Reset in-memory map/network state
+        self.network_parser = None
+        self.network_file_path = None
+        self.sumo_net = None
+        self._edge_spatial_index = None
+        self._cached_edges_data = None
+        self._current_polyline = None
+        self._current_segments = None
+        self.clear_route_display(hide_subsections=True)
+        self.map_view.scene.clear()
+        self.map_status_label.setText("Map reset - click 'Download & Render Map'")
+        self.map_status_label.setStyleSheet("color: #666; font-size: 12px;")
+
+        self.log(f"Reset network map: removed {removed_count} file(s)")
+        self.check_resources()
+
     def check_resources(self):
         """Check if map and dataset resources exist."""
         self.log("Checking available resources...")
@@ -2280,19 +2457,12 @@ class DatasetConversionPage(QWidget):
         # Check SUMO installation
         self.verify_sumo_installation()
         
-        # Check for Porto network file
-        project_path = Path(self.project_path)
-        config_dir = project_path / 'config'
-        net_file = config_dir / 'porto.net.xml'
-        
-        # Also check in Porto/config if project is in Porto folder
-        porto_config = Path(self.project_path).parent.parent / 'Porto' / 'config'
-        porto_net_file = porto_config / 'porto.net.xml'
-        
-        if net_file.exists():
+        net_file = self._find_network_file()
+        if net_file is not None and net_file.exists():
             self.map_status.setText("Network map available")
             self.map_status.setStyleSheet("color: #4CAF50; font-size: 11px; font-weight: bold;")
-            self.download_map_btn.setVisible(False)  # Hide the button when map is available
+            self.reset_map_btn.setVisible(True)
+            self.map_download_stack.setVisible(False)  # Hide download UI when map is available
             self.osm_map_checkbox.setVisible(True)  # Show the OSM map checkbox
             self.osm_map_loading_label.setVisible(False)
             self.show_network_checkbox.setVisible(True)  # Show the network checkbox
@@ -2302,23 +2472,12 @@ class DatasetConversionPage(QWidget):
             self.map_offset_x_spinbox.setVisible(True)
             self.map_offset_y_spinbox.setVisible(True)
             self.load_network_async(net_file)
-        elif porto_net_file.exists():
-            self.map_status.setText("Network map available (Porto folder)")
-            self.map_status.setStyleSheet("color: #4CAF50; font-size: 11px; font-weight: bold;")
-            self.download_map_btn.setVisible(False)  # Hide the button when map is available
-            self.osm_map_checkbox.setVisible(True)  # Show the OSM map checkbox
-            self.osm_map_loading_label.setVisible(False)
-            self.show_network_checkbox.setVisible(True)  # Show the network checkbox
-            self.map_offset_label.setVisible(True)  # Show offset controls
-            self.map_offset_x_label.setVisible(True)
-            self.map_offset_y_label.setVisible(True)
-            self.map_offset_x_spinbox.setVisible(True)
-            self.map_offset_y_spinbox.setVisible(True)
-            self.load_network_async(porto_net_file)
         else:
             self.map_status.setText("Network map not found\nClick to download from OpenStreetMap")
             self.map_status.setStyleSheet("color: #f44336; font-size: 11px;")
-            self.download_map_btn.setVisible(True)
+            self.reset_map_btn.setVisible(False)
+            self.map_download_stack.setVisible(True)
+            self.map_download_stack.setCurrentIndex(0)
             self.download_map_btn.setEnabled(True)
             self.osm_map_checkbox.setVisible(False)
             self.osm_map_loading_label.setVisible(False)
@@ -2336,54 +2495,28 @@ class DatasetConversionPage(QWidget):
         self.log("Resource check complete")
     
     def _check_dataset_status(self):
-        """Check dataset availability and set paths if found."""
+        """Check dataset availability and set main CSV path if found."""
         project_path = Path(self.project_path)
         dataset_dir = project_path / 'dataset'
         
-        # Also check Porto/dataset
-        porto_dataset_dir = Path(self.project_path).parent.parent / 'Porto' / 'dataset'
+        # Also check legacy folder layout
+        legacy_dataset_dir = Path(self.project_path).parent.parent / 'Porto' / 'dataset'
         
-        # Check for train.csv
-        train_file = dataset_dir / 'train.csv'
-        porto_train = porto_dataset_dir / 'train.csv'
-        
-        if train_file.exists():
-            self.train_path_input.setText(str(train_file))
-            self.log(f"Train dataset found: {train_file}")
-        elif porto_train.exists():
-            self.train_path_input.setText(str(porto_train))
-            self.log(f"Train dataset found: {porto_train}")
-        else:
-            self.train_status.setText("Select train.csv from Porto taxi dataset")
-            self.train_status.setStyleSheet("color: #666; font-size: 9px;")
-        
-        # Check for test.csv
-        test_file = dataset_dir / 'test.csv'
-        porto_test = porto_dataset_dir / 'test.csv'
-        
-        if test_file.exists():
-            self.test_path_input.setText(str(test_file))
-            self.log(f"Test dataset found: {test_file}")
-        elif porto_test.exists():
-            self.test_path_input.setText(str(porto_test))
-            self.log(f"Test dataset found: {porto_test}")
-        else:
-            self.test_status.setText("Select test.csv from Porto taxi dataset")
-            self.test_status.setStyleSheet("color: #666; font-size: 9px;")
+        main_file = dataset_dir / 'train.csv'
+        legacy_main = legacy_dataset_dir / 'train.csv'
+
+        if main_file.exists() and not self.main_csv_input.text().strip():
+            self.main_csv_input.setText(str(main_file))
+            self.log(f"Main dataset found: {main_file}")
+        elif legacy_main.exists() and not self.main_csv_input.text().strip():
+            self.main_csv_input.setText(str(legacy_main))
+            self.log(f"Main dataset found: {legacy_main}")
+        elif not self.main_csv_input.text().strip():
+            self.main_status.setText("Select a main CSV file (required)")
+            self.main_status.setStyleSheet("color: #666; font-size: 9px;")
     
-    def browse_dataset_file(self, file_type: str):
-        """Open file dialog to browse for dataset CSV file.
-        
-        Args:
-            file_type: Either 'train' or 'test'
-        """
-        # Get the appropriate input field
-        if file_type == "train":
-            input_field = self.train_path_input
-            file_name = "train.csv"
-        else:
-            input_field = self.test_path_input
-            file_name = "test.csv"
+    def browse_dataset_file(self, input_field: QLineEdit):
+        """Open file dialog and set selected CSV path into input_field."""
         
         # Determine start directory
         current_path = input_field.text().strip()
@@ -2395,18 +2528,16 @@ class DatasetConversionPage(QWidget):
             else:
                 start_dir = self.project_path
         else:
-            # Try to use the other file's directory if available
-            other_input = self.test_path_input if file_type == "train" else self.train_path_input
-            other_path = other_input.text().strip()
-            if other_path and Path(other_path).exists():
-                start_dir = str(Path(other_path).parent)
+            main_path = self.main_csv_input.text().strip()
+            if main_path and Path(main_path).exists():
+                start_dir = str(Path(main_path).parent)
             else:
                 start_dir = self.project_path
         
         # Use non-native dialog for faster response
         file_path, _ = QFileDialog.getOpenFileName(
             self,
-            f"Select Porto Taxi Dataset ({file_name})",
+            "Select CSV File",
             start_dir,
             "CSV Files (*.csv);;All Files (*)",
             options=QFileDialog.DontUseNativeDialog
@@ -2414,7 +2545,85 @@ class DatasetConversionPage(QWidget):
         
         if file_path:
             input_field.setText(file_path)
-            self.log(f"{file_type.capitalize()} dataset path set to: {file_path}")
+            self.log(f"Dataset path set to: {file_path}")
+
+    def _add_optional_csv_row(self, initial_path: str = ""):
+        """Add an optional CSV path row."""
+        row_widget = QWidget()
+        row_container_layout = QVBoxLayout(row_widget)
+        row_container_layout.setContentsMargins(0, 0, 0, 0)
+        row_container_layout.setSpacing(2)
+
+        row_line_widget = QWidget()
+        row_layout = QHBoxLayout(row_line_widget)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(4)
+
+        path_input = QLineEdit()
+        path_input.setPlaceholderText("Optional CSV path...")
+        path_input.setStyleSheet(self.dataset_path_input_style)
+        row_layout.addWidget(path_input, stretch=1)
+
+        browse_btn = QPushButton("...")
+        browse_btn.setFixedWidth(36)
+        browse_btn.setToolTip("Browse CSV")
+        browse_btn.setStyleSheet(self.dataset_browse_btn_style)
+        browse_btn.clicked.connect(lambda: self.browse_dataset_file(path_input))
+        row_layout.addWidget(browse_btn)
+
+        valid_label = QLabel("")
+        valid_label.setFixedWidth(26)
+        valid_label.setStyleSheet("font-size: 12px; font-weight: bold;")
+        row_layout.addWidget(valid_label)
+
+        remove_btn = QPushButton("X")
+        remove_btn.setFixedWidth(28)
+        remove_btn.setToolTip("Remove this optional CSV")
+        remove_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #9E9E9E;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                font-size: 11px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #757575;
+            }
+        """)
+        remove_btn.clicked.connect(lambda: self._remove_optional_csv_row(row_widget))
+        row_layout.addWidget(remove_btn)
+
+        status_label = QLabel("")
+        status_label.setStyleSheet("color: #666; font-size: 9px;")
+        status_label.setWordWrap(True)
+
+        path_input.textChanged.connect(
+            lambda p, vl=valid_label, sl=status_label: self._validate_csv_path(
+                p, vl, sl, "an optional CSV file", "Optional dataset"
+            )
+        )
+        path_input.textChanged.connect(lambda _: self._schedule_save_settings())
+
+        row_container_layout.addWidget(row_line_widget)
+        row_container_layout.addWidget(status_label)
+        self.optional_csv_rows_layout.addWidget(row_widget)
+        self.optional_csv_rows.append((row_widget, path_input, valid_label, status_label))
+        if initial_path:
+            path_input.setText(initial_path)
+        self._schedule_save_settings()
+
+    def _remove_optional_csv_row(self, row_widget: QWidget):
+        """Remove one optional CSV path row."""
+        self.optional_csv_rows = [r for r in self.optional_csv_rows if r[0] is not row_widget]
+        self.optional_csv_rows_layout.removeWidget(row_widget)
+        row_widget.deleteLater()
+        self._schedule_save_settings()
+
+    def _get_optional_csv_paths(self) -> List[str]:
+        """Get all non-empty optional CSV paths."""
+        return [inp.text().strip() for _, inp, _, _ in self.optional_csv_rows if inp.text().strip()]
 
     def _update_dataset_buttons_visibility(self):
         """Show Start/Stop buttons when start trajectory and output path are set."""
@@ -2462,10 +2671,10 @@ class DatasetConversionPage(QWidget):
 
     def _on_dataset_start_clicked(self):
         """Start dataset generation."""
-        train_path = self.train_path_input.text().strip()
+        train_path = self.main_csv_input.text().strip()
         if not train_path or not Path(train_path).exists():
-            self.log("❌ train.csv not found - select a valid train dataset first")
-            QMessageBox.warning(self, "Dataset Error", "Please select a valid train.csv file first.")
+            self.log("Main CSV not found - select a valid main dataset first")
+            QMessageBox.warning(self, "Dataset Error", "Please select a valid main CSV file first.")
             return
         output_path = self.dataset_output_path.text().strip()
         if not output_path:
@@ -2569,84 +2778,83 @@ class DatasetConversionPage(QWidget):
         
         Args:
             path: The file path to validate
-            file_type: Either 'train' or 'test'
+            file_type: 'main' (required) or 'optional'
         """
         # Get the appropriate UI elements
-        if file_type == "train":
-            valid_label = self.train_valid_label
-            status_label = self.train_status
-            expected_name = "train.csv"
+        if file_type == "main":
+            valid_label = self.main_valid_label
+            status_label = self.main_status
+            expected_name = "a main CSV file"
+            log_prefix = "Main dataset"
         else:
-            valid_label = self.test_valid_label
-            status_label = self.test_status
-            expected_name = "test.csv"
-        
+            return
+        self._validate_csv_path(path, valid_label, status_label, expected_name, log_prefix)
+
+    def _validate_csv_path(
+        self,
+        path: str,
+        valid_label: QLabel,
+        status_label: QLabel,
+        expected_name: str,
+        log_prefix: str,
+    ):
+        """Validate a CSV path into a specific status/valid label pair."""
         if not path:
             valid_label.setText("")
-            status_label.setText(f"Select {expected_name} from Porto taxi dataset")
+            status_label.setText(f"Select {expected_name}")
             status_label.setStyleSheet("color: #666; font-size: 9px;")
             return
-        
+
         file_path = Path(path)
-        
+
         if not file_path.exists():
-            valid_label.setText("X")
+            valid_label.setText("✗")
             status_label.setText("File does not exist")
             status_label.setStyleSheet("color: #f44336; font-size: 9px;")
             return
-        
+
         if not file_path.is_file():
-            valid_label.setText("X")
+            valid_label.setText("✗")
             status_label.setText("Path is not a file")
             status_label.setStyleSheet("color: #f44336; font-size: 9px;")
             return
-        
-        if file_path.suffix.lower() != '.csv':
-            valid_label.setText("!")
+
+        if file_path.suffix.lower() != ".csv":
+            valid_label.setText("⚠")
             status_label.setText("File is not a CSV file")
             status_label.setStyleSheet("color: #FF9800; font-size: 9px;")
             return
-        
-        # Check file size and basic validation
+
         try:
             size_mb = file_path.stat().st_size / (1024 * 1024)
-            
-            # Quick check if it looks like the Porto dataset (check header)
-            with open(file_path, 'r', encoding='utf-8') as f:
+            with open(file_path, "r", encoding="utf-8") as f:
                 header = f.readline().strip()
-                
-                # train.csv has POLYLINE column, test.csv may not
-                if file_type == "train":
-                    if 'POLYLINE' in header and 'TRIP_ID' in header:
-                        valid_label.setText("✅")
-                        status_label.setText(f"Valid ({size_mb:.1f} MB)")
-                        status_label.setStyleSheet("color: #4CAF50; font-size: 9px;")
-                        self.log(f"Train dataset validated: {file_path.name} ({size_mb:.1f} MB)")
-                    else:
-                        valid_label.setText("!")
-                        status_label.setText(f"CSV ({size_mb:.1f} MB) - missing expected columns")
-                        status_label.setStyleSheet("color: #FF9800; font-size: 9px;")
+                if not header:
+                    valid_label.setText("⚠")
+                    status_label.setText("CSV file is empty")
+                    status_label.setStyleSheet("color: #FF9800; font-size: 9px;")
+                elif "," in header:
+                    valid_label.setText("✓")
+                    status_label.setText(f"Valid CSV ({size_mb:.1f} MB)")
+                    status_label.setStyleSheet("color: #4CAF50; font-size: 9px;")
+                    self.log(f"{log_prefix} validated: {file_path.name} ({size_mb:.1f} MB)")
+                    if log_prefix == "Main dataset":
+                        # Refresh trip count using file-signature cache when possible.
+                        self.load_trip_count()
                 else:
-                    # test.csv validation
-                    if 'TRIP_ID' in header:
-                        valid_label.setText("✅")
-                        status_label.setText(f"Valid ({size_mb:.1f} MB)")
-                        status_label.setStyleSheet("color: #4CAF50; font-size: 9px;")
-                        self.log(f"Test dataset validated: {file_path.name} ({size_mb:.1f} MB)")
-                    else:
-                        valid_label.setText("!")
-                        status_label.setText(f"CSV ({size_mb:.1f} MB) - missing TRIP_ID")
-                        status_label.setStyleSheet("color: #FF9800; font-size: 9px;")
+                    valid_label.setText("⚠")
+                    status_label.setText("Header does not look like CSV")
+                    status_label.setStyleSheet("color: #FF9800; font-size: 9px;")
         except Exception as e:
-            valid_label.setText("X")
+            valid_label.setText("✗")
             status_label.setText(f"Error: {str(e)[:25]}")
             status_label.setStyleSheet("color: #f44336; font-size: 9px;")
     
     def show_dataset_help(self):
         """Show help dialog with instructions for downloading the dataset."""
-        help_text = """<h3>Porto Taxi Dataset Download Instructions</h3>
+        help_text = """<h3>Trajectory Dataset Download Instructions</h3>
         
-<p>The Porto taxi trajectory dataset is available from Kaggle:</p>
+<p>A sample trajectory dataset is available from Kaggle:</p>
 
 <ol>
 <li><b>Create a Kaggle account</b> (if you don't have one)<br/>
@@ -2666,14 +2874,13 @@ class DatasetConversionPage(QWidget):
    Use the Browse button to select the extracted <code>train.csv</code> file</li>
 </ol>
 
-<p><b>Note:</b> The dataset is approximately 1.7 million taxi trips with GPS trajectories 
-recorded in Porto, Portugal from July 2013 to June 2014.</p>
+<p><b>Note:</b> Ensure your selected CSV includes consistent trajectory records and timestamps.</p>
 
 <p><b>File size:</b> ~1.6 GB (compressed) / ~8 GB (uncompressed)</p>"""
         
         QMessageBox.information(
             self,
-            "Porto Taxi Dataset Help",
+            "Trajectory Dataset Help",
             help_text
         )
     
@@ -2706,6 +2913,14 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
     def on_network_load_status(self, message: str):
         """Handle network loading status update."""
         self.loading_status_label.setText(message)
+
+    def _on_network_render_finished(self):
+        """Switch from loading overlay to map once rendering is complete."""
+        self.map_loading_progress.setRange(0, 100)
+        self.map_loading_progress.setValue(100)
+        self.loading_status_label.setText("Rendering complete")
+        self.map_stack.setCurrentIndex(0)
+        self.check_zones_visibility()
     
     def on_network_load_finished(self, success: bool, network_parser, message: str):
         """Handle network loading completion."""
@@ -2743,11 +2958,21 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
                     self.log(f"⚠️ Failed to load SUMO network for routing: {e}")
                     self.sumo_net = None
             
-            # Load network
+            # Load network geometry in SimulationView batches. Keep loading overlay
+            # visible until SimulationView emits network_render_finished.
+            try:
+                self.map_view.network_render_finished.disconnect(self._on_network_render_finished)
+            except RuntimeError:
+                pass
+            self.map_view.network_render_finished.connect(self._on_network_render_finished)
+            self.map_loading_progress.setRange(0, 0)  # busy indicator while rendering batches
+            self.loading_status_label.setText("Rendering network geometry...")
+
+            # Start loading/rendering the network in the scene
             self.map_view.load_network(self.network_parser)
             
-            # Zoom to Porto city center area
-            self._zoom_to_porto_center()
+            # Zoom to map center area
+            self._zoom_to_default_center()
             
             # Get network statistics - load ALL edges from XML (no filtering)
             all_edges = self.network_parser.get_edges()
@@ -2777,20 +3002,17 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
             if bounds:
                 self.log(f"Bounds: ({bounds['x_min']:.1f}, {bounds['y_min']:.1f}) to ({bounds['x_max']:.1f}, {bounds['y_max']:.1f})")
             
-            # Show map view
-            self.map_stack.setCurrentIndex(0)
-            
-            # Check if zones section should be shown
-            self.check_zones_visibility()
+            # Do not switch to map view here; wait for _on_network_render_finished.
         else:
             self.log(f"Error loading network: {message}")
             self.map_status_label.setText(f"Error loading map: {message}")
             self.map_status_label.setStyleSheet("color: #f44336; font-size: 12px;")
             self.loading_label.setText("Loading failed")
             self.loading_status_label.setText(message[:50] + "..." if len(message) > 50 else message)
+            self.map_loading_progress.setRange(0, 100)
     
-    def _zoom_to_porto_center(self):
-        """Zoom the map view to Porto city center."""
+    def _zoom_to_default_center(self):
+        """Zoom the map view to a default center area."""
         if not self.network_parser:
             return
         
@@ -2798,7 +3020,7 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
         if not bounds:
             return
         
-        # Calculate Porto city center area (roughly the downtown/central area)
+        # Calculate center area
         # The network bounds are in SUMO coordinates, we'll zoom to ~60% of the center
         x_range = bounds['x_max'] - bounds['x_min']
         y_range = bounds['y_max'] - bounds['y_min']
@@ -2880,12 +3102,12 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
                 self._hide_busy_indicator()
     
     def zoom_to_default(self):
-        """Zoom to the default view (Porto city center)."""
+        """Zoom to the default center view."""
         if self.network_parser:
             self._show_busy_indicator("Zooming to city center...")
             try:
-                self._zoom_to_porto_center()
-                self.log("Zoomed to Porto city center")
+                self._zoom_to_default_center()
+                self.log("Zoomed to map center")
             finally:
                 self._hide_busy_indicator()
     
@@ -2900,7 +3122,7 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
                 self._hide_busy_indicator()
     
     def download_map(self):
-        """Start downloading the Porto map."""
+        """Start downloading the selected OSM map."""
         if self.download_worker and self.download_worker.isRunning():
             QMessageBox.warning(self, "Busy", "A download is already in progress.")
             return
@@ -2922,16 +3144,53 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
         
         # Get SUMO_HOME from input
         sumo_home = self.sumo_home_input.text().strip()
-        
-        self.log(f"Starting map download (SUMO_HOME: {sumo_home})...")
+        map_basename = self._get_map_basename()
+
+        # Validate map basename
+        if not map_basename.replace("_", "").replace("-", "").isalnum():
+            QMessageBox.warning(
+                self,
+                "Invalid Map Name",
+                "Map file base name must contain only letters, digits, hyphen, or underscore.",
+            )
+            return
+
+        # Validate bbox inputs
+        try:
+            bbox = self._get_map_bbox_from_inputs()
+        except ValueError:
+            QMessageBox.warning(
+                self,
+                "Invalid Coordinates",
+                "Please enter valid numeric values for south, west, north, and east.",
+            )
+            return
+
+        if bbox["south"] >= bbox["north"] or bbox["west"] >= bbox["east"]:
+            QMessageBox.warning(
+                self,
+                "Invalid Bounding Box",
+                "Bounding box must satisfy: south < north and west < east.",
+            )
+            return
+
+        self.log(
+            f"Starting map download '{map_basename}' "
+            f"(bbox: {bbox['south']},{bbox['west']},{bbox['north']},{bbox['east']}; "
+            f"SUMO_HOME: {sumo_home})..."
+        )
+        self.map_download_stack.setCurrentIndex(1)
+        self.map_download_progress_bar.setValue(0)
+        self.map_download_progress_status.setText("Starting download...")
         self.download_map_btn.setEnabled(False)
         
-        # Show progress section
-        self.progress_group.setVisible(True)
-        self.progress_bar.setValue(0)
-        self.progress_status.setText("Starting download...")
-        
-        self.download_worker = DownloadWorker("map", str(config_dir), sumo_home=sumo_home)
+        self.download_worker = DownloadWorker(
+            "map",
+            str(config_dir),
+            sumo_home=sumo_home,
+            bbox=bbox,
+            map_basename=map_basename,
+        )
         self.download_worker.progress.connect(self.on_progress)
         self.download_worker.status.connect(self.on_status)
         self.download_worker.finished.connect(self.on_map_download_finished)
@@ -2939,29 +3198,33 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
     
     def on_progress(self, value: int):
         """Handle progress update."""
-        self.progress_bar.setValue(value)
+        if hasattr(self, "map_download_progress_bar"):
+            self.map_download_progress_bar.setValue(value)
     
     def on_status(self, message: str):
         """Handle status update."""
-        self.progress_status.setText(message)
+        if hasattr(self, "map_download_progress_status"):
+            self.map_download_progress_status.setText(message)
         self.log(message)
     
     def on_map_download_finished(self, success: bool, message: str):
         """Handle map download completion."""
-        self.progress_status.setText("Complete" if success else "Failed")
         self.log(message)
         
         if success:
-            self.progress_bar.setValue(100)
+            if hasattr(self, "map_download_progress_bar"):
+                self.map_download_progress_bar.setValue(100)
+            if hasattr(self, "map_download_progress_status"):
+                self.map_download_progress_status.setText("Complete")
             QMessageBox.information(self, "Success", message)
             
             # Load the newly downloaded network
-            project_path = Path(self.project_path)
-            net_file = project_path / 'config' / 'porto.net.xml'
-            if net_file.exists():
+            net_file = self._find_network_file()
+            if net_file is not None and net_file.exists():
                 self.map_status.setText("Network map available")
                 self.map_status.setStyleSheet("color: #4CAF50; font-size: 11px; font-weight: bold;")
-                self.download_map_btn.setVisible(False)  # Hide the button when map is available
+                self.reset_map_btn.setVisible(True)
+                self.map_download_stack.setVisible(False)  # Hide download UI when map is available
                 self.osm_map_checkbox.setVisible(True)  # Show the OSM map checkbox
                 self.osm_map_loading_label.setVisible(False)
                 self.show_network_checkbox.setVisible(True)  # Show the network checkbox
@@ -2975,9 +3238,14 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
             # Check dataset status
             self._check_dataset_status()
         else:
-            self.progress_bar.setValue(0)
+            if hasattr(self, "map_download_progress_bar"):
+                self.map_download_progress_bar.setValue(0)
+            if hasattr(self, "map_download_progress_status"):
+                self.map_download_progress_status.setText("Failed")
             QMessageBox.warning(self, "Download Failed", message)
-            self.download_map_btn.setVisible(True)
+            self.reset_map_btn.setVisible(False)
+            self.map_download_stack.setVisible(True)
+            self.map_download_stack.setCurrentIndex(0)
             self.download_map_btn.setEnabled(True)
             self.osm_map_checkbox.setVisible(False)
             self.osm_map_loading_label.setVisible(False)
@@ -2987,14 +3255,7 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
             self.map_offset_y_label.setVisible(False)
             self.map_offset_x_spinbox.setVisible(False)
             self.map_offset_y_spinbox.setVisible(False)
-        
-        # Hide progress section after a short delay
-        QTimer.singleShot(2000, self.hide_progress_section)
-    
-    def hide_progress_section(self):
-        """Hide the download progress section."""
-        self.progress_group.setVisible(False)
-    
+
     def log(self, message: str):
         """Add a message to the log."""
         from datetime import datetime
@@ -3036,10 +3297,17 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
         
         settings = {
             'sumo_home': self.sumo_home_input.text().strip(),
-            'train_csv_path': self.train_path_input.text().strip(),
-            'test_csv_path': self.test_path_input.text().strip(),
+            'map_basename': self._get_map_basename(),
+            'map_bbox_south': self.bbox_south_input.text().strip(),
+            'map_bbox_west': self.bbox_west_input.text().strip(),
+            'map_bbox_north': self.bbox_north_input.text().strip(),
+            'map_bbox_east': self.bbox_east_input.text().strip(),
+            'main_csv_path': self.main_csv_input.text().strip(),
+            'optional_csv_paths': self._get_optional_csv_paths(),
+            'train_csv_path': self.main_csv_input.text().strip(),  # legacy compatibility
             'num_zones': self.zones_slider.value(),
             'train_trip_count': getattr(self, '_train_trip_count', None),
+            'trip_count_cache': self._trip_count_cache,
             'show_osm_map': self.osm_map_checkbox.isChecked(),
             'show_network': self.show_network_checkbox.isChecked(),
             'map_offset_x': self.map_offset_x_spinbox.value(),
@@ -3070,33 +3338,53 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
         
         try:
             settings_path = self.get_settings_path()
+            legacy_settings_file = settings_path.parent / "porto_settings.json"
+            active_settings_path = settings_path if settings_path.exists() else legacy_settings_file
             
-            if settings_path.exists():
-                with open(settings_path, 'r', encoding='utf-8') as f:
+            if active_settings_path.exists():
+                with open(active_settings_path, 'r', encoding='utf-8') as f:
                     settings = json.load(f)
                 
                 # Apply settings
                 if 'sumo_home' in settings and settings['sumo_home']:
                     self.sumo_home_input.setText(settings['sumo_home'])
+
+                if 'map_basename' in settings and settings['map_basename']:
+                    self.map_name_input.setText(settings['map_basename'])
+                if 'map_bbox_south' in settings and settings['map_bbox_south']:
+                    self.bbox_south_input.setText(str(settings['map_bbox_south']))
+                if 'map_bbox_west' in settings and settings['map_bbox_west']:
+                    self.bbox_west_input.setText(str(settings['map_bbox_west']))
+                if 'map_bbox_north' in settings and settings['map_bbox_north']:
+                    self.bbox_north_input.setText(str(settings['map_bbox_north']))
+                if 'map_bbox_east' in settings and settings['map_bbox_east']:
+                    self.bbox_east_input.setText(str(settings['map_bbox_east']))
+
+                # Restore trip-count cache BEFORE validating main CSV, so startup
+                # validation can reuse cache and avoid recounting.
+                if 'trip_count_cache' in settings and isinstance(settings['trip_count_cache'], dict):
+                    self._trip_count_cache = settings['trip_count_cache']
+                    if 'count' in self._trip_count_cache:
+                        self._train_trip_count = int(self._trip_count_cache.get('count', 0))
+                elif 'train_trip_count' in settings and settings['train_trip_count'] is not None:
+                    self._train_trip_count = int(settings['train_trip_count'])
                 
-                if 'train_csv_path' in settings and settings['train_csv_path']:
-                    self.train_path_input.blockSignals(True)
-                    self.train_path_input.setText(settings['train_csv_path'])
-                    self.train_path_input.blockSignals(False)
-                    self.validate_dataset_path(settings['train_csv_path'], "train")
-                
-                if 'test_csv_path' in settings and settings['test_csv_path']:
-                    self.test_path_input.blockSignals(True)
-                    self.test_path_input.setText(settings['test_csv_path'])
-                    self.test_path_input.blockSignals(False)
-                    self.validate_dataset_path(settings['test_csv_path'], "test")
+                main_csv = settings.get('main_csv_path') or settings.get('train_csv_path')
+                if main_csv:
+                    self.main_csv_input.blockSignals(True)
+                    self.main_csv_input.setText(main_csv)
+                    self.main_csv_input.blockSignals(False)
+                    self.validate_dataset_path(main_csv, "main")
+
+                optional_paths = settings.get('optional_csv_paths', [])
+                if not optional_paths and settings.get('test_csv_path'):
+                    optional_paths = [settings['test_csv_path']]
+                for path in optional_paths:
+                    self._add_optional_csv_row(path)
                 
                 if 'num_zones' in settings:
                     self.zones_slider.setValue(settings['num_zones'])
                     self.zones_value_label.setText(str(settings['num_zones']))
-                
-                if 'train_trip_count' in settings and settings['train_trip_count']:
-                    self._train_trip_count = settings['train_trip_count']
                 
                 if 'show_osm_map' in settings:
                     self.osm_map_checkbox.setChecked(settings['show_osm_map'])
@@ -3167,25 +3455,49 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
             self._loading_settings = False
     
     def load_trip_count(self):
-        """Load or count the number of trips in the train dataset."""
-        # Check if we have cached count
-        if hasattr(self, '_train_trip_count') and self._train_trip_count:
-            self._update_trip_count_ui(self._train_trip_count)
-            return
-        
-        train_path = self.train_path_input.text().strip()
+        """Load or count the number of trips in the main dataset CSV."""
+        train_path = self.main_csv_input.text().strip()
         if not train_path or not Path(train_path).exists():
             self.trips_count_label.setText("N/A")
             return
+
+        # Prevent duplicate counting while worker is already running.
+        if hasattr(self, "_trip_count_worker") and self._trip_count_worker and self._trip_count_worker.isRunning():
+            return
+
+        # Use signature-based cache to avoid recounting unchanged files.
+        try:
+            stat = Path(train_path).stat()
+            current_meta = {
+                "path": str(Path(train_path).resolve()),
+                "size": int(stat.st_size),
+                "mtime": int(stat.st_mtime),
+            }
+        except Exception:
+            current_meta = None
+
+        if current_meta and isinstance(self._trip_count_cache, dict):
+            if (
+                self._trip_count_cache.get("path") == current_meta["path"]
+                and int(self._trip_count_cache.get("size", -1)) == current_meta["size"]
+                and int(self._trip_count_cache.get("mtime", -1)) == current_meta["mtime"]
+            ):
+                cached_count = int(self._trip_count_cache.get("count", 0))
+                self._train_trip_count = cached_count
+                self._update_trip_count_ui(cached_count)
+                return
         
-        self.trips_count_label.setText("Counting...")
-        self.log("Counting trips in train dataset...")
+        self.trips_count_label.setText("Counting... 0%")
+        self.route_info_label.setText("Counting trips... please wait")
+        self.log("Counting trips in main dataset...")
+        self._trip_count_pending_meta = current_meta
         
         # Count trips in background
         from PySide6.QtCore import QThread, Signal
         
         class TripCountWorker(QThread):
             finished = Signal(int)
+            progress = Signal(int, int)  # percent, current_count_estimate
             
             def __init__(self, file_path):
                 super().__init__()
@@ -3193,27 +3505,67 @@ recorded in Porto, Portugal from July 2013 to June 2014.</p>
             
             def run(self):
                 try:
-                    count = 0
-                    with open(self.file_path, 'r', encoding='utf-8') as f:
-                        # Skip header
-                        next(f, None)
-                        for _ in f:
-                            count += 1
+                    # Fast row count: count newline bytes in chunks.
+                    # This is much faster than iterating Python text lines on large CSV files.
+                    with open(self.file_path, 'rb') as f:
+                        chunk_size = 1024 * 1024  # 1 MB
+                        total_size = max(1, Path(self.file_path).stat().st_size)
+                        processed_size = 0
+                        newline_count = 0
+                        has_any_data = False
+                        ends_with_newline = False
+                        last_emitted_percent = -1
+
+                        while True:
+                            chunk = f.read(chunk_size)
+                            if not chunk:
+                                break
+                            has_any_data = True
+                            processed_size += len(chunk)
+                            newline_count += chunk.count(b'\n')
+                            ends_with_newline = chunk.endswith(b'\n')
+                            percent = int((processed_size * 100) / total_size)
+                            if percent != last_emitted_percent:
+                                # Estimate trip count by line count so far (excluding header).
+                                current_estimate = max(0, newline_count - 1)
+                                self.progress.emit(percent, current_estimate)
+                                last_emitted_percent = percent
+
+                    if not has_any_data:
+                        count = 0
+                    else:
+                        # If file does not end with newline, there is one more logical line.
+                        total_lines = newline_count if ends_with_newline else (newline_count + 1)
+                        # Subtract header line.
+                        count = max(0, total_lines - 1)
+                    self.progress.emit(100, count)
                     self.finished.emit(count)
                 except Exception as e:
                     print(f"Error counting trips: {e}")
                     self.finished.emit(0)
         
         self._trip_count_worker = TripCountWorker(train_path)
+        self._trip_count_worker.progress.connect(self._on_trip_count_progress)
         self._trip_count_worker.finished.connect(self._on_trip_count_finished)
         self._trip_count_worker.start()
+
+    def _on_trip_count_progress(self, percent: int, current_count: int):
+        """Show progress while counting trips."""
+        self.trips_count_label.setText(f"Counting... {percent}%")
+        self.route_info_label.setText(f"Counting trips... {current_count:,} rows found so far")
     
     def _on_trip_count_finished(self, count: int):
         """Handle trip count completion."""
         self._train_trip_count = count
+        if self._trip_count_pending_meta:
+            self._trip_count_cache = {
+                **self._trip_count_pending_meta,
+                "count": int(count),
+            }
+        self._trip_count_pending_meta = None
         self._update_trip_count_ui(count)
         self.save_settings()  # Cache the count
-        self.log(f"Train dataset contains {count:,} trips")
+        self.log(f"Main dataset contains {count:,} trips")
     
     def _update_trip_count_ui(self, count: int):
         """Update UI with trip count."""
