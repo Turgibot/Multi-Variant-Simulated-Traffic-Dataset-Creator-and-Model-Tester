@@ -3,12 +3,11 @@ Custom QGraphicsView widget for rendering SUMO simulation.
 """
 
 import math
-import os
 import urllib.request
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from PySide6.QtCore import QPointF, QRectF, Qt, QThread, Signal, QTimer
+from PySide6.QtCore import QPointF, QRectF, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import (QBrush, QColor, QImage, QPainter, QPen, QPixmap,
                            QPolygonF, QWheelEvent)
 from PySide6.QtWidgets import (QGraphicsEllipseItem, QGraphicsItem,
@@ -132,15 +131,16 @@ class NetworkPrepareWorker(QThread):
 class NetworkEdgeItem(QGraphicsItem):
     """Graphics item for rendering a network edge."""
     
-    def __init__(self, edge_data: Dict, parent=None):
+    def __init__(self, edge_data: Dict, thickness_multiplier: float = 1.0, parent=None):
         super().__init__(parent)
         self.edge_data = edge_data
         self.setZValue(0)  # Background layer
         self.is_selected = False  # Whether this edge is selected/highlighted
+        self.override_color = None  # Optional per-edge color override
         
-        # Performance: Enable caching for static items
-        # Use ItemCoordinateCache instead of DeviceCoordinateCache to avoid painter state warnings
-        self.setCacheMode(QGraphicsItem.ItemCoordinateCache)
+        # Keep edge rendering uncached for visual fidelity across zoom levels.
+        # Cached edge pixmaps can look too faint/thin at full-network scales.
+        self.setCacheMode(QGraphicsItem.NoCache)
         
         # Pre-compute line segments for faster drawing
         # Use the first lane's shape to represent the edge (all lanes typically follow same path)
@@ -160,13 +160,15 @@ class NetworkEdgeItem(QGraphicsItem):
                         QPointF(shape_points[i+1][0], shape_points[i+1][1])
                     ))
         
-        # Calculate line thickness based on number of lanes
-        # Base thickness: 1.5, add 0.5 per lane (min 1.5, scales with lanes)
-        base_thickness = 1.5
-        lane_thickness = 0.5
+        # Calculate line thickness based on number of lanes.
+        # Keep roads very thin in overview mode.
+        base_thickness = 0.0
+        lane_thickness = 0.08
         line_thickness = base_thickness + (num_lanes - 1) * lane_thickness
-        # Cap at reasonable maximum (e.g., 8 for very wide roads)
-        line_thickness = min(line_thickness, 8.0)
+        # Allow each view/page to tune network readability without affecting geometry.
+        line_thickness *= max(0.1, thickness_multiplier)
+        # Cap growth; allow hairline-thin rendering for readability.
+        line_thickness = min(line_thickness, 1.2)
         
         # Calculate bounding rect
         if all_points:
@@ -186,14 +188,35 @@ class NetworkEdgeItem(QGraphicsItem):
         self.line_thickness = line_thickness
         
         # Pre-create pens with variable thickness
-        self.normal_pen = QPen(QColor(100, 100, 100), line_thickness)
-        self.selected_pen = QPen(QColor(50, 50, 50), line_thickness + 2)
+        normal_width = 0.0 if line_thickness < 0.2 else line_thickness
+        selected_width = max(1.0, normal_width + 0.4)
+        self.normal_pen = QPen(QColor(35, 35, 35), normal_width)
+        self.selected_pen = QPen(QColor(10, 10, 10), selected_width)
+        # Keep road stroke width in screen pixels so visibility does not depend on zoom level.
+        self.normal_pen.setCosmetic(True)
+        self.selected_pen.setCosmetic(True)
+        self.normal_pen.setCapStyle(Qt.RoundCap)
+        self.selected_pen.setCapStyle(Qt.RoundCap)
+        self.normal_pen.setJoinStyle(Qt.RoundJoin)
+        self.selected_pen.setJoinStyle(Qt.RoundJoin)
     
     def set_selected(self, selected: bool):
         """Set whether this edge is selected/highlighted."""
         if self.is_selected != selected:
             self.is_selected = selected
             self.update()  # Trigger repaint
+
+    def set_override_color(self, color: Optional[QColor]):
+        """Set optional custom edge color (None to clear override)."""
+        changed = False
+        if color is None and self.override_color is not None:
+            changed = True
+        elif color is not None:
+            if self.override_color is None or self.override_color != color:
+                changed = True
+        if changed:
+            self.override_color = QColor(color) if color is not None else None
+            self.update()
     
     def boundingRect(self) -> QRectF:
         return self.bounding_rect
@@ -203,7 +226,16 @@ class NetworkEdgeItem(QGraphicsItem):
         # Save painter state to avoid warnings
         painter.save()
         try:
-            painter.setPen(self.selected_pen if self.is_selected else self.normal_pen)
+            if self.override_color is not None:
+                width = self.selected_pen.widthF() if self.is_selected else self.normal_pen.widthF()
+                color = self.override_color.darker(140) if self.is_selected else self.override_color
+                pen = QPen(color, width)
+                pen.setCosmetic(True)
+                pen.setCapStyle(Qt.RoundCap)
+                pen.setJoinStyle(Qt.RoundJoin)
+                painter.setPen(pen)
+            else:
+                painter.setPen(self.selected_pen if self.is_selected else self.normal_pen)
             
             # Draw pre-computed line segments
             for p1, p2 in self.line_segments:
@@ -219,6 +251,7 @@ class NetworkNodeItem(QGraphicsPolygonItem):
         super().__init__(parent)
         self.node_id = node_id
         self.is_selected = False
+        self.override_color = None  # Optional per-node color override
         self.setZValue(1)  # Above edges, below vehicles
         
         # Performance: Enable caching for static items
@@ -260,12 +293,41 @@ class NetworkNodeItem(QGraphicsPolygonItem):
         """Set whether this node is selected/highlighted."""
         if self.is_selected != selected:
             self.is_selected = selected
-            if selected:
-                self.setBrush(self.selected_brush)
-                self.setPen(self.selected_pen)
+            self._apply_node_style()
+
+    def set_override_color(self, color: Optional[QColor]):
+        """Set optional custom node color (None to clear override)."""
+        changed = False
+        if color is None and self.override_color is not None:
+            changed = True
+        elif color is not None:
+            if self.override_color is None or self.override_color != color:
+                changed = True
+        if changed:
+            self.override_color = QColor(color) if color is not None else None
+            self._apply_node_style()
+
+    def _apply_node_style(self):
+        """Apply node style based on selection + optional color override."""
+        if self.override_color is not None:
+            if self.is_selected:
+                fill_color = self.override_color.darker(130)
+                stroke_color = self.override_color.darker(170)
+                stroke_width = 2
             else:
-                self.setBrush(self.default_brush)
-                self.setPen(self.default_pen)
+                fill_color = QColor(self.override_color)
+                stroke_color = self.override_color.darker(140)
+                stroke_width = 1
+            self.setBrush(QBrush(fill_color))
+            self.setPen(QPen(stroke_color, stroke_width))
+            return
+
+        if self.is_selected:
+            self.setBrush(self.selected_brush)
+            self.setPen(self.selected_pen)
+        else:
+            self.setBrush(self.default_brush)
+            self.setPen(self.default_pen)
 
 
 class VehicleItem(QGraphicsEllipseItem):
@@ -305,17 +367,18 @@ class SimulationView(QGraphicsView):
         super().__init__(parent)
         self.scene = QGraphicsScene(self)
         self.setScene(self.scene)
+        self.scene.setBackgroundBrush(QBrush(QColor(195, 225, 195)))
         
         # Performance optimizations for large networks
         self.setViewportUpdateMode(QGraphicsView.SmartViewportUpdate)
         self.setCacheMode(QGraphicsView.CacheBackground)
-        self.setOptimizationFlag(QGraphicsView.DontAdjustForAntialiasing, True)
+        self.setOptimizationFlag(QGraphicsView.DontAdjustForAntialiasing, False)
         # Note: DontSavePainterState removed to avoid QPainter warnings
         # The flag can cause "Painter ended with N saved states" warnings
         # self.setOptimizationFlag(QGraphicsView.DontSavePainterState, True)
         
-        # Disable antialiasing for better performance (can be enabled for smaller networks)
-        # self.setRenderHint(QPainter.Antialiasing)
+        # Prefer clearer line rendering for road-network readability.
+        self.setRenderHint(QPainter.Antialiasing, True)
         # self.setRenderHint(QPainter.SmoothPixmapTransform)
         
         # Use ScrollHandDrag for panning (more efficient than RubberBandDrag)
@@ -337,6 +400,7 @@ class SimulationView(QGraphicsView):
         self.edge_items = {}
         self.node_items = {}  # For rendering nodes/junctions
         self.vehicle_items = {}
+        self.edge_thickness_multiplier = 1.0
         
         # OSM map tile items
         self.tile_items = {}  # Dict of (z, x, y) -> QGraphicsPixmapItem
@@ -355,25 +419,50 @@ class SimulationView(QGraphicsView):
         self.map_scale_y = 1.0
         
         # Background color
-        self.setBackgroundBrush(QBrush(QColor(240, 240, 240)))
+        self.setBackgroundBrush(QBrush(QColor(195, 225, 195)))
         
         # Store network bounds for Y-flip calculation
         self._network_y_min = 0
         self._network_y_max = 0
+
+        # Async network preparation state
+        self._network_prepare_edges = None
+        self._network_prepare_nodes = None
+        self._network_prepare_generation = 0
+        self._active_network_prepare_generation = 0
     
     def load_network(self, network_parser, roads_junctions_only: bool = False):
         """Load network from parser asynchronously."""
         self.network_parser = network_parser
+        # Invalidate any in-progress batch rendering state.
+        self._network_prepare_edges = None
+        self._network_prepare_nodes = None
+        self._network_prepare_generation += 1
+        self._active_network_prepare_generation = self._network_prepare_generation
+        try:
+            self.setUpdatesEnabled(True)
+            if self.scene is not None:
+                self.scene.setItemIndexMethod(QGraphicsScene.BspTreeIndex)
+        except RuntimeError:
+            return
         self.clear_network()
         if self._network_prepare_worker and self._network_prepare_worker.isRunning():
             self._network_prepare_worker.terminate()
             self._network_prepare_worker.wait()
         self._network_prepare_worker = NetworkPrepareWorker(network_parser, roads_junctions_only)
-        self._network_prepare_worker.finished.connect(self._on_network_prepare_finished)
+        generation_id = self._active_network_prepare_generation
+        self._network_prepare_worker.finished.connect(
+            lambda edges_data, nodes_data, conv_boundary, bounds, y_min, y_max:
+            self._on_network_prepare_finished(
+                edges_data, nodes_data, conv_boundary, bounds, y_min, y_max, generation_id
+            )
+        )
         self._network_prepare_worker.start()
 
-    def _on_network_prepare_finished(self, edges_data, nodes_data, conv_boundary, bounds, y_min, y_max):
+    def _on_network_prepare_finished(self, edges_data, nodes_data, conv_boundary, bounds, y_min, y_max, generation_id: int):
         """Add prepared network items in batches (runs on main thread)."""
+        if generation_id != self._active_network_prepare_generation:
+            return
         self._network_prepare_worker = None
         self._network_y_min = y_min
         self._network_y_max = y_max
@@ -399,11 +488,16 @@ class SimulationView(QGraphicsView):
                 return
             edges = self._network_prepare_edges
             nodes = self._network_prepare_nodes
+            if edges is None or nodes is None:
+                return
             batch_start = self._network_prepare_edge_idx
             batch_end = min(batch_start + self._network_prepare_batch_size, len(edges))
             for i in range(batch_start, batch_end):
                 edge_id, flipped_data = edges[i]
-                edge_item = NetworkEdgeItem(flipped_data)
+                edge_item = NetworkEdgeItem(
+                    flipped_data,
+                    thickness_multiplier=self.edge_thickness_multiplier
+                )
                 self.scene.addItem(edge_item)
                 self.edge_items[edge_id] = edge_item
             self._network_prepare_edge_idx = batch_end
@@ -494,7 +588,7 @@ class SimulationView(QGraphicsView):
             # Clear OSM tiles
             self._clear_osm_tiles()
             # Reset background color
-            self.setBackgroundBrush(QBrush(QColor(240, 240, 240)))
+            self.setBackgroundBrush(QBrush(QColor(195, 225, 195)))
     
     def _clear_osm_tiles(self):
         """Clear all OSM tile items."""
@@ -553,7 +647,7 @@ class SimulationView(QGraphicsView):
         self._clear_osm_tiles()
         
         # Set light background while loading
-        self.setBackgroundBrush(QBrush(QColor(240, 240, 240)))
+        self.setBackgroundBrush(QBrush(QColor(195, 225, 195)))
         
         # Determine zoom level based on actual network area size
         lon_range = network_gps_bounds['lon_max'] - network_gps_bounds['lon_min']
@@ -744,6 +838,20 @@ class SimulationView(QGraphicsView):
         """Set which nodes are selected/highlighted."""
         for node_id, node_item in self.node_items.items():
             node_item.set_selected(node_id in node_ids)
+
+    def set_edge_color_overrides(self, edge_color_map: Dict[str, QColor]):
+        """Set per-edge color overrides keyed by edge id."""
+        for edge_id, edge_item in self.edge_items.items():
+            edge_item.set_override_color(edge_color_map.get(edge_id))
+
+    def set_node_color_overrides(self, node_color_map: Dict[str, QColor]):
+        """Set per-node color overrides keyed by node/junction id."""
+        for node_id, node_item in self.node_items.items():
+            node_item.set_override_color(node_color_map.get(node_id))
+
+    def set_edge_thickness_multiplier(self, multiplier: float):
+        """Set network edge thickness scale factor for subsequent network loads."""
+        self.edge_thickness_multiplier = max(0.1, float(multiplier))
     
     def update_vehicle(self, vehicle_id: str, x: float, y: float, angle: float = 0):
         """Update or create a vehicle."""

@@ -4,6 +4,8 @@ Network parser for extracting geometry from SUMO network files.
 
 import gzip
 import math
+import json
+import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -14,6 +16,28 @@ try:
     PYPROJ_AVAILABLE = True
 except ImportError:
     PYPROJ_AVAILABLE = False
+
+DEBUG_LOG_PATH = "/home/guy/Projects/Traffic/Multi-Variant-Simulated-Traffic-Dataset-Creator-and-Model-Tester/.cursor/debug-b2b643.log"
+DEBUG_SESSION_ID = "b2b643"
+
+
+def _write_agent_debug_log(run_id: str, hypothesis_id: str, location: str, message: str, data: Dict) -> None:
+    # region agent log
+    try:
+        payload = {
+            "sessionId": DEBUG_SESSION_ID,
+            "runId": run_id,
+            "hypothesisId": hypothesis_id,
+            "location": location,
+            "message": message,
+            "data": data,
+            "timestamp": int(time.time() * 1000),
+        }
+        with open(DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=True) + "\n")
+    except Exception:
+        pass
+    # endregion
 
 
 class NetworkParser:
@@ -44,6 +68,7 @@ class NetworkParser:
         self.conv_adjust_y = 0.0  # Adjustment to normalized Y position (-1 to 1)
         self.conv_scale_x = 1.0   # Scale factor for X dimension
         self.conv_scale_y = 1.0   # Scale factor for Y dimension
+        self._agent_debug_conversion_logs = 0
         
         self._parse()
     
@@ -130,6 +155,21 @@ class NetworkParser:
                         }
                 except (ValueError, IndexError):
                     self.conv_boundary = None
+                _write_agent_debug_log(
+                    run_id="pre-fix",
+                    hypothesis_id="H4",
+                    location="network_parser.py:_parse",
+                    message="Loaded network location metadata",
+                    data={
+                        "netFile": str(self.net_file),
+                        "netOffset": self.net_offset,
+                        "origBoundary": self.orig_boundary,
+                        "convBoundary": getattr(self, "conv_boundary", None),
+                        "projParameterPresent": bool(self.proj_parameter),
+                        "pyprojAvailable": PYPROJ_AVAILABLE,
+                        "transformerInitialized": self.transformer is not None,
+                    },
+                )
             
             # Parse nodes
             for node in root.findall('node'):
@@ -383,6 +423,47 @@ class NetworkParser:
                 # Validate final coordinates
                 if not (math.isfinite(x) and math.isfinite(y)):
                     raise ValueError(f"Invalid coordinates after mapping: ({x}, {y})")
+                if self._agent_debug_conversion_logs < 3:
+                    direct_x = None
+                    direct_y = None
+                    delta_x = None
+                    delta_y = None
+                    dist_current = None
+                    dist_direct = None
+                    if self.net_offset and "x" in self.net_offset and "y" in self.net_offset:
+                        # SUMO network coordinates correspond to projected coordinates translated by netOffset.
+                        direct_x = proj_x + self.net_offset["x"]
+                        direct_y = proj_y + self.net_offset["y"]
+                        delta_x = x - direct_x
+                        delta_y = y - direct_y
+                        nearest_direct = self.find_nearest_edge(direct_x, direct_y)
+                        if nearest_direct:
+                            dist_direct = nearest_direct[1]
+                    nearest_current = self.find_nearest_edge(x, y)
+                    if nearest_current:
+                        dist_current = nearest_current[1]
+                    _write_agent_debug_log(
+                        run_id="pre-fix",
+                        hypothesis_id="H1",
+                        location="network_parser.py:gps_to_sumo_coords",
+                        message="Compared current conversion vs proj-plus-netOffset",
+                        data={
+                            "netFile": str(self.net_file),
+                            "inputLon": lon,
+                            "inputLat": lat,
+                            "mappedX": x,
+                            "mappedY": y,
+                            "projX": proj_x,
+                            "projY": proj_y,
+                            "directX": direct_x,
+                            "directY": direct_y,
+                            "deltaX_mappedMinusDirect": delta_x,
+                            "deltaY_mappedMinusDirect": delta_y,
+                            "nearestEdgeDistanceCurrentM": dist_current,
+                            "nearestEdgeDistanceDirectM": dist_direct,
+                        },
+                    )
+                    self._agent_debug_conversion_logs += 1
                 
                 return (x, y)
             except Exception as e:

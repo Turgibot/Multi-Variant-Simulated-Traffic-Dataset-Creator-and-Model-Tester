@@ -6,7 +6,9 @@ Simple page with just map, network, GPS points, and connecting line.
 import copy
 import csv
 import gzip
+import json
 import math
+import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
@@ -30,6 +32,28 @@ from src.utils.trip_validator import (DEFAULT_MAX_SEGMENT_DISTANCE,
                                       TripValidationResult,
                                       split_at_invalid_segments,
                                       validate_trip_segments)
+
+DEBUG_LOG_PATH = "/home/guy/Projects/Traffic/Multi-Variant-Simulated-Traffic-Dataset-Creator-and-Model-Tester/.cursor/debug-b2b643.log"
+DEBUG_SESSION_ID = "b2b643"
+
+
+def _write_agent_debug_log(run_id: str, hypothesis_id: str, location: str, message: str, data: Dict) -> None:
+    # region agent log
+    try:
+        payload = {
+            "sessionId": DEBUG_SESSION_ID,
+            "runId": run_id,
+            "hypothesisId": hypothesis_id,
+            "location": location,
+            "message": message,
+            "data": data,
+            "timestamp": int(time.time() * 1000),
+        }
+        with open(DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=True) + "\n")
+    except Exception:
+        pass
+    # endregion
 
 
 class TripCountWorker(QThread):
@@ -540,6 +564,19 @@ class DebugTrajectoryPage(QWidget):
         
         # Store train_csv path for later use
         self.train_csv_path = train_csv
+        _write_agent_debug_log(
+            run_id="pre-fix",
+            hypothesis_id="H2",
+            location="debug_trajectory_page.py:load_network_and_trajectory",
+            message="Resolved project runtime inputs",
+            data={
+                "projectName": self.project_name,
+                "projectPath": str(project_path),
+                "networkFile": str(network_file),
+                "trainCsvPath": str(train_csv) if train_csv else None,
+                "trainCsvExists": bool(train_csv and train_csv.exists()),
+            },
+        )
         
         # Count trajectories in background
         if train_csv and train_csv.exists():
@@ -1399,6 +1436,21 @@ class DebugTrajectoryPage(QWidget):
                             if polyline_start != -1:
                                 polyline_str = line[polyline_start+1:].strip().rstrip('"')
                                 polyline = ast.literal_eval(polyline_str)
+                                first_point = polyline[0] if polyline else None
+                                _write_agent_debug_log(
+                                    run_id="pre-fix",
+                                    hypothesis_id="H3",
+                                    location="debug_trajectory_page.py:_load_trip_polyline",
+                                    message="Loaded raw trajectory polyline sample",
+                                    data={
+                                        "projectName": self.project_name,
+                                        "tripNum": trip_num,
+                                        "pointCount": len(polyline),
+                                        "firstPoint": first_point,
+                                        "firstPointLonRange": bool(first_point and -9.5 < first_point[0] < -7.0),
+                                        "firstPointLatRange": bool(first_point and 40.0 < first_point[1] < 42.0),
+                                    },
+                                )
                                 return polyline
                         except Exception as e:
                             self.log(f"Error parsing polyline: {e}")
@@ -1528,6 +1580,40 @@ class DebugTrajectoryPage(QWidget):
                 # Debug: Log first 2 GPS points conversion
                 if idx < 2:
                     self.log(f"  [GPS Conversion] Point {idx+1}: GPS=({lon:.6f}, {lat:.6f}) -> SUMO=({x:.1f}, {y:.1f}) [ORIGINAL, not Y-flipped]")
+                if idx == 0:
+                    parser = self.network_parser
+                    direct_x = None
+                    direct_y = None
+                    dist_current = None
+                    dist_direct = None
+                    if parser.transformer is not None and parser.net_offset:
+                        proj_x, proj_y = parser.transformer.transform(lon, lat)
+                        direct_x = proj_x + parser.net_offset["x"]
+                        direct_y = proj_y + parser.net_offset["y"]
+                    nearest_current = parser.find_nearest_edge(x, y)
+                    if nearest_current:
+                        dist_current = nearest_current[1]
+                    if direct_x is not None and direct_y is not None:
+                        nearest_direct = parser.find_nearest_edge(direct_x, direct_y)
+                        if nearest_direct:
+                            dist_direct = nearest_direct[1]
+                    _write_agent_debug_log(
+                        run_id="pre-fix",
+                        hypothesis_id="H5",
+                        location="debug_trajectory_page.py:_draw_trajectory",
+                        message="Compared nearest-edge distance for first point",
+                        data={
+                            "projectName": self.project_name,
+                            "gpsLon": lon,
+                            "gpsLat": lat,
+                            "currentX": x,
+                            "currentY": y,
+                            "directNetOffsetX": direct_x,
+                            "directNetOffsetY": direct_y,
+                            "nearestEdgeDistanceCurrentM": dist_current,
+                            "nearestEdgeDistanceDirectM": dist_direct,
+                        },
+                    )
         
         # Convert bounding box polyline (original untrimmed) to SUMO coordinates for bounding box calculation
         sumo_points_original_for_bbox = []  # Store in ORIGINAL SUMO coordinates (for bounding box)

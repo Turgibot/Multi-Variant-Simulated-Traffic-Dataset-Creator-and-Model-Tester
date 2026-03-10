@@ -26,6 +26,7 @@ from src.utils.network_parser import NetworkParser
 from src.utils.route_finding import (EdgeSpatialIndex, build_edges_data,
                                      build_node_positions,
                                      compute_green_orange_edges,
+                                     point_to_polyline_distance,
                                      project_point_onto_polyline,
                                      project_point_onto_polyline_with_segment,
                                      shortest_path_dijkstra)
@@ -675,6 +676,7 @@ class DatasetConversionPage(QWidget):
         self._cached_route_num = None
         self._cached_original_polyline = None
         self._cached_route_data = None  # Tuple: (invalid_segments, real_start_idx, real_end_idx, segment_trim_data)
+        self._applied_map_offset = (0.0, 0.0)
         
         self.init_ui()
         
@@ -860,7 +862,7 @@ class DatasetConversionPage(QWidget):
                 min-width: 80px;
             }
         """)
-        self.map_offset_x_spinbox.valueChanged.connect(self.on_map_offset_changed)
+        self.map_offset_x_spinbox.valueChanged.connect(lambda _: self._schedule_save_settings())
         self.map_offset_x_spinbox.setVisible(False)  # Hidden until map is loaded
         map_header_layout.addWidget(self.map_offset_x_spinbox)
         
@@ -886,9 +888,29 @@ class DatasetConversionPage(QWidget):
                 min-width: 80px;
             }
         """)
-        self.map_offset_y_spinbox.valueChanged.connect(self.on_map_offset_changed)
+        self.map_offset_y_spinbox.valueChanged.connect(lambda _: self._schedule_save_settings())
         self.map_offset_y_spinbox.setVisible(False)  # Hidden until map is loaded
         map_header_layout.addWidget(self.map_offset_y_spinbox)
+
+        self.map_offset_update_btn = QPushButton("Update")
+        self.map_offset_update_btn.setToolTip("Apply GPS offset to current route display")
+        self.map_offset_update_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #607D8B;
+                color: white;
+                border: none;
+                padding: 4px 10px;
+                border-radius: 3px;
+                font-size: 10px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #546E7A;
+            }
+        """)
+        self.map_offset_update_btn.clicked.connect(self.on_map_offset_changed)
+        self.map_offset_update_btn.setVisible(False)
+        map_header_layout.addWidget(self.map_offset_update_btn)
         
         map_header_layout.addSpacing(10)
         
@@ -2337,15 +2359,23 @@ class DatasetConversionPage(QWidget):
             self.log(f"SUMO network: {'shown' if show_network else 'hidden'}")
             self.map_view.set_network_visible(show_network)
     
-    def on_map_offset_changed(self, value: float):
-        """Store GPS offset values. Applied when user clicks Show route."""
+    def on_map_offset_changed(self):
+        """Apply GPS offset values. If changed, clear current drawings."""
         self._schedule_save_settings()
         
         if self.map_view:
             x_offset = self.map_offset_x_spinbox.value()
             y_offset = self.map_offset_y_spinbox.value()
+            prev_offset = getattr(self, "_applied_map_offset", (None, None))
+            changed = prev_offset != (x_offset, y_offset)
             self.map_view.set_map_offset(x_offset, y_offset)
             self.log(f"GPS offset: X={x_offset:.1f}m, Y={y_offset:.1f}m")
+            if changed:
+                # Clear drawn route/polygon so user can explicitly redraw with new offset.
+                self.clear_route_display(hide_subsections=True)
+                self._current_segments = None
+                self.route_info_label.setText("Offset updated. Click Show to redraw route.")
+            self._applied_map_offset = (x_offset, y_offset)
     
     def is_map_ready(self) -> bool:
         """Check if the map is loaded."""
@@ -2471,6 +2501,7 @@ class DatasetConversionPage(QWidget):
             self.map_offset_y_label.setVisible(True)
             self.map_offset_x_spinbox.setVisible(True)
             self.map_offset_y_spinbox.setVisible(True)
+            self.map_offset_update_btn.setVisible(True)
             self.load_network_async(net_file)
         else:
             self.map_status.setText("Network map not found\nClick to download from OpenStreetMap")
@@ -2487,6 +2518,7 @@ class DatasetConversionPage(QWidget):
             self.map_offset_y_label.setVisible(False)
             self.map_offset_x_spinbox.setVisible(False)
             self.map_offset_y_spinbox.setVisible(False)
+            self.map_offset_update_btn.setVisible(False)
             self.map_status_label.setText("Map not loaded - click 'Download & Render Map'")
         
         # Check dataset status
@@ -3233,6 +3265,7 @@ class DatasetConversionPage(QWidget):
                 self.map_offset_y_label.setVisible(True)
                 self.map_offset_x_spinbox.setVisible(True)
                 self.map_offset_y_spinbox.setVisible(True)
+                self.map_offset_update_btn.setVisible(True)
                 self.load_network_async(net_file)
             
             # Check dataset status
@@ -3255,6 +3288,7 @@ class DatasetConversionPage(QWidget):
             self.map_offset_y_label.setVisible(False)
             self.map_offset_x_spinbox.setVisible(False)
             self.map_offset_y_spinbox.setVisible(False)
+            self.map_offset_update_btn.setVisible(False)
 
     def log(self, message: str):
         """Add a message to the log."""
@@ -3264,6 +3298,35 @@ class DatasetConversionPage(QWidget):
         # Scroll to bottom
         scrollbar = self.log_text.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
+
+    def _agent_debug_log(
+        self,
+        hypothesis_id: str,
+        location: str,
+        message: str,
+        data: dict,
+        run_id: str = "initial",
+    ) -> None:
+        """Write compact NDJSON debug logs for runtime bug investigation."""
+        try:
+            payload = {
+                "sessionId": "a91ee3",
+                "runId": run_id,
+                "hypothesisId": hypothesis_id,
+                "location": location,
+                "message": message,
+                "data": data,
+                "timestamp": int(__import__("time").time() * 1000),
+            }
+            with open(
+                "/home/guy/Projects/Traffic/Multi-Variant-Simulated-Traffic-Dataset-Creator-and-Model-Tester/.cursor/debug-a91ee3.log",
+                "a",
+                encoding="utf-8",
+            ) as f:
+                f.write(json.dumps(payload, ensure_ascii=True) + "\n")
+        except Exception:
+            # Never let debug logging affect normal app flow.
+            pass
     
     def get_settings_path(self) -> Path:
         """Get the path to the settings JSON file."""
@@ -3745,6 +3808,21 @@ class DatasetConversionPage(QWidget):
         """Display the selected route on the map."""
         route_num = self.route_spinbox.value()
         train_path = self.train_path_input.text().strip()
+        # region agent log
+        self._agent_debug_log(
+            "H8",
+            "dataset_conversion_page.py:show_selected_route:entry",
+            "route display requested",
+            {
+                "projectPath": str(getattr(self, "project_path", "")),
+                "routeNum": int(route_num),
+                "trainPath": train_path,
+                "cachedRouteNum": int(self._cached_route_num) if self._cached_route_num is not None else None,
+                "hasCachedData": bool(self._cached_route_data is not None),
+                "cachedTrainPath": getattr(self, "_cached_route_train_path", None),
+            },
+        )
+        # endregion
         
         if not train_path or not Path(train_path).exists():
             QMessageBox.warning(self, "Error", "Train dataset not found.")
@@ -3756,6 +3834,20 @@ class DatasetConversionPage(QWidget):
         
         # Check if we have cached data for this route number
         if self._cached_route_num == route_num and self._cached_route_data is not None:
+            # region agent log
+            self._agent_debug_log(
+                "H9",
+                "dataset_conversion_page.py:show_selected_route:cache_hit",
+                "using cached route data",
+                {
+                    "projectPath": str(getattr(self, "project_path", "")),
+                    "routeNum": int(route_num),
+                    "trainPath": train_path,
+                    "cachedTrainPath": getattr(self, "_cached_route_train_path", None),
+                    "cachedPolylinePoints": len(self._cached_original_polyline or []),
+                },
+            )
+            # endregion
             # Use cached data (checkbox change - no need to reload)
             original_polyline = self._cached_original_polyline
             invalid_segments, real_start_idx, real_end_idx, segment_trim_data = self._cached_route_data
@@ -3801,8 +3893,22 @@ class DatasetConversionPage(QWidget):
             return
         original_polyline, invalid_segments, real_start_idx, real_end_idx, segment_trim_data = result
         self._cached_route_num = route_num
+        self._cached_route_train_path = self.train_path_input.text().strip()
         self._cached_original_polyline = original_polyline
         self._cached_route_data = (invalid_segments, real_start_idx, real_end_idx, segment_trim_data)
+        # region agent log
+        self._agent_debug_log(
+            "H10",
+            "dataset_conversion_page.py:_on_route_load_finished:cache_store",
+            "stored route cache",
+            {
+                "projectPath": str(getattr(self, "project_path", "")),
+                "routeNum": int(route_num),
+                "cachedTrainPath": self._cached_route_train_path,
+                "polylinePoints": len(original_polyline or []),
+            },
+        )
+        # endregion
         self._apply_route_display(
             original_polyline, invalid_segments, real_start_idx, real_end_idx, segment_trim_data, route_num
         )
@@ -6031,6 +6137,20 @@ class DatasetConversionPage(QWidget):
         """Check if a SUMO route exists for this segment (view_network logic). Returns (True, '') if route found
         and all GPS points are within MAX_SUMO_ROUTE_DISTANCE_M of the route. Returns (False, reason) when rejected."""
         seg_label = f"Segment {seg_idx + 1}"
+        # region agent log
+        self._agent_debug_log(
+            "H1",
+            "dataset_conversion_page.py:_segment_has_sumo_route:entry",
+            "segment route check started",
+            {
+                "projectPath": str(getattr(self, "project_path", "")),
+                "segmentIndex": seg_idx,
+                "segmentPointCount": len(segment_polyline or []),
+                "trainPath": self.train_path_input.text().strip() if hasattr(self, "train_path_input") else "",
+                "routeNum": int(self.route_spinbox.value()) if hasattr(self, "route_spinbox") else None,
+            },
+        )
+        # endregion
         if not self.network_parser or not segment_polyline:
             msg = "Network not loaded or segment empty"
             self.log(f"⚠️ {seg_label} SUMO route: not found ({msg})")
@@ -6062,6 +6182,21 @@ class DatasetConversionPage(QWidget):
         orange_ids, green_ids, start_id, end_id, candidates = compute_green_orange_edges(
             edges_data, sumo_points_flipped, y_min, y_max, top_per_segment=5
         )
+        # region agent log
+        self._agent_debug_log(
+            "H2",
+            "dataset_conversion_page.py:_segment_has_sumo_route:after_compute_green_orange_edges",
+            "candidate edges computed",
+            {
+                "orangeCount": len(orange_ids),
+                "greenCount": len(green_ids),
+                "startEdge": start_id,
+                "endEdge": end_id,
+                "candidateCount": len(candidates or []),
+                "firstCandidates": (candidates or [])[:5],
+            },
+        )
+        # endregion
         if not start_id or not end_id:
             msg = "No start or end edges for trajectory"
             self.log(f"⚠️ {seg_label} SUMO route: not found ({msg})")
@@ -6069,57 +6204,191 @@ class DatasetConversionPage(QWidget):
         node_positions = build_node_positions(self.network_parser)
         goal_xy = sumo_points_flipped[-1]
         base_edges = self._compute_edges_in_polygon(self._current_segments) if self._current_segments else None
+        # region agent log
+        self._agent_debug_log(
+            "H3",
+            "dataset_conversion_page.py:_segment_has_sumo_route:after_polygon_filter",
+            "polygon edge filter prepared",
+            {
+                "polygonEdgesCount": len(base_edges) if base_edges is not None else None,
+                "startInPolygonEdges": bool(base_edges is not None and start_id in base_edges),
+                "endInPolygonEdges": bool(base_edges is not None and end_id in base_edges),
+            },
+        )
+        # endregion
         max_tries = min(5, len(candidates or []))
+        end_px, end_py_display = sumo_points_flipped[-1]
+        end_py_sumo = flip_y(end_py_display)
+        end_by_dist = []
+        for edge_id, _ed, shape_points in edges_data:
+            d_end = point_to_polyline_distance(end_px, end_py_sumo, shape_points)
+            end_by_dist.append((d_end, edge_id))
+        end_by_dist.sort(key=lambda x: x[0])
+        nearest_end_candidates = [eid for _, eid in end_by_dist[:5]]
+        end_candidates = [end_id] + [eid for eid in nearest_end_candidates if eid != end_id]
         max_star_distance_m = self.MAX_SUMO_ROUTE_DISTANCE_M
         worst_dist_overall = 0.0
         worst_idx_overall = 0
-        for try_idx in range(max_tries):
-            cand = (candidates or [])[try_idx]
-            edges_allowed = (base_edges | {cand, end_id}) if base_edges is not None else None
-            path_edges = shortest_path_dijkstra(
-                self.network_parser,
-                cand,
-                end_id,
-                orange_ids=orange_ids,
-                green_ids=green_ids,
-                node_positions=node_positions,
-                goal_xy=goal_xy,
-                edges_in_polygon=edges_allowed,
-            )
-            if not path_edges:
-                continue
-            # Build path points and validate 100m distance (route rejected if any point too far)
-            path_points = []
-            for eid in path_edges:
-                shape_points = edge_shapes.get(eid)
-                if not shape_points:
+        for end_try_idx, end_target in enumerate(end_candidates):
+            for try_idx in range(max_tries):
+                cand = (candidates or [])[try_idx]
+                edges_allowed = (base_edges | {cand, end_target}) if base_edges is not None else None
+                path_edges = shortest_path_dijkstra(
+                    self.network_parser,
+                    cand,
+                    end_target,
+                    orange_ids=orange_ids,
+                    green_ids=green_ids,
+                    node_positions=node_positions,
+                    goal_xy=goal_xy,
+                    edges_in_polygon=edges_allowed,
+                )
+                # region agent log
+                self._agent_debug_log(
+                    "H4",
+                    "dataset_conversion_page.py:_segment_has_sumo_route:after_shortest_path",
+                    "candidate path attempt",
+                    {
+                        "endTryIndex": end_try_idx,
+                        "tryIndex": try_idx,
+                        "candidateStartEdge": cand,
+                        "targetEndEdge": end_target,
+                        "edgesAllowedCount": len(edges_allowed) if edges_allowed is not None else None,
+                        "pathFound": bool(path_edges),
+                        "pathEdgeCount": len(path_edges or []),
+                    },
+                )
+                # endregion
+                if not path_edges:
                     continue
-                for x_s, y_s in shape_points:
-                    path_points.append((x_s, flip_y(y_s)))
-            path_points_flat = [[p[0], p[1]] for p in path_points]
-            all_within = True
-            worst_dist = 0.0
-            worst_idx = 0
-            for idx, (px, py) in enumerate(sumo_points_flipped):
-                proj_x, proj_y = project_point_onto_polyline(px, py, path_points_flat)
-                dist_m = math.sqrt((px - proj_x) ** 2 + (py - proj_y) ** 2)
-                if dist_m > max_star_distance_m:
-                    all_within = False
-                    if dist_m > worst_dist:
-                        worst_dist = dist_m
-                        worst_idx = idx
-            if all_within:
-                return True, ""
-            if worst_dist > worst_dist_overall:
-                worst_dist_overall = worst_dist
-                worst_idx_overall = worst_idx
+                # Build path points and validate 100m distance (route rejected if any point too far)
+                path_points = []
+                for eid in path_edges:
+                    shape_points = edge_shapes.get(eid)
+                    if not shape_points:
+                        continue
+                    for x_s, y_s in shape_points:
+                        path_points.append((x_s, flip_y(y_s)))
+                path_points_flat = [[p[0], p[1]] for p in path_points]
+                all_within = True
+                worst_dist = 0.0
+                worst_idx = 0
+                for idx, (px, py) in enumerate(sumo_points_flipped):
+                    proj_x, proj_y = project_point_onto_polyline(px, py, path_points_flat)
+                    dist_m = math.sqrt((px - proj_x) ** 2 + (py - proj_y) ** 2)
+                    if dist_m > max_star_distance_m:
+                        all_within = False
+                        if dist_m > worst_dist:
+                            worst_dist = dist_m
+                            worst_idx = idx
+                if all_within:
+                    # region agent log
+                    self._agent_debug_log(
+                        "H7",
+                        "dataset_conversion_page.py:_segment_has_sumo_route:end_edge_choice",
+                        "route accepted with end-edge selection",
+                        {
+                            "selectedEndEdge": end_id,
+                            "acceptedEndEdge": end_target,
+                            "acceptedTryIndex": try_idx,
+                            "candidateStartEdge": cand,
+                            "pathEdgeCount": len(path_edges),
+                        },
+                    )
+                    # endregion
+                    return True, ""
+                if worst_dist > worst_dist_overall:
+                    worst_dist_overall = worst_dist
+                    worst_idx_overall = worst_idx
         if worst_dist_overall > max_star_distance_m:
             msg = f"GPS point {worst_idx_overall + 1} is {worst_dist_overall:.0f}m from route (max {max_star_distance_m:.0f}m)"
             self.log(f"⚠️ {seg_label} SUMO route: rejected ({msg})")
+            # region agent log
+            self._agent_debug_log(
+                "H5",
+                "dataset_conversion_page.py:_segment_has_sumo_route:failure_distance",
+                "route rejected due to distance threshold",
+                {
+                    "worstPointIndex1Based": worst_idx_overall + 1,
+                    "worstDistanceMeters": round(worst_dist_overall, 3),
+                    "maxDistanceMeters": max_star_distance_m,
+                },
+            )
+            # endregion
             return False, msg
         else:
+            # region agent log
+            # Diagnostic-only: compare nearby end-edge alternatives to validate end-edge selection quality.
+            try:
+                end_candidates = nearest_end_candidates
+                start_candidates_diag = (candidates or [])[:5]
+                reach_with_polygon = []
+                reach_without_polygon = []
+                for s_eid in start_candidates_diag:
+                    for e_eid in end_candidates:
+                        edges_allowed_diag = (base_edges | {s_eid, e_eid}) if base_edges is not None else None
+                        p_with = shortest_path_dijkstra(
+                            self.network_parser,
+                            s_eid,
+                            e_eid,
+                            orange_ids=orange_ids,
+                            green_ids=green_ids,
+                            node_positions=node_positions,
+                            goal_xy=goal_xy,
+                            edges_in_polygon=edges_allowed_diag,
+                        )
+                        p_without = shortest_path_dijkstra(
+                            self.network_parser,
+                            s_eid,
+                            e_eid,
+                            orange_ids=orange_ids,
+                            green_ids=green_ids,
+                            node_positions=node_positions,
+                            goal_xy=goal_xy,
+                            edges_in_polygon=None,
+                        )
+                        if p_with:
+                            reach_with_polygon.append({"start": s_eid, "end": e_eid, "len": len(p_with)})
+                        if p_without:
+                            reach_without_polygon.append({"start": s_eid, "end": e_eid, "len": len(p_without)})
+                self._agent_debug_log(
+                    "H6",
+                    "dataset_conversion_page.py:_segment_has_sumo_route:diagnostic_end_candidates",
+                    "end-edge alternatives reachability diagnostic",
+                    {
+                        "selectedEndEdge": end_id,
+                        "topEndCandidates": end_candidates,
+                        "startCandidates": start_candidates_diag,
+                        "reachableWithPolygonCount": len(reach_with_polygon),
+                        "reachableWithoutPolygonCount": len(reach_without_polygon),
+                        "sampleReachableWithPolygon": reach_with_polygon[:5],
+                        "sampleReachableWithoutPolygon": reach_without_polygon[:5],
+                    },
+                )
+            except Exception as diag_exc:
+                self._agent_debug_log(
+                    "H6",
+                    "dataset_conversion_page.py:_segment_has_sumo_route:diagnostic_end_candidates_error",
+                    "end-edge alternatives diagnostic failed",
+                    {"error": str(diag_exc)},
+                )
+            # endregion
             msg = "No path between start and end edges"
             self.log(f"⚠️ {seg_label} SUMO route: not found ({msg})")
+            # region agent log
+            self._agent_debug_log(
+                "H4",
+                "dataset_conversion_page.py:_segment_has_sumo_route:failure_no_path",
+                "no path found for all candidate starts",
+                {
+                    "maxTries": max_tries,
+                    "startEdge": start_id,
+                    "endEdge": end_id,
+                    "nearestEndCandidates": nearest_end_candidates,
+                    "candidateCount": len(candidates or []),
+                },
+            )
+            # endregion
             return False, msg
 
     def _draw_segment_sumo_route(self, segment_polyline: List[List[float]], seg_idx: int = 0) -> None:
@@ -6165,50 +6434,62 @@ class DatasetConversionPage(QWidget):
         goal_xy = sumo_points_flipped[-1]
         base_edges = self._compute_edges_in_polygon(self._current_segments) if self._current_segments else None
         max_tries = min(5, len(candidates or []))
+        end_px, end_py_display = sumo_points_flipped[-1]
+        end_py_sumo = flip_y(end_py_display)
+        end_by_dist = []
+        for edge_id, _ed, shape_points in edges_data:
+            d_end = point_to_polyline_distance(end_px, end_py_sumo, shape_points)
+            end_by_dist.append((d_end, edge_id))
+        end_by_dist.sort(key=lambda x: x[0])
+        nearest_end_candidates = [eid for _, eid in end_by_dist[:5]]
+        end_candidates = [end_id] + [eid for eid in nearest_end_candidates if eid != end_id]
         max_star_distance_m = self.MAX_SUMO_ROUTE_DISTANCE_M
         path_edges: List[str] = []
         worst_dist_overall = 0.0
         worst_idx_overall = 0
-        for try_idx in range(max_tries):
-            cand = (candidates or [])[try_idx]
-            edges_allowed = (base_edges | {cand, end_id}) if base_edges is not None else None
-            candidate_path = shortest_path_dijkstra(
-                self.network_parser,
-                cand,
-                end_id,
-                orange_ids=orange_ids,
-                green_ids=green_ids,
-                node_positions=node_positions,
-                goal_xy=goal_xy,
-                edges_in_polygon=edges_allowed,
-            )
-            if not candidate_path:
-                continue
-            path_points = []
-            for eid in candidate_path:
-                shape_points = edge_shapes.get(eid)
-                if not shape_points:
+        for end_target in end_candidates:
+            for try_idx in range(max_tries):
+                cand = (candidates or [])[try_idx]
+                edges_allowed = (base_edges | {cand, end_target}) if base_edges is not None else None
+                candidate_path = shortest_path_dijkstra(
+                    self.network_parser,
+                    cand,
+                    end_target,
+                    orange_ids=orange_ids,
+                    green_ids=green_ids,
+                    node_positions=node_positions,
+                    goal_xy=goal_xy,
+                    edges_in_polygon=edges_allowed,
+                )
+                if not candidate_path:
                     continue
-                for x_s, y_s in shape_points:
-                    path_points.append((x_s, flip_y(y_s)))
-            path_points_flat = [[p[0], p[1]] for p in path_points]
-            all_within = True
-            worst_dist = 0.0
-            worst_idx = 0
-            for idx, (px, py) in enumerate(sumo_points_flipped):
-                proj_x, proj_y = project_point_onto_polyline(px, py, path_points_flat)
-                dist_m = math.sqrt((px - proj_x) ** 2 + (py - proj_y) ** 2)
-                if dist_m > max_star_distance_m:
-                    all_within = False
-                    if dist_m > worst_dist:
-                        worst_dist = dist_m
-                        worst_idx = idx
-            if all_within:
-                path_edges = candidate_path
+                path_points = []
+                for eid in candidate_path:
+                    shape_points = edge_shapes.get(eid)
+                    if not shape_points:
+                        continue
+                    for x_s, y_s in shape_points:
+                        path_points.append((x_s, flip_y(y_s)))
+                path_points_flat = [[p[0], p[1]] for p in path_points]
+                all_within = True
+                worst_dist = 0.0
+                worst_idx = 0
+                for idx, (px, py) in enumerate(sumo_points_flipped):
+                    proj_x, proj_y = project_point_onto_polyline(px, py, path_points_flat)
+                    dist_m = math.sqrt((px - proj_x) ** 2 + (py - proj_y) ** 2)
+                    if dist_m > max_star_distance_m:
+                        all_within = False
+                        if dist_m > worst_dist:
+                            worst_dist = dist_m
+                            worst_idx = idx
+                if all_within:
+                    path_edges = candidate_path
+                    break
+                if worst_dist > worst_dist_overall:
+                    worst_dist_overall = worst_dist
+                    worst_idx_overall = worst_idx
+            if path_edges:
                 break
-            if worst_dist > worst_dist_overall:
-                worst_dist_overall = worst_dist
-                worst_idx_overall = worst_idx
         if not path_edges:
             if worst_dist_overall > 0:
                 msg = f"GPS point {worst_idx_overall + 1} is {worst_dist_overall:.0f}m from route (max {max_star_distance_m:.0f}m)"

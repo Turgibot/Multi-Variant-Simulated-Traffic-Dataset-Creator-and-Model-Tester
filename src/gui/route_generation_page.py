@@ -4,6 +4,9 @@ Route Generation page for creating SUMO route files manually.
 
 import ast
 import csv
+import gzip
+import json
+import re
 import string
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -14,8 +17,10 @@ from PySide6.QtCore import QPointF, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import (QBrush, QColor, QFont, QGuiApplication, QPainter,
                            QPen)
 from PySide6.QtWidgets import (QFrame, QGraphicsView, QGroupBox, QHBoxLayout,
-                               QLabel, QLineEdit, QMessageBox, QPushButton,
-                               QScrollArea, QSizePolicy, QVBoxLayout, QWidget)
+                               QFileDialog, QFormLayout, QLabel, QLineEdit,
+                               QMessageBox, QPlainTextEdit, QPushButton,
+                               QScrollArea, QSizePolicy, QSpinBox,
+                               QDoubleSpinBox, QVBoxLayout, QWidget)
 
 from src.gui.simulation_view import SimulationView
 from src.utils.network_parser import NetworkParser
@@ -165,13 +170,13 @@ class AreaSelectionView(SimulationView):
                 for zone_rect in zone_areas:
                     # Draw zone area - darker if being displayed
                     if is_displayed:
-                        # Darker fill for displayed zones
+                        # Highlight displayed zones via stronger outline (no fill tint).
                         painter.setPen(QPen(zone_color, 3))
-                        painter.setBrush(QBrush(QColor(zone_color.red(), zone_color.green(), zone_color.blue(), 80)))
+                        painter.setBrush(Qt.NoBrush)
                     else:
-                        # Normal fill
+                        # Standard zone outline only (no background tint).
                         painter.setPen(QPen(zone_color, 2))
-                        painter.setBrush(QBrush(QColor(zone_color.red(), zone_color.green(), zone_color.blue(), 30)))
+                        painter.setBrush(Qt.NoBrush)
                     painter.drawRect(zone_rect)
                     
                     # Draw zone name at top corner of each area
@@ -251,13 +256,21 @@ class RouteGenerationPage(QWidget):
         self.project_name = project_name
         self.project_path = project_path
         self.config_manager = SUMOConfigManager(project_path)
+        self.route_generation_settings = self.config_manager.load_route_generation_settings()
         self.network_parser = None
         self.route_generator = None
         self.zones = {}  # Dict of {zone_id: {'name': str, 'color': QColor, 'widget': QWidget, 'areas': [QRectF]}}
         self.zone_counter = 0  # Counter for zone letters (A, B, C, ...)
         self.current_zone_id = None  # Currently active zone for selection
-        self.zones_locked = False  # Whether zones are locked (done button clicked)
-        self.displayed_zones = set()  # Set of zone IDs that are currently being displayed (highlighted)
+        self.zones_locked = False  # Applied after zones/widgets are created
+        self._restore_zones_locked = bool(self.route_generation_settings.get('zones_locked', False))
+        saved_displayed = self.route_generation_settings.get('displayed_zones', [])
+        self.displayed_zones = set(saved_displayed) if isinstance(saved_displayed, list) else set()
+        self.detected_zones = {}  # zone_name -> {'edges': set[str], 'nodes': set[str], 'color': QColor}
+        self.detected_visible_zones = set()
+        self.detected_zone_row_widgets = {}
+        self.vehicle_type_entries = []
+        self.zone_allocation_entries = {}
         
         # Track assignments: junction_id -> zone_id, edge_id -> zone_id
         self.junction_assignments = {}  # Dict of {junction_id: zone_id}
@@ -269,6 +282,7 @@ class RouteGenerationPage(QWidget):
         # This ensures saved zones are loaded first, then Porto neighborhoods are added if needed
         if hasattr(self, 'zones_container'):
             self.load_saved_zones()
+            self._restore_route_generation_state()
     
     def init_ui(self):
         """Initialize the page UI."""
@@ -313,16 +327,18 @@ class RouteGenerationPage(QWidget):
         map_layout.setSpacing(10)
         
         self.map_view = AreaSelectionView()
+        self.map_view.set_edge_thickness_multiplier(1.6)
         self.map_view.setMinimumSize(600, 500)
         self.map_view.area_selected.connect(self.on_area_selected)
         self.map_view.zone_area_selected.connect(self.on_zone_area_selected)
+        self.map_view.network_render_finished.connect(self.on_map_network_render_finished)
         # Store reference to parent for zones_locked access
         self.map_view.route_page = self
         map_layout.addWidget(self.map_view)
         map_group.setLayout(map_layout)
         content_layout.addWidget(map_group, stretch=2)
-        
-        # Right side: Route Configuration (scrollable)
+
+        # Right side: Route Configuration (JSON-driven form)
         config_scroll = QScrollArea()
         config_scroll.setWidgetResizable(True)
         config_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -333,7 +349,7 @@ class RouteGenerationPage(QWidget):
                 border: none;
             }
         """)
-        
+
         config_group = QGroupBox("Route Configuration")
         config_group.setStyleSheet("""
             QGroupBox {
@@ -349,116 +365,150 @@ class RouteGenerationPage(QWidget):
                 padding: 0 5px;
             }
         """)
-        # Prevent horizontal overflow - ensure it respects available width
-        config_group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         config_layout = QVBoxLayout()
-        config_layout.setSpacing(15)
-        config_layout.setContentsMargins(10, 10, 10, 10)
-        
-        # Zones section
-        zones_header = QHBoxLayout()
-        zones_header.setSpacing(10)
-        
-        zones_title = QLabel("Zones")
-        zones_title.setFont(QFont("Arial", 14, QFont.Bold))
-        zones_title.setStyleSheet("color: #333;")
-        zones_header.addWidget(zones_title)
-        
-        add_zone_btn = QPushButton("+")
-        add_zone_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #4CAF50;
-                color: white;
-                border: none;
-                border-radius: 15px;
-                font-weight: bold;
-                font-size: 18px;
-                min-width: 30px;
-                max-width: 30px;
-                min-height: 30px;
-                max-height: 30px;
-            }
-            QPushButton:hover {
-                background-color: #45a049;
-            }
-        """)
-        add_zone_btn.clicked.connect(self.add_zone)
-        zones_header.addWidget(add_zone_btn)
-        
-        # Statistics label showing total and selected roads/junctions
+        config_layout.setContentsMargins(12, 12, 12, 12)
+        config_layout.setSpacing(10)
+
+        # Detected zones block
+        detected_group = QGroupBox("Zones (Neighborhoods)")
+        detected_layout = QVBoxLayout()
+        detected_layout.setSpacing(8)
+
+        detected_top_row = QHBoxLayout()
+        self.detect_zones_btn = QPushButton("Update Zones")
+        self.detect_zones_btn.setToolTip(
+            "A zone is an attribute attached to both edges and nodes.\n"
+            "Detect Zones scans the loaded network file, detects zones, counts\n"
+            "their edges/nodes, and lets you show/hide each zone on the map."
+        )
+        self.detect_zones_btn.clicked.connect(self.detect_zones_from_network)
+        detected_top_row.addWidget(self.detect_zones_btn)
+        detected_top_row.addStretch()
+        detected_layout.addLayout(detected_top_row)
+
+        self.detected_zones_list_layout = QVBoxLayout()
+        self.detected_zones_list_layout.setSpacing(4)
+        detected_layout.addLayout(self.detected_zones_list_layout)
+
+        self.detected_zones_status = QLabel("No zones detected yet.")
+        self.detected_zones_status.setStyleSheet("color: #666;")
+        detected_layout.addWidget(self.detected_zones_status)
+
+        detected_group.setLayout(detected_layout)
+        config_layout.addWidget(detected_group)
+
+        # Vehicle types block
+        vehicle_types_group = QGroupBox("Vehicle Types")
+        vehicle_types_layout = QVBoxLayout()
+        vehicle_types_layout.setSpacing(8)
+
+        self.vehicle_types_cards_layout = QVBoxLayout()
+        self.vehicle_types_cards_layout.setSpacing(6)
+        vehicle_types_layout.addLayout(self.vehicle_types_cards_layout)
+
+        add_type_row = QHBoxLayout()
+        add_type_btn = QPushButton("+")
+        add_type_btn.setFixedWidth(28)
+        add_type_btn.setToolTip("Add vehicle type")
+        add_type_btn.clicked.connect(self.add_vehicle_type_card)
+        add_type_row.addWidget(add_type_btn)
+        add_type_row.addStretch()
+        vehicle_types_layout.addLayout(add_type_row)
+
+        vehicle_types_group.setLayout(vehicle_types_layout)
+        config_layout.addWidget(vehicle_types_group)
+
+        # Default vehicle types
+        self.add_vehicle_type_card("passenger", 4.5, 1.8, 1.5, 33.33, "blue")
+        self.add_vehicle_type_card("bus", 12.0, 2.5, 3.2, 22.22, "yellow")
+        self.add_vehicle_type_card("truck", 8.0, 2.5, 3.0, 25.0, "red")
+
+        # Zone vehicle allocation block (JSON-structured UI)
+        zone_alloc_group = QGroupBox("Zone Vehicle Allocation")
+        zone_alloc_layout = QVBoxLayout()
+        zone_alloc_layout.setSpacing(8)
+        self.zone_allocation_cards_layout = QVBoxLayout()
+        self.zone_allocation_cards_layout.setSpacing(6)
+        zone_alloc_layout.addLayout(self.zone_allocation_cards_layout)
+        zone_alloc_group.setLayout(zone_alloc_layout)
+        config_layout.addWidget(zone_alloc_group)
+        self.refresh_zone_allocation_section()
+
+        # Core simulation fields
+        core_group = QGroupBox("Core Settings")
+        core_form = QFormLayout()
+
+        snapshot_row = QHBoxLayout()
+        self.snapshot_dir_input = QLineEdit(str((Path(self.project_path) / "snapshots").resolve()))
+        browse_snapshot_btn = QPushButton("Browse")
+        browse_snapshot_btn.clicked.connect(self.browse_snapshot_dir)
+        snapshot_row.addWidget(self.snapshot_dir_input)
+        snapshot_row.addWidget(browse_snapshot_btn)
+        core_form.addRow("snapshot_dir", snapshot_row)
+
+        self.snapshot_interval_spin = QSpinBox()
+        self.snapshot_interval_spin.setRange(1, 3600)
+        self.snapshot_interval_spin.setValue(30)
+        core_form.addRow("snapshot_interval_sec", self.snapshot_interval_spin)
+
+        self.simulation_weeks_spin = QSpinBox()
+        self.simulation_weeks_spin.setRange(1, 520)
+        self.simulation_weeks_spin.setValue(1)
+        core_form.addRow("simulation_weeks", self.simulation_weeks_spin)
+
+        self.total_vehicles_spin = QSpinBox()
+        self.total_vehicles_spin.setRange(1, 10_000_000)
+        self.total_vehicles_spin.setValue(200_000)
+        core_form.addRow("total_num_vehicles", self.total_vehicles_spin)
+
+        self.dev_fraction_spin = QDoubleSpinBox()
+        self.dev_fraction_spin.setRange(0.0, 1.0)
+        self.dev_fraction_spin.setDecimals(3)
+        self.dev_fraction_spin.setSingleStep(0.05)
+        self.dev_fraction_spin.setValue(1.0)
+        core_form.addRow("dev_fraction", self.dev_fraction_spin)
+        core_group.setLayout(core_form)
+        config_layout.addWidget(core_group)
+
+        self.landmarks_editor = QPlainTextEdit()
+        self.landmarks_editor.setMinimumHeight(120)
+        self.landmarks_editor.setPlainText("{}")
+        config_layout.addWidget(QLabel("landmarks (JSON)"))
+        config_layout.addWidget(self.landmarks_editor)
+
+        self.weekday_schedule_editor = QPlainTextEdit()
+        self.weekday_schedule_editor.setMinimumHeight(160)
+        self.weekday_schedule_editor.setPlainText("[]")
+        config_layout.addWidget(QLabel("weekday_schedule (JSON array)"))
+        config_layout.addWidget(self.weekday_schedule_editor)
+
+        actions_row = QHBoxLayout()
+        generate_btn = QPushButton("Generate Preview")
+        generate_btn.clicked.connect(self.generate_config_preview)
+        save_btn = QPushButton("Save Config JSON")
+        save_btn.clicked.connect(self.save_config_json)
+        actions_row.addWidget(generate_btn)
+        actions_row.addWidget(save_btn)
+        actions_row.addStretch()
+        config_layout.addLayout(actions_row)
+
+        self.config_preview = QPlainTextEdit()
+        self.config_preview.setReadOnly(True)
+        self.config_preview.setMinimumHeight(220)
+        config_layout.addWidget(QLabel("Generated JSON Preview"))
+        config_layout.addWidget(self.config_preview)
+
+        # Keep stats label available for existing logic.
         self.stats_label = QLabel("")
-        self.stats_label.setFont(QFont("Arial", 10))
-        self.stats_label.setStyleSheet("color: #666; padding: 5px;")
-        self.stats_label.setWordWrap(True)
-        self.stats_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        zones_header.addWidget(self.stats_label)
-        
-        zones_header.addStretch()
-        
-        # Done button
-        self.done_btn = QPushButton("Done")
-        self.done_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #2196F3;
-                color: white;
-                border: none;
-                padding: 8px 20px;
-                border-radius: 5px;
-                font-size: 12px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #1976D2;
-            }
-            QPushButton:disabled {
-                background-color: #cccccc;
-                color: #666666;
-            }
-        """)
-        self.done_btn.clicked.connect(self.on_done_unlock_clicked)
-        zones_header.addWidget(self.done_btn)
-        
-        config_layout.addLayout(zones_header)
-        
-        # Zones list/container (scrollable with max height = 50% of screen)
-        zones_scroll = QScrollArea()
-        zones_scroll.setWidgetResizable(True)
-        zones_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        zones_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        zones_scroll.setStyleSheet("""
-            QScrollArea {
-                border: 1px solid #ddd;
-                border-radius: 3px;
-                background-color: #fafafa;
-            }
-        """)
-        
-        # Get screen height and set max height to 50%
-        screen = QGuiApplication.primaryScreen()
-        if screen:
-            screen_height = screen.geometry().height()
-            max_zones_height = int(screen_height * 0.5)
-            zones_scroll.setMaximumHeight(max_zones_height)
-        
-        zones_widget = QWidget()
-        self.zones_container = QVBoxLayout()
-        self.zones_container.setSpacing(8)  # Reduced spacing
-        self.zones_container.setContentsMargins(5, 5, 5, 5)
-        zones_widget.setLayout(self.zones_container)
-        zones_scroll.setWidget(zones_widget)
-        
-        config_layout.addWidget(zones_scroll)
-        
+        self.stats_label.setVisible(False)
+        config_layout.addWidget(self.stats_label)
         config_layout.addStretch()
+
         config_group.setLayout(config_layout)
         config_scroll.setWidget(config_group)
-        
-        # Ensure config scroll respects available width and doesn't overflow
-        config_scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         content_layout.addWidget(config_scroll, stretch=1)
-        
+
         main_layout.addLayout(content_layout)
-        
         self.setLayout(main_layout)
     
     def load_network(self):
@@ -490,10 +540,538 @@ class RouteGenerationPage(QWidget):
                         self.network_parser = NetworkParser(str(net_path))
                         self.map_view.load_network(self.network_parser)
                         self.route_generator = RouteXMLGenerator(self.network_parser)
+                        # Auto-detect zones from network attributes on load.
+                        self.detect_zones_from_network()
                         # Update statistics when network is loaded
                         self.update_statistics()
         except Exception as e:
             QMessageBox.warning(self, "Error", f"Failed to load network: {str(e)}")
+
+    def browse_snapshot_dir(self):
+        """Select snapshot output directory."""
+        folder = QFileDialog.getExistingDirectory(
+            self,
+            "Select Snapshot Directory",
+            self.snapshot_dir_input.text().strip() or self.project_path
+        )
+        if folder:
+            self.snapshot_dir_input.setText(folder)
+
+    def _extract_zone_name_from_id(self, entity_id: str) -> Optional[str]:
+        """Extract a zone name from an edge/node id using a simple prefix heuristic."""
+        if not entity_id:
+            return None
+        match = re.search(r"[A-Za-z]", entity_id)
+        if not match:
+            return None
+        return match.group(0).upper()
+
+    def _load_zone_attributes_from_network_file(self) -> Tuple[Dict[str, str], Dict[str, str]]:
+        """Load explicit zone attributes from net file for edges and nodes/junctions."""
+        edge_zone_map: Dict[str, str] = {}
+        node_zone_map: Dict[str, str] = {}
+        if not self.network_parser or not getattr(self.network_parser, "net_file", None):
+            return edge_zone_map, node_zone_map
+
+        net_path = Path(self.network_parser.net_file)
+        if not net_path.exists():
+            return edge_zone_map, node_zone_map
+
+        try:
+            if net_path.suffix == '.gz' or net_path.name.endswith('.gz'):
+                with gzip.open(net_path, 'rb') as f:
+                    tree = ET.parse(f)
+            else:
+                tree = ET.parse(net_path)
+            root = tree.getroot()
+        except Exception:
+            return edge_zone_map, node_zone_map
+
+        def get_zone_value(elem) -> Optional[str]:
+            zone_attr = elem.get('zone')
+            if zone_attr:
+                return zone_attr.strip()
+            for param in elem.findall('param'):
+                if (param.get('key') or '').strip().lower() == 'zone':
+                    value = (param.get('value') or '').strip()
+                    if value:
+                        return value
+            return None
+
+        for edge in root.findall('edge'):
+            edge_id = edge.get('id')
+            if not edge_id:
+                continue
+            zone_value = get_zone_value(edge)
+            if zone_value:
+                edge_zone_map[edge_id] = zone_value
+
+        for node in root.findall('node'):
+            node_id = node.get('id')
+            if not node_id:
+                continue
+            zone_value = get_zone_value(node)
+            if zone_value:
+                node_zone_map[node_id] = zone_value
+
+        for junction in root.findall('junction'):
+            node_id = junction.get('id')
+            if not node_id:
+                continue
+            zone_value = get_zone_value(junction)
+            if zone_value:
+                node_zone_map[node_id] = zone_value
+
+        return edge_zone_map, node_zone_map
+
+    def _clear_detected_zone_rows(self):
+        """Remove detected-zone row widgets from the UI."""
+        while self.detected_zones_list_layout.count():
+            item = self.detected_zones_list_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self.detected_zone_row_widgets = {}
+
+    def detect_zones_from_network(self):
+        """Scan loaded network data and detect zones from edge/node IDs."""
+        if not self.network_parser:
+            QMessageBox.warning(self, "No Network", "Load a network first, then detect zones.")
+            return
+
+        edges = self.network_parser.get_edges()
+        # Rendered nodes are based on get_nodes() if present, otherwise junctions.
+        node_source = self.network_parser.get_nodes()
+        if not node_source:
+            node_source = self.network_parser.get_junctions()
+
+        edge_zone_map, node_zone_map = self._load_zone_attributes_from_network_file()
+        has_explicit_zone_attr = bool(edge_zone_map or node_zone_map)
+
+        zone_edges = {}
+        zone_nodes = {}
+
+        for edge_id, edge_data in edges.items():
+            zone_name = edge_zone_map.get(edge_id)
+            if not zone_name:
+                zone_name = node_zone_map.get(edge_data.get('from', ''))
+            if not zone_name:
+                zone_name = node_zone_map.get(edge_data.get('to', ''))
+            if not zone_name:
+                zone_name = self._extract_zone_name_from_id(edge_id)
+            if not zone_name:
+                zone_name = self._extract_zone_name_from_id(edge_data.get('from', ''))
+            if not zone_name:
+                zone_name = self._extract_zone_name_from_id(edge_data.get('to', ''))
+            if not zone_name:
+                continue
+            zone_edges.setdefault(zone_name, set()).add(edge_id)
+
+        for node_id in node_source.keys():
+            zone_name = node_zone_map.get(node_id)
+            if not zone_name:
+                zone_name = self._extract_zone_name_from_id(node_id)
+            if not zone_name:
+                continue
+            zone_nodes.setdefault(zone_name, set()).add(node_id)
+
+        all_zone_names = sorted(set(zone_edges.keys()) | set(zone_nodes.keys()))
+        self.detected_zones = {}
+        self.detected_visible_zones = set()
+        self._clear_detected_zone_rows()
+
+        palette = [
+            QColor(220, 20, 60),   # crimson
+            QColor(30, 144, 255),  # dodger blue
+            QColor(50, 205, 50),   # lime green
+            QColor(255, 140, 0),   # dark orange
+            QColor(148, 0, 211),   # dark violet
+            QColor(255, 99, 71),   # tomato
+            QColor(0, 206, 209),   # dark turquoise
+            QColor(255, 215, 0),   # gold
+        ]
+
+        for idx, zone_name in enumerate(all_zone_names):
+            color = palette[idx % len(palette)]
+            edge_ids = zone_edges.get(zone_name, set())
+            node_ids = zone_nodes.get(zone_name, set())
+            self.detected_zones[zone_name] = {
+                'edges': edge_ids,
+                'nodes': node_ids,
+                'color': color,
+            }
+            row_widget = self._create_detected_zone_row(zone_name, len(edge_ids), len(node_ids))
+            self.detected_zones_list_layout.addWidget(row_widget)
+
+        if not all_zone_names:
+            self.detected_zones_status.setText("No zones detected from edge/node IDs.")
+        else:
+            mode_label = "attribute-based" if has_explicit_zone_attr else "ID-heuristic"
+            self.detected_zones_status.setText(f"Detected {len(all_zone_names)} zone(s) ({mode_label}).")
+
+        self.refresh_zone_allocation_section()
+        self._apply_detected_zone_colors()
+
+    def _create_detected_zone_row(self, zone_name: str, edge_count: int, node_count: int) -> QWidget:
+        """Create one detected-zone line: zone - edges - nodes - show/hide."""
+        row = QFrame()
+        row_layout = QHBoxLayout()
+        row_layout.setContentsMargins(4, 2, 4, 2)
+        row_layout.setSpacing(8)
+
+        color = self.detected_zones[zone_name]['color']
+        color_chip = QLabel()
+        color_chip.setFixedSize(12, 12)
+        color_chip.setStyleSheet(
+            f"background-color: rgb({color.red()}, {color.green()}, {color.blue()});"
+            "border: 1px solid #444; border-radius: 2px;"
+        )
+        row_layout.addWidget(color_chip)
+
+        row_layout.addWidget(QLabel(zone_name))
+        row_layout.addWidget(QLabel(f"- {edge_count} edges"))
+        row_layout.addWidget(QLabel(f"- {node_count} nodes"))
+        row_layout.addStretch()
+
+        toggle_btn = QPushButton("Show")
+        toggle_btn.setCheckable(True)
+        toggle_btn.toggled.connect(lambda checked, z=zone_name, b=toggle_btn: self.toggle_detected_zone(z, checked, b))
+        row_layout.addWidget(toggle_btn)
+
+        row.setLayout(row_layout)
+        self.detected_zone_row_widgets[zone_name] = row
+        return row
+
+    def toggle_detected_zone(self, zone_name: str, checked: bool, button: QPushButton):
+        """Show/hide one detected zone on the map with its unique color."""
+        if zone_name not in self.detected_zones:
+            return
+
+        if checked:
+            self.detected_visible_zones.add(zone_name)
+            button.setText("Hide")
+        else:
+            self.detected_visible_zones.discard(zone_name)
+            button.setText("Show")
+
+        self._apply_detected_zone_colors()
+
+    def _apply_detected_zone_colors(self):
+        """Apply visible detected-zone colors to edges and nodes."""
+        edge_colors = {}
+        node_colors = {}
+        for zone_name in self.detected_visible_zones:
+            zone_data = self.detected_zones.get(zone_name)
+            if not zone_data:
+                continue
+            color = zone_data['color']
+            for edge_id in zone_data['edges']:
+                edge_colors[edge_id] = color
+            for node_id in zone_data['nodes']:
+                node_colors[node_id] = color
+
+        self.map_view.set_edge_color_overrides(edge_colors)
+        self.map_view.set_node_color_overrides(node_colors)
+        self.map_view.viewport().update()
+
+    def add_vehicle_type_card(
+        self,
+        name: str = "",
+        length: float = 4.5,
+        width: float = 1.8,
+        height: float = 1.5,
+        max_speed: float = 30.0,
+        color: str = "blue",
+    ):
+        """Add one vehicle type card with editable fields."""
+        card_container = QWidget()
+        row_layout = QHBoxLayout()
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(8)
+
+        type_group = QGroupBox()
+        type_form = QFormLayout()
+        type_form.setContentsMargins(8, 8, 8, 8)
+        type_form.setSpacing(6)
+
+        name_input = QLineEdit(name)
+        length_spin = QDoubleSpinBox()
+        length_spin.setRange(0.1, 100.0)
+        length_spin.setDecimals(2)
+        length_spin.setValue(length)
+
+        width_spin = QDoubleSpinBox()
+        width_spin.setRange(0.1, 20.0)
+        width_spin.setDecimals(2)
+        width_spin.setValue(width)
+
+        height_spin = QDoubleSpinBox()
+        height_spin.setRange(0.1, 20.0)
+        height_spin.setDecimals(2)
+        height_spin.setValue(height)
+
+        speed_spin = QDoubleSpinBox()
+        speed_spin.setRange(0.1, 100.0)
+        speed_spin.setDecimals(2)
+        speed_spin.setValue(max_speed)
+
+        color_input = QLineEdit(color)
+
+        type_form.addRow("name", name_input)
+        type_form.addRow("length", length_spin)
+        type_form.addRow("width", width_spin)
+        type_form.addRow("height", height_spin)
+        type_form.addRow("max_speed", speed_spin)
+        type_form.addRow("color", color_input)
+        type_group.setLayout(type_form)
+
+        remove_btn = QPushButton("x")
+        remove_btn.setFixedWidth(28)
+        remove_btn.setToolTip("Remove vehicle type")
+        remove_btn.clicked.connect(lambda: self.remove_vehicle_type_card(card_container))
+
+        row_layout.addWidget(type_group, stretch=1)
+        row_layout.addWidget(remove_btn)
+        card_container.setLayout(row_layout)
+
+        entry = {
+            "container": card_container,
+            "name": name_input,
+            "length": length_spin,
+            "width": width_spin,
+            "height": height_spin,
+            "max_speed": speed_spin,
+            "color": color_input,
+        }
+        self.vehicle_type_entries.append(entry)
+        self.vehicle_types_cards_layout.addWidget(card_container)
+        self.refresh_zone_allocation_section()
+
+    def remove_vehicle_type_card(self, card_container: QWidget):
+        """Remove one vehicle type card."""
+        for idx, entry in enumerate(self.vehicle_type_entries):
+            if entry["container"] is card_container:
+                self.vehicle_types_cards_layout.removeWidget(card_container)
+                card_container.deleteLater()
+                self.vehicle_type_entries.pop(idx)
+                self.refresh_zone_allocation_section()
+                break
+
+    def _collect_vehicle_types_from_cards(self) -> Dict[str, Dict]:
+        """Collect vehicle types from card widgets."""
+        vehicle_types: Dict[str, Dict] = {}
+        for entry in self.vehicle_type_entries:
+            name = entry["name"].text().strip()
+            if not name:
+                raise ValueError("Vehicle type name cannot be empty.")
+            if name in vehicle_types:
+                raise ValueError(f"Duplicate vehicle type name: {name}")
+            vehicle_types[name] = {
+                "length": float(entry["length"].value()),
+                "width": float(entry["width"].value()),
+                "height": float(entry["height"].value()),
+                "max_speed": float(entry["max_speed"].value()),
+                "color": entry["color"].text().strip() or "gray",
+            }
+
+        if not vehicle_types:
+            raise ValueError("At least one vehicle type is required.")
+        return vehicle_types
+
+    def _get_vehicle_type_names(self) -> List[str]:
+        """Return current vehicle type names from cards."""
+        names = []
+        for entry in self.vehicle_type_entries:
+            name = entry["name"].text().strip()
+            if name:
+                names.append(name)
+        return names
+
+    def _clear_zone_allocation_cards(self):
+        """Clear all zone allocation card widgets."""
+        while self.zone_allocation_cards_layout.count():
+            item = self.zone_allocation_cards_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self.zone_allocation_entries = {}
+
+    def _get_existing_zone_allocation_data(self) -> Dict[str, Dict]:
+        """Capture existing zone allocation values before rebuilding UI."""
+        existing = {}
+        for zone_name, entry in self.zone_allocation_entries.items():
+            dist_values = {
+                vt: spin.value()
+                for vt, spin in entry.get("distribution_spins", {}).items()
+            }
+            existing[zone_name] = {
+                "percentage": entry["percentage_spin"].value(),
+                "distribution": dist_values,
+                "has_distribution": entry.get("has_distribution", True),
+            }
+        return existing
+
+    def refresh_zone_allocation_section(self):
+        """Rebuild zone allocation cards using detected zones and vehicle types."""
+        if not hasattr(self, "zone_allocation_cards_layout"):
+            return
+
+        existing = self._get_existing_zone_allocation_data()
+        vehicle_type_names = self._get_vehicle_type_names()
+
+        zone_names = sorted(self.detected_zones.keys()) if self.detected_zones else []
+        # Keep a noise bucket aligned with desired JSON structure.
+        if "noise" not in zone_names:
+            zone_names.append("noise")
+
+        self._clear_zone_allocation_cards()
+        for zone_name in zone_names:
+            prior = existing.get(zone_name, {})
+            has_distribution = zone_name.lower() != "noise"
+            if "has_distribution" in prior:
+                has_distribution = bool(prior["has_distribution"])
+            self._add_zone_allocation_card(
+                zone_name=zone_name,
+                vehicle_type_names=vehicle_type_names,
+                percentage=float(prior.get("percentage", 0.0)),
+                distribution=prior.get("distribution", {}),
+                has_distribution=has_distribution,
+            )
+
+    def _add_zone_allocation_card(
+        self,
+        zone_name: str,
+        vehicle_type_names: List[str],
+        percentage: float = 0.0,
+        distribution: Optional[Dict[str, float]] = None,
+        has_distribution: bool = True,
+    ):
+        """Create one zone allocation card for JSON structure."""
+        distribution = distribution or {}
+        card = QGroupBox(zone_name)
+        card_layout = QVBoxLayout()
+        card_layout.setSpacing(6)
+
+        percentage_row = QHBoxLayout()
+        percentage_row.addWidget(QLabel("percentage"))
+        percentage_spin = QDoubleSpinBox()
+        percentage_spin.setRange(0.0, 100.0)
+        percentage_spin.setDecimals(2)
+        percentage_spin.setValue(float(percentage))
+        percentage_row.addWidget(percentage_spin)
+        percentage_row.addStretch()
+        card_layout.addLayout(percentage_row)
+
+        distribution_spins = {}
+        if has_distribution:
+            card_layout.addWidget(QLabel("vehicle_type_distribution"))
+            for vt_name in vehicle_type_names:
+                row = QHBoxLayout()
+                row.addWidget(QLabel(vt_name))
+                spin = QDoubleSpinBox()
+                spin.setRange(0.0, 100.0)
+                spin.setDecimals(2)
+                spin.setValue(float(distribution.get(vt_name, 0.0)))
+                row.addWidget(spin)
+                row.addStretch()
+                card_layout.addLayout(row)
+                distribution_spins[vt_name] = spin
+
+        card.setLayout(card_layout)
+        self.zone_allocation_cards_layout.addWidget(card)
+        self.zone_allocation_entries[zone_name] = {
+            "widget": card,
+            "percentage_spin": percentage_spin,
+            "distribution_spins": distribution_spins,
+            "has_distribution": has_distribution,
+        }
+
+    def _collect_zone_allocation_from_cards(self) -> Dict[str, Dict]:
+        """Collect zone_allocation dict in target JSON structure."""
+        zone_allocation = {}
+        for zone_name, entry in self.zone_allocation_entries.items():
+            zone_payload = {
+                "percentage": float(entry["percentage_spin"].value())
+            }
+            if entry.get("has_distribution", True):
+                zone_payload["vehicle_type_distribution"] = {
+                    vt_name: float(spin.value())
+                    for vt_name, spin in entry["distribution_spins"].items()
+                }
+            zone_allocation[zone_name] = zone_payload
+        return zone_allocation
+
+    def _build_config_from_form(self) -> dict:
+        """Build simulation config dict from GUI inputs."""
+        try:
+            landmarks = json.loads(self.landmarks_editor.toPlainText().strip() or "{}")
+            weekday_schedule = json.loads(self.weekday_schedule_editor.toPlainText().strip() or "[]")
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Invalid JSON section: {exc.msg} (line {exc.lineno})") from exc
+        zone_allocation = self._collect_zone_allocation_from_cards()
+        vehicle_types = self._collect_vehicle_types_from_cards()
+
+        config = {
+            "snapshot_dir": self.snapshot_dir_input.text().strip(),
+            "snapshot_interval_sec": int(self.snapshot_interval_spin.value()),
+            "vehicle_generation": {
+                "simulation_weeks": int(self.simulation_weeks_spin.value()),
+                "total_num_vehicles": int(self.total_vehicles_spin.value()),
+                "dev_fraction": float(self.dev_fraction_spin.value()),
+                "zone_allocation": zone_allocation,
+                "vehicle_types": vehicle_types
+            },
+            "landmarks": landmarks,
+            "weekday_schedule": weekday_schedule
+        }
+        return config
+
+    def generate_config_preview(self):
+        """Generate and show JSON preview from current GUI values."""
+        try:
+            config = self._build_config_from_form()
+            self.config_preview.setPlainText(json.dumps(config, indent=2))
+        except ValueError as exc:
+            QMessageBox.warning(self, "Invalid Input", str(exc))
+
+    def save_config_json(self):
+        """Save generated config JSON to disk."""
+        try:
+            config = self._build_config_from_form()
+        except ValueError as exc:
+            QMessageBox.warning(self, "Invalid Input", str(exc))
+            return
+
+        output_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save Simulation Config JSON",
+            str((Path(self.project_path) / "simulation.config.json").resolve()),
+            "JSON Files (*.json)"
+        )
+        if not output_path:
+            return
+
+        try:
+            with open(output_path, 'w', encoding='utf-8') as f:
+                json.dump(config, f, indent=2)
+            self.config_preview.setPlainText(json.dumps(config, indent=2))
+            QMessageBox.information(self, "Saved", f"Configuration saved to:\n{output_path}")
+        except Exception as exc:
+            QMessageBox.warning(self, "Save Failed", f"Failed to save config: {exc}")
+
+    def on_map_network_render_finished(self):
+        """Restore current selection/display visualization after network redraw."""
+        if self.zones_locked:
+            self.map_view.set_selected_edges(set())
+            self.map_view.set_selected_nodes(set())
+        elif self.displayed_zones:
+            self._update_display_visualization()
+        else:
+            self._update_zone_visualization()
+
+        # Re-apply detected-zone coloring overlays after map items are rebuilt.
+        self._apply_detected_zone_colors()
+        self.map_view.viewport().update()
     
     def on_area_selected(self, area_type: str, rect: QRectF):
         """Handle area selection."""
@@ -1099,6 +1677,7 @@ class RouteGenerationPage(QWidget):
         # Update visualization to highlight displayed zones and darken zone areas
         self._update_display_visualization()
         self.map_view.viewport().update()  # Trigger repaint to show darker zones
+        self.save_route_generation_settings()
     
     def _update_display_visualization(self):
         """Update visualization to highlight roads and junctions for displayed zones."""
@@ -1191,13 +1770,14 @@ class RouteGenerationPage(QWidget):
             # Zones are not locked, so check for unselected items and lock them
             self.lock_zones()
     
-    def lock_zones(self):
+    def lock_zones(self, show_dialogs: bool = True, offer_unselected_assignment: bool = True):
         """Lock zones: disable editing, remove colored areas, reset highlighting."""
         if self.zones_locked:
             return
         
         if not self.network_parser:
-            QMessageBox.warning(self, "No Network", "Cannot lock zones: no network loaded.")
+            if show_dialogs:
+                QMessageBox.warning(self, "No Network", "Cannot lock zones: no network loaded.")
             return
         
         # Check for unselected roads and junctions
@@ -1212,7 +1792,7 @@ class RouteGenerationPage(QWidget):
         unselected_junctions = all_junctions - assigned_junctions
         
         # If there are unselected items, prompt user
-        if unselected_edges or unselected_junctions:
+        if offer_unselected_assignment and (unselected_edges or unselected_junctions):
             edge_count = len(unselected_edges)
             junction_count = len(unselected_junctions)
             
@@ -1267,6 +1847,7 @@ class RouteGenerationPage(QWidget):
         
         # Mark zones as locked
         self.zones_locked = True
+        self.save_route_generation_settings()
         
         # Update map view to show locked state (zone names in centers)
         self.map_view.viewport().update()
@@ -1274,7 +1855,8 @@ class RouteGenerationPage(QWidget):
         # Update statistics
         self.update_statistics()
         
-        QMessageBox.information(self, "Zones Locked", "Zone configuration is now locked.")
+        if show_dialogs:
+            QMessageBox.information(self, "Zones Locked", "Zone configuration is now locked.")
     
     def unlock_zones(self):
         """Unlock zones: show warning and re-enable editing."""
@@ -1319,9 +1901,24 @@ class RouteGenerationPage(QWidget):
         
         # Mark zones as unlocked
         self.zones_locked = False
+        self.save_route_generation_settings()
         
         # Update map view to show unlocked state (zone names at corners)
         self.map_view.viewport().update()
+
+    def _restore_route_generation_state(self):
+        """Restore persisted route generation UI state after zones are loaded."""
+        # Keep only valid zone IDs (zones may have been deleted from config).
+        self.displayed_zones = {zone_id for zone_id in self.displayed_zones if zone_id in self.zones}
+
+        if self._restore_zones_locked:
+            self.lock_zones(show_dialogs=False, offer_unselected_assignment=False)
+        elif self.displayed_zones:
+            self._update_display_visualization()
+            self.map_view.viewport().update()
+        else:
+            self._update_zone_visualization()
+            self.map_view.viewport().update()
     
     def load_saved_zones(self):
         """Load saved zones from project configuration."""
@@ -1403,3 +2000,12 @@ class RouteGenerationPage(QWidget):
             }
         
         self.config_manager.save_zones(zones_to_save)
+        self.save_route_generation_settings()
+
+    def save_route_generation_settings(self):
+        """Persist route generation page UI selections to project config."""
+        settings = {
+            'displayed_zones': sorted([zone_id for zone_id in self.displayed_zones if zone_id in self.zones]),
+            'zones_locked': bool(self.zones_locked),
+        }
+        self.config_manager.save_route_generation_settings(settings)

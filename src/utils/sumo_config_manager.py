@@ -395,3 +395,15 @@ class SUMOConfigManager:
         
         return zones
 
+    def save_route_generation_settings(self, settings: Dict):
+        """Save route generation UI settings to project config."""
+        config = self._load_config()
+        config['route_generation_settings'] = settings if isinstance(settings, dict) else {}
+        self._save_config(config)
+
+    def load_route_generation_settings(self) -> Dict:
+        """Load route generation UI settings from project config."""
+        config = self._load_config()
+        settings = config.get('route_generation_settings', {})
+        return settings if isinstance(settings, dict) else {}
+
