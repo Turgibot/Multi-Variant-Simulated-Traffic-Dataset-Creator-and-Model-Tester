@@ -377,20 +377,9 @@ class RouteGenerationPage(QWidget):
         map_group.setLayout(map_layout)
         content_layout.addWidget(map_group, stretch=2)
 
-        # Right side: Simulation Configuration (JSON-driven form)
-        config_scroll = QScrollArea()
-        config_scroll.setWidgetResizable(True)
-        config_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        config_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        config_scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        config_scroll.setStyleSheet("""
-            QScrollArea {
-                border: none;
-            }
-        """)
-
-        config_group = QGroupBox("Simulation Configuration")
-        config_group.setStyleSheet("""
+        # Right side: Simulation Configuration (fixed title + scrollable form)
+        config_panel = QGroupBox("Simulation Configuration")
+        config_panel.setStyleSheet("""
             QGroupBox {
                 font-weight: bold;
                 border: 2px solid #ddd;
@@ -404,12 +393,28 @@ class RouteGenerationPage(QWidget):
                 padding: 0 5px;
             }
         """)
+        config_panel_layout = QVBoxLayout()
+        config_panel_layout.setContentsMargins(8, 8, 8, 8)
+        config_panel_layout.setSpacing(6)
+
+        config_scroll = QScrollArea()
+        config_scroll.setWidgetResizable(True)
+        config_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        config_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        config_scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        config_scroll.setStyleSheet("""
+            QScrollArea {
+                border: none;
+            }
+        """)
+        config_group = QWidget()
         config_layout = QVBoxLayout()
         config_layout.setContentsMargins(12, 12, 12, 12)
         config_layout.setSpacing(10)
 
         # Detected zones block
         detected_group = QGroupBox("Zones (Neighborhoods)")
+        self._set_config_block_style(detected_group, "#dceeff")
         detected_layout = QVBoxLayout()
         detected_layout.setSpacing(8)
 
@@ -438,6 +443,7 @@ class RouteGenerationPage(QWidget):
 
         # Vehicle types block
         vehicle_types_group = QGroupBox("Vehicle Types")
+        self._set_config_block_style(vehicle_types_group, "#e2f7db")
         vehicle_types_layout = QVBoxLayout()
         vehicle_types_layout.setSpacing(8)
 
@@ -464,6 +470,7 @@ class RouteGenerationPage(QWidget):
 
         # Zone vehicle allocation block (JSON-structured UI)
         zone_alloc_group = QGroupBox("Zone Vehicle Allocation")
+        self._set_config_block_style(zone_alloc_group, "#ffe9cc")
         zone_alloc_layout = QVBoxLayout()
         zone_alloc_layout.setSpacing(8)
         self.zone_allocation_total_label = QLabel("Total: 0%")
@@ -478,6 +485,7 @@ class RouteGenerationPage(QWidget):
 
         # Core simulation fields
         core_group = QGroupBox("Core Settings")
+        self._set_config_block_style(core_group, "#ece6ff")
         core_form = QFormLayout()
 
         snapshot_row = QHBoxLayout()
@@ -514,6 +522,7 @@ class RouteGenerationPage(QWidget):
 
         # Landmarks block (from net.xml edge params)
         landmarks_group = QGroupBox("Landmarks")
+        self._set_config_block_style(landmarks_group, "#d7f6ee")
         landmarks_layout = QVBoxLayout()
         landmarks_layout.setSpacing(8)
 
@@ -538,6 +547,7 @@ class RouteGenerationPage(QWidget):
 
         # Default landmarks subsection
         default_landmarks_group = QGroupBox("Default Landmarks")
+        self._set_config_block_style(default_landmarks_group, "#cdeee3")
         default_landmarks_form = QFormLayout()
         default_landmarks_form.setSpacing(6)
 
@@ -564,6 +574,7 @@ class RouteGenerationPage(QWidget):
 
         # Weekday schedule block (structured UI)
         weekday_group = QGroupBox("Weekday Schedule")
+        self._set_config_block_style(weekday_group, "#ffdce8")
         weekday_layout = QVBoxLayout()
         weekday_layout.setSpacing(8)
         self.weekday_schedule_cards_layout = QVBoxLayout()
@@ -598,7 +609,9 @@ class RouteGenerationPage(QWidget):
 
         config_group.setLayout(config_layout)
         config_scroll.setWidget(config_group)
-        content_layout.addWidget(config_scroll, stretch=1)
+        config_panel_layout.addWidget(config_scroll)
+        config_panel.setLayout(config_panel_layout)
+        content_layout.addWidget(config_panel, stretch=1)
 
         main_layout.addLayout(content_layout)
         self.setLayout(main_layout)
@@ -652,6 +665,13 @@ class RouteGenerationPage(QWidget):
         if folder:
             self.snapshot_dir_input.setText(folder)
             self._persist_current_config_safely()
+
+    def _set_config_block_style(self, group: QGroupBox, background_hex: str):
+        """Apply only light background color (minimal-risk styling)."""
+        group.setAttribute(Qt.WA_StyledBackground, True)
+        group.setStyleSheet(
+            f"QGroupBox {{ background-color: {background_hex}; border: 1px solid #d5d5d5; border-radius: 6px; }}"
+        )
 
     def open_simulation_config_json(self):
         """Open project simulation.config.json using the default system app."""
@@ -1158,6 +1178,26 @@ class RouteGenerationPage(QWidget):
                 widget.deleteLater()
         self.weekday_schedule_entries = []
 
+    def _apply_weekday_schedule_card_colors(self):
+        """Apply alternating background colors to weekday schedule cards."""
+        palette = [
+            "#ffe8ef",  # pink
+            "#e8f1ff",  # blue
+            "#e9fbe7",  # green
+            "#fff4dc",  # peach
+            "#efe8ff",  # purple
+            "#e6fbf7",  # mint
+        ]
+        for idx, entry in enumerate(self.weekday_schedule_entries):
+            card = entry.get("widget")
+            if card is None:
+                continue
+            color = palette[idx % len(palette)]
+            card.setAttribute(Qt.WA_StyledBackground, True)
+            card.setStyleSheet(
+                f"QGroupBox {{ background-color: {color}; border: 1px solid #d5d5d5; border-radius: 6px; }}"
+            )
+
     def refresh_weekday_schedule_options(self):
         """Refresh source_zones/origin/destination options based on current data."""
         if not hasattr(self, "weekday_schedule_entries"):
@@ -1256,6 +1296,7 @@ class RouteGenerationPage(QWidget):
             "destination": destination_list,
         }
         self.weekday_schedule_entries.append(entry)
+        self._apply_weekday_schedule_card_colors()
 
         selected_source = seed.get("source_zones", []) if isinstance(seed.get("source_zones", []), list) else []
         selected_origin = seed.get("origin", []) if isinstance(seed.get("origin", []), list) else []
@@ -1275,6 +1316,7 @@ class RouteGenerationPage(QWidget):
         """Remove one weekday schedule subsection card."""
         self.weekday_schedule_entries = [e for e in self.weekday_schedule_entries if e["widget"] is not card]
         card.deleteLater()
+        self._apply_weekday_schedule_card_colors()
         self._persist_current_config_safely()
 
     def load_weekday_schedule_from_config(self, weekday_schedule):
@@ -1618,6 +1660,7 @@ class RouteGenerationPage(QWidget):
 
         entry = {
             "container": card_container,
+            "group": type_group,
             "name": name_input,
             "length": length_spin,
             "width": width_spin,
@@ -1627,6 +1670,7 @@ class RouteGenerationPage(QWidget):
         }
         self.vehicle_type_entries.append(entry)
         self.vehicle_types_cards_layout.addWidget(card_container)
+        self._apply_vehicle_type_card_colors()
         self.refresh_zone_allocation_section()
         self._persist_current_config_safely()
 
@@ -1637,9 +1681,30 @@ class RouteGenerationPage(QWidget):
                 self.vehicle_types_cards_layout.removeWidget(card_container)
                 card_container.deleteLater()
                 self.vehicle_type_entries.pop(idx)
+                self._apply_vehicle_type_card_colors()
                 self.refresh_zone_allocation_section()
                 self._persist_current_config_safely()
                 break
+
+    def _apply_vehicle_type_card_colors(self):
+        """Apply alternating background colors to vehicle type cards."""
+        palette = [
+            "#e8f1ff",  # blue
+            "#e9fbe7",  # green
+            "#fff4dc",  # peach
+            "#efe8ff",  # purple
+            "#e6fbf7",  # mint
+            "#ffe8ef",  # pink
+        ]
+        for idx, entry in enumerate(self.vehicle_type_entries):
+            group = entry.get("group")
+            if group is None:
+                continue
+            color = palette[idx % len(palette)]
+            group.setAttribute(Qt.WA_StyledBackground, True)
+            group.setStyleSheet(
+                f"QGroupBox {{ background-color: {color}; border: 1px solid #d5d5d5; border-radius: 6px; }}"
+            )
 
     def _collect_vehicle_types_from_cards(self) -> Dict[str, Dict]:
         """Collect vehicle types from card widgets."""
