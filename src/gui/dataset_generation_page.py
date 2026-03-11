@@ -29,7 +29,7 @@ class DatasetGenerationPage(QWidget):
         
         # Initialize validation state variables
         self.sumocfg_valid = False
-        self.output_folder_valid = False
+        self.output_folder_valid = True
         self.sumo_home_valid = False
         
         self.init_ui()
@@ -70,7 +70,12 @@ class DatasetGenerationPage(QWidget):
         
         header_layout.addStretch()
         
-        # Run Simulation button (top right corner)
+        # Top-right action buttons
+        header_actions_layout = QVBoxLayout()
+        header_actions_layout.setSpacing(8)
+        header_actions_layout.setContentsMargins(0, 0, 0, 0)
+
+        # Run Simulation button
         self.run_simulation_btn = QPushButton("Run Simulation")
         self.run_simulation_btn.setStyleSheet("""
             QPushButton {
@@ -92,21 +97,10 @@ class DatasetGenerationPage(QWidget):
         """)
         self.run_simulation_btn.setEnabled(False)
         self.run_simulation_btn.clicked.connect(self.run_simulation)
-        header_layout.addWidget(self.run_simulation_btn)
-        
-        main_layout.addLayout(header_layout)
-        
-        # Route Generation Link
-        route_gen_layout = QHBoxLayout()
-        route_gen_layout.setSpacing(10)
-        route_gen_layout.setContentsMargins(0, 0, 0, 20)
-        
-        route_gen_label = QLabel("Need to generate route files?")
-        route_gen_label.setStyleSheet("color: #666; font-size: 14px;")
-        route_gen_layout.addWidget(route_gen_label)
-        
-        route_gen_btn = QPushButton("Generate Routes")
-        route_gen_btn.setStyleSheet("""
+        header_actions_layout.addWidget(self.run_simulation_btn)
+
+        define_simulation_btn = QPushButton("Define Simulation")
+        define_simulation_btn.setStyleSheet("""
             QPushButton {
                 background-color: #9C27B0;
                 color: white;
@@ -120,11 +114,11 @@ class DatasetGenerationPage(QWidget):
                 background-color: #7B1FA2;
             }
         """)
-        route_gen_btn.clicked.connect(self.route_generation_clicked.emit)
-        route_gen_layout.addWidget(route_gen_btn)
+        define_simulation_btn.clicked.connect(self.route_generation_clicked.emit)
+        header_actions_layout.addWidget(define_simulation_btn)
+        header_layout.addLayout(header_actions_layout)
         
-        route_gen_layout.addStretch()
-        main_layout.addLayout(route_gen_layout)
+        main_layout.addLayout(header_layout)
         
         # SUMO Configuration section
         config_group = QGroupBox("SUMO Configuration Files")
@@ -221,92 +215,6 @@ class DatasetGenerationPage(QWidget):
         config_group.setLayout(config_layout)
         main_layout.addWidget(config_group)
         
-        # Dataset Configuration section
-        dataset_group = QGroupBox("Dataset Configuration")
-        dataset_group.setStyleSheet("""
-            QGroupBox {
-                font-weight: bold;
-                border: 2px solid #ddd;
-                border-radius: 5px;
-                margin-top: 10px;
-                padding-top: 10px;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 5px;
-            }
-        """)
-        dataset_layout = QVBoxLayout()
-        dataset_layout.setSpacing(15)
-        
-        # Output folder selection
-        output_folder_label = QLabel("Dataset Output Folder:")
-        dataset_layout.addWidget(output_folder_label)
-        
-        output_folder_layout = QHBoxLayout()
-        output_folder_layout.setSpacing(10)
-        
-        self.output_folder_input = QLineEdit()
-        self.output_folder_input.setPlaceholderText("Enter path to output folder or use Browse...")
-        self.output_folder_input.textChanged.connect(self.validate_output_folder)
-        output_folder_layout.addWidget(self.output_folder_input)
-        
-        # Validation check mark
-        self.output_folder_check = QLabel("✓")
-        self.output_folder_check.setStyleSheet("color: #4CAF50; font-size: 18px; font-weight: bold;")
-        self.output_folder_check.setVisible(False)
-        output_folder_layout.addWidget(self.output_folder_check)
-        
-        # Browse button
-        browse_folder_btn = QPushButton("📁")
-        browse_folder_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #2196F3;
-                color: white;
-                border: none;
-                padding: 8px 15px;
-                border-radius: 5px;
-            }
-            QPushButton:hover {
-                background-color: #1976D2;
-            }
-        """)
-        browse_folder_btn.clicked.connect(self.browse_output_folder)
-        output_folder_layout.addWidget(browse_folder_btn)
-        
-        # Set button
-        set_folder_btn = QPushButton("Set")
-        set_folder_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #4CAF50;
-                color: white;
-                border: none;
-                padding: 8px 20px;
-                border-radius: 5px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #45a049;
-            }
-        """)
-        set_folder_btn.clicked.connect(self.set_output_folder)
-        output_folder_layout.addWidget(set_folder_btn)
-        
-        dataset_layout.addLayout(output_folder_layout)
-        
-        # Info label
-        info_label = QLabel(
-            "Generated dataset files will be saved to the selected folder. "
-            "If no folder is selected, datasets will be saved to the project's 'datasets' folder."
-        )
-        info_label.setWordWrap(True)
-        info_label.setStyleSheet("color: #666; padding: 10px; font-size: 11px;")
-        dataset_layout.addWidget(info_label)
-        
-        dataset_group.setLayout(dataset_layout)
-        main_layout.addWidget(dataset_group)
-        
         # SUMO Configuration section
         sumo_config_group = QGroupBox("SUMO Configuration")
         sumo_config_group.setStyleSheet("""
@@ -402,12 +310,11 @@ class DatasetGenerationPage(QWidget):
     def load_all_settings(self):
         """Load all saved project settings."""
         # Check if widgets exist (safety check)
-        if not hasattr(self, 'sumocfg_input') or not hasattr(self, 'output_folder_input') or not hasattr(self, 'sumo_home_input'):
+        if not hasattr(self, 'sumocfg_input') or not hasattr(self, 'sumo_home_input'):
             return
         
         # Temporarily block signals to avoid auto-save during loading
         self.sumocfg_input.blockSignals(True)
-        self.output_folder_input.blockSignals(True)
         self.sumo_home_input.blockSignals(True)
         
         try:
@@ -418,28 +325,16 @@ class DatasetGenerationPage(QWidget):
                 self.validate_sumocfg_path()
                 self.display_sumocfg_contents(existing_sumocfg)
             
-            # Load output folder
-            self.load_output_folder()
-            
             # Load SUMO_HOME
             self.load_sumo_home()
         finally:
             # Re-enable signals and connect auto-save handlers
             self.sumocfg_input.blockSignals(False)
-            self.output_folder_input.blockSignals(False)
             self.sumo_home_input.blockSignals(False)
             
             # Connect auto-save handlers
             self.sumocfg_input.textChanged.connect(self.on_sumocfg_text_changed)
-            self.output_folder_input.textChanged.connect(self.on_output_folder_text_changed)
             self.sumo_home_input.textChanged.connect(self.on_sumo_home_text_changed)
-    
-    def load_output_folder(self):
-        """Load the saved output folder path."""
-        existing_folder = self.config_manager.get_dataset_output_folder()
-        if existing_folder:
-            self.output_folder_input.setText(existing_folder)
-            self.validate_output_folder()
     
     def save_sumocfg_path(self, path_text: str):
         """Save SUMO config path to settings."""
@@ -448,16 +343,6 @@ class DatasetGenerationPage(QWidget):
                 path = Path(path_text.strip())
                 if path.exists() and path.suffix == '.sumocfg':
                     self.config_manager.set_sumocfg(path_text.strip())
-            except Exception:
-                pass  # Silently fail if path is invalid
-    
-    def save_output_folder_path(self, path_text: str):
-        """Save output folder path to settings."""
-        if path_text.strip():
-            try:
-                path = Path(path_text.strip())
-                if path.exists() and path.is_dir():
-                    self.config_manager.set_dataset_output_folder(path_text.strip())
             except Exception:
                 pass  # Silently fail if path is invalid
     
@@ -477,13 +362,6 @@ class DatasetGenerationPage(QWidget):
         self.validate_sumocfg_path()
         if self.sumocfg_valid:
             self.save_sumocfg_path(self.sumocfg_input.text())
-    
-    def on_output_folder_text_changed(self):
-        """Auto-save output folder path when text changes."""
-        # Only save if validation passes (folder exists)
-        self.validate_output_folder()
-        if self.output_folder_valid:
-            self.save_output_folder_path(self.output_folder_input.text())
     
     def on_sumo_home_text_changed(self):
         """Auto-save SUMO_HOME path when text changes."""
@@ -508,29 +386,13 @@ class DatasetGenerationPage(QWidget):
         self.sumocfg_valid = is_valid
         self.update_run_button()
     
-    def validate_output_folder(self):
-        """Validate the output folder path."""
-        path_text = self.output_folder_input.text().strip()
-        if not path_text:
-            self.output_folder_check.setVisible(False)
-            self.output_folder_valid = False
-            self.update_run_button()
-            return
-        
-        path = Path(path_text)
-        is_valid = path.exists() and path.is_dir()
-        
-        self.output_folder_check.setVisible(is_valid)
-        self.output_folder_valid = is_valid
-        self.update_run_button()
-    
     def update_run_button(self):
         """Update the Run Simulation button state based on validation."""
         # Check if button exists (may not be created yet during initialization)
         if not hasattr(self, 'run_simulation_btn'):
             return
         
-        all_valid = self.sumocfg_valid and self.output_folder_valid and self.sumo_home_valid
+        all_valid = self.sumocfg_valid and self.sumo_home_valid
         self.run_simulation_btn.setEnabled(all_valid)
     
     def browse_sumocfg(self):
@@ -731,42 +593,6 @@ class DatasetGenerationPage(QWidget):
             # If parsing fails, just hide the widget
             self.config_contents_widget.setVisible(False)
     
-    def browse_output_folder(self):
-        """Open file dialog to browse for output folder."""
-        # Start from current folder if set, otherwise project datasets folder
-        start_path = self.output_folder_input.text()
-        if not start_path:
-            start_path = str(Path(self.project_path) / 'datasets')
-        
-        folder_path = QFileDialog.getExistingDirectory(
-            self,
-            "Select Dataset Output Folder",
-            start_path,
-            QFileDialog.ShowDirsOnly
-        )
-        
-        if folder_path:
-            self.output_folder_input.setText(folder_path)
-            self.validate_output_folder()
-    
-    def set_output_folder(self):
-        """Set the output folder path from the input field."""
-        path_text = self.output_folder_input.text().strip()
-        if not path_text:
-            QMessageBox.warning(self, "Error", "Please enter a path to the output folder.")
-            return
-        
-        try:
-            # Save to JSON immediately
-            self.config_manager.set_dataset_output_folder(path_text)
-            QMessageBox.information(
-                self,
-                "Success",
-                f"Dataset output folder set to:\n{path_text}"
-            )
-        except ValueError as e:
-            QMessageBox.warning(self, "Error", str(e))
-    
     def load_sumo_home(self):
         """Load the saved SUMO_HOME path or auto-detect."""
         existing_sumo_home = self.config_manager.get_sumo_home()
@@ -836,14 +662,21 @@ class DatasetGenerationPage(QWidget):
     def run_simulation(self):
         """Run SUMO simulation - navigate to simulation page."""
         sumocfg_path = self.sumocfg_input.text().strip()
-        output_folder = self.output_folder_input.text().strip()
         sumo_home = self.sumo_home_input.text().strip()
+        output_folder = self.config_manager.get_dataset_output_folder()
+        if not output_folder:
+            output_folder = str((Path(self.project_path) / "datasets").resolve())
+            Path(output_folder).mkdir(parents=True, exist_ok=True)
+            try:
+                self.config_manager.set_dataset_output_folder(output_folder)
+            except Exception:
+                pass
         
-        if not sumocfg_path or not output_folder or not sumo_home:
+        if not sumocfg_path or not sumo_home:
             QMessageBox.warning(
                 self,
                 "Error",
-                "Please set SUMO configuration file, output folder, and SUMO_HOME before running simulation."
+                "Please set SUMO configuration file and SUMO_HOME before running simulation."
             )
             return
         

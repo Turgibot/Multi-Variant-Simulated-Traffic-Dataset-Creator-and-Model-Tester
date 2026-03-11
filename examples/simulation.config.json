@@ -243,7 +243,7 @@
         "source_zones": ["A", "B", "C"],
         "origin": ["home", "work"],
         "destination": [
-            "friend1", "friend2", "friend3",
+            "visit1", "visit2", "visit3",
             "restaurantA", "restaurantB", "restaurantC",
             "park1", "park2", "park3", "park4",
             "stadium1", "stadium2"
@@ -291,7 +291,6 @@
             "restaurantA", "restaurantB", "restaurantC"
         ]
     },
-
     {
         "name": "Back from lunch",
         "start_time": "13:30",
@@ -321,7 +320,7 @@
         "source_zones": ["A", "B", "C"],
         "origin": ["home"],
         "destination": [
-            "friend1", "friend2", "friend3",
+            "visit1", "visit2", "visit3",
             "restaurantA", "restaurantB", "restaurantC",
             "park1", "park2", "park3", "park4",
             "stadium1", "stadium2"
@@ -355,11 +354,10 @@
         "vpm_rate": 0.5,
         "source_zones": ["A", "B", "C"],
         "origin": ["home"],
-        "destination": ["friend1", "friend2", "friend3",
+        "destination": ["visit1", "visit2", "visit3",
             "restaurantA", "restaurantB", "restaurantC",
             "park1", "park2", "park3", "park4",
             "stadium1", "stadium2", "work"]
     }
     ]
 }
-      

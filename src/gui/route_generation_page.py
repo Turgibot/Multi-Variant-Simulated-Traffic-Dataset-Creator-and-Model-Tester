@@ -13,19 +13,41 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from xml.dom import minidom
 
-from PySide6.QtCore import QPointF, QRectF, QSize, Qt, Signal
-from PySide6.QtGui import (QBrush, QColor, QFont, QGuiApplication, QPainter,
-                           QPen)
+from PySide6.QtCore import QPointF, QRectF, QSize, Qt, Signal, QTime, QUrl
+from PySide6.QtGui import (QBrush, QColor, QDesktopServices, QFont, QGuiApplication,
+                           QPainter, QPen)
 from PySide6.QtWidgets import (QFrame, QGraphicsView, QGroupBox, QHBoxLayout,
+                               QCheckBox, QGridLayout,
                                QFileDialog, QFormLayout, QLabel, QLineEdit,
-                               QMessageBox, QPlainTextEdit, QPushButton,
+                               QMessageBox, QPushButton,
                                QScrollArea, QSizePolicy, QSpinBox,
-                               QDoubleSpinBox, QVBoxLayout, QWidget)
+                               QDoubleSpinBox, QTimeEdit, QVBoxLayout, QWidget)
 
 from src.gui.simulation_view import SimulationView
 from src.utils.network_parser import NetworkParser
 from src.utils.route_xml_generator import RouteXMLGenerator
 from src.utils.sumo_config_manager import SUMOConfigManager
+
+
+class NoScrollSpinBox(QSpinBox):
+    """Spin box that ignores mouse wheel changes."""
+
+    def wheelEvent(self, event):
+        event.ignore()
+
+
+class NoScrollDoubleSpinBox(QDoubleSpinBox):
+    """Double spin box that ignores mouse wheel changes."""
+
+    def wheelEvent(self, event):
+        event.ignore()
+
+
+class NoScrollTimeEdit(QTimeEdit):
+    """Time edit that ignores mouse wheel changes."""
+
+    def wheelEvent(self, event):
+        event.ignore()
 
 
 class AreaSelectionView(SimulationView):
@@ -250,6 +272,7 @@ class RouteGenerationPage(QWidget):
     """Page for generating SUMO route files manually."""
     
     back_clicked = Signal()
+    run_simulation_clicked = Signal()
     
     def __init__(self, project_name: str, project_path: str, parent=None):
         super().__init__(parent)
@@ -257,6 +280,7 @@ class RouteGenerationPage(QWidget):
         self.project_path = project_path
         self.config_manager = SUMOConfigManager(project_path)
         self.route_generation_settings = self.config_manager.load_route_generation_settings()
+        self.simulation_config_path = Path(self.project_path) / "simulation.config.json"
         self.network_parser = None
         self.route_generator = None
         self.zones = {}  # Dict of {zone_id: {'name': str, 'color': QColor, 'widget': QWidget, 'areas': [QRectF]}}
@@ -269,14 +293,29 @@ class RouteGenerationPage(QWidget):
         self.detected_zones = {}  # zone_name -> {'edges': set[str], 'nodes': set[str], 'color': QColor}
         self.detected_visible_zones = set()
         self.detected_zone_row_widgets = {}
+        self.detected_landmarks = {}  # landmark_name -> {'edges': set[str], 'color': QColor}
+        self.detected_visible_landmarks = set()
+        self.detected_landmark_row_widgets = {}
+        self._landmarks_seed = {}
+        self._default_landmarks_seed = {
+            "home_zones": [],
+            "work_zones": [],
+            "restaurants_zones": [],
+            "visit_count": 1,
+        }
+        self._default_landmarks_initialized = False
         self.vehicle_type_entries = []
         self.zone_allocation_entries = {}
+        self._zone_allocation_seed = {}
+        self.weekday_schedule_entries = []
+        self._suppress_auto_persist = False
         
         # Track assignments: junction_id -> zone_id, edge_id -> zone_id
         self.junction_assignments = {}  # Dict of {junction_id: zone_id}
         self.road_assignments = {}  # Dict of {edge_id: zone_id}
         
         self.init_ui()
+        self.load_simulation_config_from_project()
         self.load_network()
         # Load saved zones after network is loaded (but before Porto neighborhoods)
         # This ensures saved zones are loaded first, then Porto neighborhoods are added if needed
@@ -292,7 +331,7 @@ class RouteGenerationPage(QWidget):
         
         # Header
         header_layout = QHBoxLayout()
-        title = QLabel(f"Route Generation - {self.project_name}")
+        title = QLabel(f"Simulation Definition - {self.project_name}")
         title.setFont(QFont("Arial", 18, QFont.Bold))
         header_layout.addWidget(title)
         header_layout.addStretch()
@@ -338,7 +377,7 @@ class RouteGenerationPage(QWidget):
         map_group.setLayout(map_layout)
         content_layout.addWidget(map_group, stretch=2)
 
-        # Right side: Route Configuration (JSON-driven form)
+        # Right side: Simulation Configuration (JSON-driven form)
         config_scroll = QScrollArea()
         config_scroll.setWidgetResizable(True)
         config_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -350,7 +389,7 @@ class RouteGenerationPage(QWidget):
             }
         """)
 
-        config_group = QGroupBox("Route Configuration")
+        config_group = QGroupBox("Simulation Configuration")
         config_group.setStyleSheet("""
             QGroupBox {
                 font-weight: bold;
@@ -427,6 +466,9 @@ class RouteGenerationPage(QWidget):
         zone_alloc_group = QGroupBox("Zone Vehicle Allocation")
         zone_alloc_layout = QVBoxLayout()
         zone_alloc_layout.setSpacing(8)
+        self.zone_allocation_total_label = QLabel("Total: 0%")
+        self.zone_allocation_total_label.setStyleSheet("color: #666; font-size: 10px;")
+        zone_alloc_layout.addWidget(self.zone_allocation_total_label)
         self.zone_allocation_cards_layout = QVBoxLayout()
         self.zone_allocation_cards_layout.setSpacing(6)
         zone_alloc_layout.addLayout(self.zone_allocation_cards_layout)
@@ -446,22 +488,22 @@ class RouteGenerationPage(QWidget):
         snapshot_row.addWidget(browse_snapshot_btn)
         core_form.addRow("snapshot_dir", snapshot_row)
 
-        self.snapshot_interval_spin = QSpinBox()
+        self.snapshot_interval_spin = NoScrollSpinBox()
         self.snapshot_interval_spin.setRange(1, 3600)
         self.snapshot_interval_spin.setValue(30)
         core_form.addRow("snapshot_interval_sec", self.snapshot_interval_spin)
 
-        self.simulation_weeks_spin = QSpinBox()
+        self.simulation_weeks_spin = NoScrollSpinBox()
         self.simulation_weeks_spin.setRange(1, 520)
         self.simulation_weeks_spin.setValue(1)
         core_form.addRow("simulation_weeks", self.simulation_weeks_spin)
 
-        self.total_vehicles_spin = QSpinBox()
+        self.total_vehicles_spin = NoScrollSpinBox()
         self.total_vehicles_spin.setRange(1, 10_000_000)
         self.total_vehicles_spin.setValue(200_000)
         core_form.addRow("total_num_vehicles", self.total_vehicles_spin)
 
-        self.dev_fraction_spin = QDoubleSpinBox()
+        self.dev_fraction_spin = NoScrollDoubleSpinBox()
         self.dev_fraction_spin.setRange(0.0, 1.0)
         self.dev_fraction_spin.setDecimals(3)
         self.dev_fraction_spin.setSingleStep(0.05)
@@ -470,33 +512,83 @@ class RouteGenerationPage(QWidget):
         core_group.setLayout(core_form)
         config_layout.addWidget(core_group)
 
-        self.landmarks_editor = QPlainTextEdit()
-        self.landmarks_editor.setMinimumHeight(120)
-        self.landmarks_editor.setPlainText("{}")
-        config_layout.addWidget(QLabel("landmarks (JSON)"))
-        config_layout.addWidget(self.landmarks_editor)
+        # Landmarks block (from net.xml edge params)
+        landmarks_group = QGroupBox("Landmarks")
+        landmarks_layout = QVBoxLayout()
+        landmarks_layout.setSpacing(8)
 
-        self.weekday_schedule_editor = QPlainTextEdit()
-        self.weekday_schedule_editor.setMinimumHeight(160)
-        self.weekday_schedule_editor.setPlainText("[]")
-        config_layout.addWidget(QLabel("weekday_schedule (JSON array)"))
-        config_layout.addWidget(self.weekday_schedule_editor)
+        landmarks_top_row = QHBoxLayout()
+        self.update_landmarks_btn = QPushButton("Update Landmarks")
+        self.update_landmarks_btn.setToolTip(
+            "Scan the loaded network file for edge params:\n"
+            "<param key=\"landmark\" value=\"<name>\"/>"
+        )
+        self.update_landmarks_btn.clicked.connect(self.detect_landmarks_from_network)
+        landmarks_top_row.addWidget(self.update_landmarks_btn)
+        landmarks_top_row.addStretch()
+        landmarks_layout.addLayout(landmarks_top_row)
 
-        actions_row = QHBoxLayout()
-        generate_btn = QPushButton("Generate Preview")
-        generate_btn.clicked.connect(self.generate_config_preview)
-        save_btn = QPushButton("Save Config JSON")
-        save_btn.clicked.connect(self.save_config_json)
-        actions_row.addWidget(generate_btn)
-        actions_row.addWidget(save_btn)
-        actions_row.addStretch()
-        config_layout.addLayout(actions_row)
+        self.detected_landmarks_list_layout = QVBoxLayout()
+        self.detected_landmarks_list_layout.setSpacing(4)
+        landmarks_layout.addLayout(self.detected_landmarks_list_layout)
 
-        self.config_preview = QPlainTextEdit()
-        self.config_preview.setReadOnly(True)
-        self.config_preview.setMinimumHeight(220)
-        config_layout.addWidget(QLabel("Generated JSON Preview"))
-        config_layout.addWidget(self.config_preview)
+        self.detected_landmarks_status = QLabel("No landmarks detected yet.")
+        self.detected_landmarks_status.setStyleSheet("color: #666;")
+        landmarks_layout.addWidget(self.detected_landmarks_status)
+
+        # Default landmarks subsection
+        default_landmarks_group = QGroupBox("Default Landmarks")
+        default_landmarks_form = QFormLayout()
+        default_landmarks_form.setSpacing(6)
+
+        self.default_home_zones_list = self._create_checkbox_group_widget()
+        default_landmarks_form.addRow("Home", self.default_home_zones_list)
+
+        self.default_work_zones_list = self._create_checkbox_group_widget()
+        default_landmarks_form.addRow("Work", self.default_work_zones_list)
+
+        self.default_restaurants_zones_list = self._create_checkbox_group_widget()
+        default_landmarks_form.addRow("Restaurants", self.default_restaurants_zones_list)
+
+        self.default_visit_spin = NoScrollSpinBox()
+        self.default_visit_spin.setRange(1, 3)
+        self.default_visit_spin.setValue(1)
+        self.default_visit_spin.valueChanged.connect(lambda _: self._persist_default_landmarks_only())
+        default_landmarks_form.addRow("Visit", self.default_visit_spin)
+
+        default_landmarks_group.setLayout(default_landmarks_form)
+        landmarks_layout.addWidget(default_landmarks_group)
+
+        landmarks_group.setLayout(landmarks_layout)
+        config_layout.addWidget(landmarks_group)
+
+        # Weekday schedule block (structured UI)
+        weekday_group = QGroupBox("Weekday Schedule")
+        weekday_layout = QVBoxLayout()
+        weekday_layout.setSpacing(8)
+        self.weekday_schedule_cards_layout = QVBoxLayout()
+        self.weekday_schedule_cards_layout.setSpacing(6)
+        weekday_layout.addLayout(self.weekday_schedule_cards_layout)
+        weekday_add_row = QHBoxLayout()
+        self.add_weekday_schedule_btn = QPushButton("+")
+        self.add_weekday_schedule_btn.setFixedWidth(28)
+        self.add_weekday_schedule_btn.setToolTip("Add weekday schedule subsection")
+        self.add_weekday_schedule_btn.clicked.connect(self.add_weekday_schedule_card)
+        weekday_add_row.addWidget(self.add_weekday_schedule_btn)
+        weekday_add_row.addStretch()
+        weekday_layout.addLayout(weekday_add_row)
+        weekday_group.setLayout(weekday_layout)
+        config_layout.addWidget(weekday_group)
+
+        config_actions_row = QHBoxLayout()
+        config_actions_row.addStretch()
+        open_config_btn = QPushButton("Open simulation.config.json")
+        open_config_btn.clicked.connect(self.open_simulation_config_json)
+        config_actions_row.addWidget(open_config_btn)
+        run_sim_btn = QPushButton("Run Simulation")
+        run_sim_btn.clicked.connect(self.run_simulation_clicked.emit)
+        config_actions_row.addWidget(run_sim_btn)
+        config_layout.addLayout(config_actions_row)
 
         # Keep stats label available for existing logic.
         self.stats_label = QLabel("")
@@ -510,6 +602,7 @@ class RouteGenerationPage(QWidget):
 
         main_layout.addLayout(content_layout)
         self.setLayout(main_layout)
+        self._connect_auto_persist_signals()
     
     def load_network(self):
         """Load network from sumocfg if available."""
@@ -542,6 +635,8 @@ class RouteGenerationPage(QWidget):
                         self.route_generator = RouteXMLGenerator(self.network_parser)
                         # Auto-detect zones from network attributes on load.
                         self.detect_zones_from_network()
+                        # Auto-detect landmarks from edge params on load.
+                        self.detect_landmarks_from_network()
                         # Update statistics when network is loaded
                         self.update_statistics()
         except Exception as e:
@@ -556,6 +651,119 @@ class RouteGenerationPage(QWidget):
         )
         if folder:
             self.snapshot_dir_input.setText(folder)
+            self._persist_current_config_safely()
+
+    def open_simulation_config_json(self):
+        """Open project simulation.config.json using the default system app."""
+        try:
+            self._persist_current_config_safely()
+            self.simulation_config_path.parent.mkdir(parents=True, exist_ok=True)
+            if not self.simulation_config_path.exists():
+                self._write_project_simulation_config(self._build_config_from_form())
+            opened = QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.simulation_config_path)))
+            if not opened:
+                QMessageBox.warning(self, "Open Failed", f"Could not open:\n{self.simulation_config_path}")
+        except Exception as exc:
+            QMessageBox.warning(self, "Open Failed", f"Could not open config JSON:\n{exc}")
+
+    def _connect_auto_persist_signals(self):
+        """Persist to project simulation config whenever form values change."""
+        self.snapshot_dir_input.textChanged.connect(lambda _: self._persist_current_config_safely())
+        self.snapshot_interval_spin.valueChanged.connect(lambda _: self._persist_current_config_safely())
+        self.simulation_weeks_spin.valueChanged.connect(lambda _: self._persist_current_config_safely())
+        self.total_vehicles_spin.valueChanged.connect(lambda _: self._persist_current_config_safely())
+        self.dev_fraction_spin.valueChanged.connect(lambda _: self._persist_current_config_safely())
+
+    def _read_project_simulation_config(self) -> Dict:
+        """Read simulation config from project's simulation.config.json."""
+        if not self.simulation_config_path.exists():
+            return {}
+        try:
+            with open(self.simulation_config_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+
+    def _write_project_simulation_config(self, config: Dict):
+        """Write simulation config to project's simulation.config.json."""
+        self.simulation_config_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(self.simulation_config_path, "w", encoding="utf-8") as f:
+            json.dump(config, f, indent=2)
+
+    def load_simulation_config_from_project(self):
+        """Load form values from project's simulation.config.json if present."""
+        config = self._read_project_simulation_config()
+        self._suppress_auto_persist = True
+        try:
+            if not config:
+                # First-time defaults required by user: noise=100, passenger=100.
+                self._zone_allocation_seed = {"noise": {"percentage": 100.0}}
+                self.refresh_zone_allocation_section(preserve_existing=False)
+                return
+
+            self.snapshot_dir_input.setText(config.get("snapshot_dir", self.snapshot_dir_input.text()))
+            if "snapshot_interval_sec" in config:
+                self.snapshot_interval_spin.setValue(int(config.get("snapshot_interval_sec", 30)))
+
+            vg = config.get("vehicle_generation", {})
+            if isinstance(vg, dict):
+                if "simulation_weeks" in vg:
+                    self.simulation_weeks_spin.setValue(int(vg.get("simulation_weeks", 1)))
+                if "total_num_vehicles" in vg:
+                    self.total_vehicles_spin.setValue(int(vg.get("total_num_vehicles", 200000)))
+                if "dev_fraction" in vg:
+                    self.dev_fraction_spin.setValue(float(vg.get("dev_fraction", 1.0)))
+
+                loaded_types = vg.get("vehicle_types", {})
+                if isinstance(loaded_types, dict) and loaded_types:
+                    # Replace defaults with loaded vehicle types.
+                    while self.vehicle_type_entries:
+                        self.remove_vehicle_type_card(self.vehicle_type_entries[0]["container"])
+                    for type_name, attrs in loaded_types.items():
+                        attrs = attrs if isinstance(attrs, dict) else {}
+                        self.add_vehicle_type_card(
+                            name=type_name,
+                            length=float(attrs.get("length", 4.5)),
+                            width=float(attrs.get("width", 1.8)),
+                            height=float(attrs.get("height", 1.5)),
+                            max_speed=float(attrs.get("max_speed", 30.0)),
+                            color=str(attrs.get("color", "blue")),
+                        )
+
+                loaded_alloc = vg.get("zone_allocation", {})
+                if isinstance(loaded_alloc, dict):
+                    self._zone_allocation_seed = loaded_alloc
+
+            loaded_landmarks = config.get("landmarks", {})
+            if isinstance(loaded_landmarks, dict):
+                default_landmarks = loaded_landmarks.get("default_landmarks", {})
+                if not isinstance(default_landmarks, dict):
+                    default_landmarks = config.get("default_landmarks", {})
+                visit_count = 1
+                if isinstance(default_landmarks, dict):
+                    try:
+                        visit_count = int(default_landmarks.get("visit_count", 1))
+                    except (TypeError, ValueError):
+                        visit_count = 1
+                self._default_landmarks_seed = {
+                    "home_zones": list(default_landmarks.get("home_zones", [])) if isinstance(default_landmarks, dict) else [],
+                    "work_zones": list(default_landmarks.get("work_zones", [])) if isinstance(default_landmarks, dict) else [],
+                    "restaurants_zones": list(default_landmarks.get("restaurants_zones", [])) if isinstance(default_landmarks, dict) else [],
+                    "visit_count": visit_count,
+                }
+                self._default_landmarks_initialized = False
+                self._landmarks_seed = {
+                    name: edges for name, edges in loaded_landmarks.items()
+                    if name != "default_landmarks" and isinstance(edges, list)
+                }
+                self._set_landmarks_from_mapping(self._landmarks_seed)
+            self.refresh_zone_allocation_section(preserve_existing=False)
+            self.refresh_default_landmark_zone_options()
+            self.load_weekday_schedule_from_config(config.get("weekday_schedule", []))
+        finally:
+            self._suppress_auto_persist = False
+        self._persist_current_config_safely()
 
     def _extract_zone_name_from_id(self, entity_id: str) -> Optional[str]:
         """Extract a zone name from an edge/node id using a simple prefix heuristic."""
@@ -623,6 +831,516 @@ class RouteGenerationPage(QWidget):
                 node_zone_map[node_id] = zone_value
 
         return edge_zone_map, node_zone_map
+
+    def _load_landmarks_from_network_file(self) -> Dict[str, set]:
+        """Load landmarks from edge params: <param key="landmark" value="<name>"/>."""
+        landmarks_map: Dict[str, set] = {}
+        if not self.network_parser or not getattr(self.network_parser, "net_file", None):
+            return landmarks_map
+
+        net_path = Path(self.network_parser.net_file)
+        if not net_path.exists():
+            return landmarks_map
+
+        try:
+            if net_path.suffix == '.gz' or net_path.name.endswith('.gz'):
+                with gzip.open(net_path, 'rb') as f:
+                    tree = ET.parse(f)
+            else:
+                tree = ET.parse(net_path)
+            root = tree.getroot()
+        except Exception:
+            return landmarks_map
+
+        for edge in root.findall('edge'):
+            edge_id = edge.get('id')
+            if not edge_id:
+                continue
+            for param in edge.findall('param'):
+                if (param.get('key') or '').strip().lower() != 'landmark':
+                    continue
+                landmark_name = (param.get('value') or '').strip()
+                if not landmark_name:
+                    continue
+                landmarks_map.setdefault(landmark_name, set()).add(edge_id)
+        return landmarks_map
+
+    def _clear_detected_landmark_rows(self):
+        """Remove detected-landmark row widgets from the UI."""
+        while self.detected_landmarks_list_layout.count():
+            item = self.detected_landmarks_list_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self.detected_landmark_row_widgets = {}
+
+    def _set_landmarks_from_mapping(self, landmarks_mapping: Dict):
+        """Set detected landmarks from mapping name -> iterable(edge_ids)."""
+        self.detected_landmarks = {}
+        self.detected_visible_landmarks = set()
+        if hasattr(self, "detected_landmarks_list_layout"):
+            self._clear_detected_landmark_rows()
+
+        palette = [
+            QColor(255, 105, 180),  # hot pink
+            QColor(255, 165, 0),    # orange
+            QColor(138, 43, 226),   # blue violet
+            QColor(0, 191, 255),    # deep sky blue
+            QColor(60, 179, 113),   # medium sea green
+            QColor(255, 69, 0),     # orange red
+            QColor(70, 130, 180),   # steel blue
+            QColor(205, 92, 92),    # indian red
+        ]
+
+        for idx, landmark_name in enumerate(sorted(landmarks_mapping.keys())):
+            edge_ids_raw = landmarks_mapping.get(landmark_name, [])
+            edge_ids = set(edge_ids_raw) if edge_ids_raw is not None else set()
+            color = palette[idx % len(palette)]
+            self.detected_landmarks[landmark_name] = {
+                "edges": edge_ids,
+                "color": color,
+            }
+            if hasattr(self, "detected_landmarks_list_layout"):
+                row = self._create_detected_landmark_row(landmark_name, len(edge_ids))
+                self.detected_landmarks_list_layout.addWidget(row)
+
+        if hasattr(self, "detected_landmarks_status"):
+            if self.detected_landmarks:
+                self.detected_landmarks_status.setText(f"Detected {len(self.detected_landmarks)} landmark(s).")
+            else:
+                self.detected_landmarks_status.setText("No landmarks detected.")
+
+    def _get_zones_with_positive_allocation(self) -> List[str]:
+        """Return zone names that currently have percentage > 0 (excluding noise)."""
+        zones = []
+        for zone_name, entry in self.zone_allocation_entries.items():
+            if zone_name.lower() == "noise":
+                continue
+            if entry["percentage_spin"].value() > 0:
+                zones.append(zone_name)
+        return sorted(zones)
+
+    def _get_zones_with_positive_allocation_from_seed(self) -> List[str]:
+        """Return positive-allocation zones from seed data when UI cards are not ready."""
+        seed = self._zone_allocation_seed if isinstance(self._zone_allocation_seed, dict) else {}
+        zones = []
+        for zone_name, payload in seed.items():
+            if str(zone_name).lower() == "noise":
+                continue
+            if not isinstance(payload, dict):
+                continue
+            try:
+                pct = float(payload.get("percentage", 0.0))
+            except (TypeError, ValueError):
+                pct = 0.0
+            if pct > 0.0:
+                zones.append(str(zone_name))
+        return sorted(zones)
+
+    def _get_positive_zone_names_for_schedule_rules(self) -> List[str]:
+        """Return positive zones using UI values when available, otherwise seed values."""
+        zones = self._get_zones_with_positive_allocation()
+        if zones:
+            return zones
+        return self._get_zones_with_positive_allocation_from_seed()
+
+    def _expand_schedule_landmark_aliases(self, selected_landmarks: List[str]) -> List[str]:
+        """Expand alias selections into concrete landmark names for config output."""
+        expanded = []
+        seen = set()
+        positive_zones = self._get_positive_zone_names_for_schedule_rules()
+        visit_count = int(self.default_visit_spin.value()) if hasattr(self, "default_visit_spin") else int(self._default_landmarks_seed.get("visit_count", 1))
+        visit_count = max(1, min(3, visit_count))
+        for name in selected_landmarks:
+            key = str(name).strip()
+            if not key:
+                continue
+            if key == "restaurants":
+                for zone_name in positive_zones:
+                    restaurant_name = f"restaurant{zone_name}"
+                    if restaurant_name not in seen:
+                        seen.add(restaurant_name)
+                        expanded.append(restaurant_name)
+                continue
+            if key == "visit":
+                for idx in range(1, visit_count + 1):
+                    visit_name = f"visit{idx}"
+                    if visit_name not in seen:
+                        seen.add(visit_name)
+                        expanded.append(visit_name)
+                continue
+            if key not in seen:
+                seen.add(key)
+                expanded.append(key)
+        return expanded
+
+    def _normalize_schedule_landmark_aliases_for_ui(self, selected_landmarks: List[str]) -> List[str]:
+        """Normalize concrete landmark names from config to UI alias checkboxes."""
+        normalized = []
+        seen = set()
+        positive_zones = self._get_positive_zone_names_for_schedule_rules()
+        restaurant_aliases = {f"restaurant{zone_name}" for zone_name in positive_zones}
+        has_restaurants_alias = False
+        has_visit_alias = False
+        for raw_name in selected_landmarks:
+            name = str(raw_name).strip()
+            if not name:
+                continue
+            lower_name = name.lower()
+            if name in restaurant_aliases:
+                has_restaurants_alias = True
+                continue
+            if re.match(r"^visit\d+$", lower_name):
+                has_visit_alias = True
+                continue
+            if name not in seen:
+                seen.add(name)
+                normalized.append(name)
+        if has_restaurants_alias and "restaurants" not in seen:
+            normalized.append("restaurants")
+            seen.add("restaurants")
+        if has_visit_alias and "visit" not in seen:
+            normalized.append("visit")
+            seen.add("visit")
+        return normalized
+
+    def _create_checkbox_group_widget(self) -> QWidget:
+        """Create a checkbox container with up to 4 options per row."""
+        container = QWidget()
+        layout = QGridLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setHorizontalSpacing(10)
+        layout.setVerticalSpacing(6)
+        for col in range(4):
+            layout.setColumnStretch(col, 1)
+        container.setLayout(layout)
+        container._checkboxes = {}  # type: ignore[attr-defined]
+        return container
+
+    def _clear_layout(self, layout):
+        """Remove all items/widgets from a layout."""
+        while layout.count():
+            item = layout.takeAt(0)
+            widget = item.widget()
+            child_layout = item.layout()
+            if widget is not None:
+                widget.deleteLater()
+            elif child_layout is not None:
+                self._clear_layout(child_layout)
+
+    def _get_selected_zone_names_from_list(self, checkbox_group_widget: QWidget) -> List[str]:
+        """Return checked values from a checkbox group widget."""
+        checkboxes = getattr(checkbox_group_widget, "_checkboxes", {})
+        return [name for name, cb in checkboxes.items() if cb.isChecked()]
+
+    def _collect_default_landmarks_from_form(self) -> Dict[str, object]:
+        """Collect only default_landmarks payload from current form fields."""
+        if not hasattr(self, "default_home_zones_list"):
+            return {
+                "home_zones": [],
+                "work_zones": [],
+                "restaurants_zones": [],
+                "visit_count": 1,
+            }
+        return {
+            "home_zones": self._get_selected_zone_names_from_list(self.default_home_zones_list),
+            "work_zones": self._get_selected_zone_names_from_list(self.default_work_zones_list),
+            "restaurants_zones": self._get_selected_zone_names_from_list(self.default_restaurants_zones_list),
+            "visit_count": int(self.default_visit_spin.value()) if hasattr(self, "default_visit_spin") else 1,
+        }
+
+    def _set_checkbox_group_options(
+        self,
+        checkbox_group_widget: QWidget,
+        options: List[str],
+        selected_names: List[str],
+        on_change=None,
+    ):
+        """Set checkbox options preserving checked values."""
+        layout = checkbox_group_widget.layout()
+        if layout is None:
+            layout = QGridLayout()
+            checkbox_group_widget.setLayout(layout)
+        self._clear_layout(layout)
+        selected_set = set(selected_names)
+        checkboxes = {}
+        for idx, option_name in enumerate(options):
+            checkbox = QCheckBox(str(option_name))
+            checkbox.setChecked(option_name in selected_set)
+            checkbox.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            if on_change is not None:
+                checkbox.toggled.connect(on_change)
+            row = idx // 4
+            col = idx % 4
+            layout.addWidget(checkbox, row, col)
+            checkboxes[option_name] = checkbox
+        if isinstance(layout, QGridLayout):
+            for col in range(4):
+                layout.setColumnStretch(col, 1)
+        checkbox_group_widget._checkboxes = checkboxes  # type: ignore[attr-defined]
+
+    def refresh_default_landmark_zone_options(self):
+        """Refresh Home/Work/Restaurants selectable zones from allocation > 0."""
+        if not hasattr(self, "default_home_zones_list"):
+            return
+
+        if self._default_landmarks_initialized:
+            existing_home = self._get_selected_zone_names_from_list(self.default_home_zones_list)
+            existing_work = self._get_selected_zone_names_from_list(self.default_work_zones_list)
+            existing_restaurants = self._get_selected_zone_names_from_list(self.default_restaurants_zones_list)
+            visit_value = int(self.default_visit_spin.value())
+        else:
+            existing_home = list(self._default_landmarks_seed.get("home_zones", []))
+            existing_work = list(self._default_landmarks_seed.get("work_zones", []))
+            existing_restaurants = list(self._default_landmarks_seed.get("restaurants_zones", []))
+            visit_value = int(self._default_landmarks_seed.get("visit_count", 1))
+
+        options = self._get_zones_with_positive_allocation()
+        widgets = [
+            (self.default_home_zones_list, existing_home),
+            (self.default_work_zones_list, existing_work),
+            (self.default_restaurants_zones_list, existing_restaurants),
+        ]
+        for checkbox_group_widget, selected_values in widgets:
+            self._set_checkbox_group_options(
+                checkbox_group_widget,
+                options,
+                selected_values,
+                on_change=lambda _checked: self._persist_default_landmarks_only(),
+            )
+
+        self.default_visit_spin.blockSignals(True)
+        self.default_visit_spin.setValue(max(1, min(3, visit_value)))
+        self.default_visit_spin.blockSignals(False)
+        self._default_landmarks_initialized = True
+
+    def _persist_default_landmarks_only(self):
+        """Persist default_landmarks even if other form sections are currently invalid."""
+        if self._suppress_auto_persist:
+            return
+        try:
+            config = self._read_project_simulation_config()
+            if not isinstance(config, dict):
+                config = {}
+            landmarks = config.get("landmarks", {})
+            if not isinstance(landmarks, dict):
+                landmarks = {}
+            landmarks["default_landmarks"] = self._collect_default_landmarks_from_form()
+            config["landmarks"] = landmarks
+            self._write_project_simulation_config(config)
+        except Exception:
+            pass
+
+    def _get_landmark_option_names(self) -> List[str]:
+        """Return selectable landmark names, including default landmarks."""
+        names = set()
+        names.update(self.detected_landmarks.keys())
+        if isinstance(self._landmarks_seed, dict):
+            names.update([k for k in self._landmarks_seed.keys() if k != "default_landmarks"])
+        names.update(["home", "work", "restaurants", "visit"])
+        return sorted(names)
+
+    def _sync_multiselect_list(self, checkbox_group_widget: QWidget, options: List[str], selected_values: List[str]):
+        """Replace checkbox options and preserve valid checked values."""
+        self._set_checkbox_group_options(
+            checkbox_group_widget,
+            options,
+            selected_values,
+            on_change=lambda _checked: self._persist_current_config_safely(),
+        )
+
+    def _clear_weekday_schedule_cards(self):
+        """Remove all weekday schedule card widgets."""
+        while self.weekday_schedule_cards_layout.count():
+            item = self.weekday_schedule_cards_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self.weekday_schedule_entries = []
+
+    def refresh_weekday_schedule_options(self):
+        """Refresh source_zones/origin/destination options based on current data."""
+        if not hasattr(self, "weekday_schedule_entries"):
+            return
+        zone_options = self._get_zones_with_positive_allocation()
+        landmark_options = self._get_landmark_option_names()
+        for entry in self.weekday_schedule_entries:
+            selected_source = self._get_selected_zone_names_from_list(entry["source_zones"])
+            selected_origin = self._get_selected_zone_names_from_list(entry["origin"])
+            selected_destination = self._get_selected_zone_names_from_list(entry["destination"])
+            self._sync_multiselect_list(entry["source_zones"], zone_options, selected_source)
+            self._sync_multiselect_list(entry["origin"], landmark_options, selected_origin)
+            self._sync_multiselect_list(entry["destination"], landmark_options, selected_destination)
+
+    def add_weekday_schedule_card(self, seed: Optional[Dict] = None):
+        """Add one weekday schedule subsection card."""
+        seed = seed if isinstance(seed, dict) else {}
+        card = QGroupBox("Schedule")
+        card_layout = QVBoxLayout()
+        card_layout.setSpacing(6)
+
+        top_row = QHBoxLayout()
+        top_row.addWidget(QLabel("name"))
+        name_input = QLineEdit(str(seed.get("name", "")).strip())
+        top_row.addWidget(name_input)
+        remove_btn = QPushButton("x")
+        remove_btn.setFixedWidth(28)
+        top_row.addWidget(remove_btn)
+        card_layout.addLayout(top_row)
+
+        time_row = QHBoxLayout()
+        time_row.addWidget(QLabel("start_time"))
+        start_time = NoScrollTimeEdit()
+        start_time.setDisplayFormat("HH:mm")
+        start_time.setTime(QTime.fromString(str(seed.get("start_time", "08:00")), "HH:mm"))
+        if not start_time.time().isValid():
+            start_time.setTime(QTime(8, 0))
+        time_row.addWidget(start_time)
+        time_row.addWidget(QLabel("end_time"))
+        end_time = NoScrollTimeEdit()
+        end_time.setDisplayFormat("HH:mm")
+        end_time.setTime(QTime.fromString(str(seed.get("end_time", "09:00")), "HH:mm"))
+        if not end_time.time().isValid():
+            end_time.setTime(QTime(9, 0))
+        time_row.addWidget(end_time)
+        time_row.addStretch()
+        card_layout.addLayout(time_row)
+
+        repeat_days_list = self._create_checkbox_group_widget()
+        selected_days = set(seed.get("repeat_on_days", [])) if isinstance(seed.get("repeat_on_days", []), list) else set()
+        self._set_checkbox_group_options(
+            repeat_days_list,
+            [str(day) for day in range(1, 8)],
+            [str(day) for day in selected_days],
+            on_change=lambda _checked: self._persist_current_config_safely(),
+        )
+        card_layout.addWidget(QLabel("repeat_on_days"))
+        card_layout.addWidget(repeat_days_list)
+
+        vpm_row = QHBoxLayout()
+        vpm_row.addWidget(QLabel("vpm_rate"))
+        vpm_spin = NoScrollSpinBox()
+        vpm_spin.setRange(1, 100)
+        try:
+            vpm_spin.setValue(int(seed.get("vpm_rate", 1)))
+        except (TypeError, ValueError):
+            vpm_spin.setValue(1)
+        vpm_row.addWidget(vpm_spin)
+        vpm_row.addStretch()
+        card_layout.addLayout(vpm_row)
+
+        source_zones_list = self._create_checkbox_group_widget()
+        card_layout.addWidget(QLabel("source_zones"))
+        card_layout.addWidget(source_zones_list)
+
+        origin_list = self._create_checkbox_group_widget()
+        card_layout.addWidget(QLabel("origin"))
+        card_layout.addWidget(origin_list)
+
+        destination_list = self._create_checkbox_group_widget()
+        card_layout.addWidget(QLabel("destination"))
+        card_layout.addWidget(destination_list)
+
+        card.setLayout(card_layout)
+        self.weekday_schedule_cards_layout.addWidget(card)
+
+        entry = {
+            "widget": card,
+            "name": name_input,
+            "start_time": start_time,
+            "end_time": end_time,
+            "repeat_days": repeat_days_list,
+            "vpm_rate": vpm_spin,
+            "source_zones": source_zones_list,
+            "origin": origin_list,
+            "destination": destination_list,
+        }
+        self.weekday_schedule_entries.append(entry)
+
+        selected_source = seed.get("source_zones", []) if isinstance(seed.get("source_zones", []), list) else []
+        selected_origin = seed.get("origin", []) if isinstance(seed.get("origin", []), list) else []
+        selected_destination = seed.get("destination", []) if isinstance(seed.get("destination", []), list) else []
+        self._sync_multiselect_list(source_zones_list, self._get_zones_with_positive_allocation(), selected_source)
+        self._sync_multiselect_list(origin_list, self._get_landmark_option_names(), selected_origin)
+        self._sync_multiselect_list(destination_list, self._get_landmark_option_names(), selected_destination)
+
+        remove_btn.clicked.connect(lambda: self.remove_weekday_schedule_card(card))
+        name_input.textChanged.connect(lambda _: self._persist_current_config_safely())
+        start_time.timeChanged.connect(lambda _: self._persist_current_config_safely())
+        end_time.timeChanged.connect(lambda _: self._persist_current_config_safely())
+        vpm_spin.valueChanged.connect(lambda _: self._persist_current_config_safely())
+        self._persist_current_config_safely()
+
+    def remove_weekday_schedule_card(self, card: QWidget):
+        """Remove one weekday schedule subsection card."""
+        self.weekday_schedule_entries = [e for e in self.weekday_schedule_entries if e["widget"] is not card]
+        card.deleteLater()
+        self._persist_current_config_safely()
+
+    def load_weekday_schedule_from_config(self, weekday_schedule):
+        """Load structured weekday schedule cards from config list."""
+        self._clear_weekday_schedule_cards()
+        if isinstance(weekday_schedule, list):
+            for item in weekday_schedule:
+                if isinstance(item, dict):
+                    item_copy = dict(item)
+                    origin_values = item_copy.get("origin", [])
+                    if isinstance(origin_values, list):
+                        item_copy["origin"] = self._normalize_schedule_landmark_aliases_for_ui(origin_values)
+                    destination_values = item_copy.get("destination", [])
+                    if isinstance(destination_values, list):
+                        item_copy["destination"] = self._normalize_schedule_landmark_aliases_for_ui(destination_values)
+                    self.add_weekday_schedule_card(item_copy)
+        self.refresh_weekday_schedule_options()
+
+    def _collect_weekday_schedule_from_cards(self) -> List[Dict]:
+        """Collect and validate structured weekday schedule sections."""
+        output = []
+        for idx, entry in enumerate(self.weekday_schedule_entries, start=1):
+            name = entry["name"].text().strip()
+            if not name:
+                raise ValueError(f"weekday_schedule entry #{idx}: name is required.")
+
+            start_qtime = entry["start_time"].time()
+            end_qtime = entry["end_time"].time()
+            start_str = start_qtime.toString("HH:mm")
+            end_str = end_qtime.toString("HH:mm")
+            if end_qtime <= start_qtime:
+                raise ValueError(f"weekday_schedule entry '{name}': end_time must be later than start_time.")
+
+            repeat_days = sorted([
+                int(value)
+                for value in self._get_selected_zone_names_from_list(entry["repeat_days"])
+                if str(value).isdigit()
+            ])
+            if not repeat_days:
+                raise ValueError(f"weekday_schedule entry '{name}': select at least one day in repeat_on_days.")
+
+            source_zones = self._get_selected_zone_names_from_list(entry["source_zones"])
+            if not source_zones:
+                raise ValueError(f"weekday_schedule entry '{name}': select at least one source_zones value.")
+
+            origin = self._get_selected_zone_names_from_list(entry["origin"])
+            if not origin:
+                raise ValueError(f"weekday_schedule entry '{name}': select at least one origin landmark.")
+            origin = self._expand_schedule_landmark_aliases(origin)
+
+            destination = self._get_selected_zone_names_from_list(entry["destination"])
+            if not destination:
+                raise ValueError(f"weekday_schedule entry '{name}': select at least one destination landmark.")
+            destination = self._expand_schedule_landmark_aliases(destination)
+
+            output.append({
+                "name": name,
+                "start_time": start_str,
+                "end_time": end_str,
+                "repeat_on_days": repeat_days,
+                "vpm_rate": int(entry["vpm_rate"].value()),
+                "source_zones": source_zones,
+                "origin": origin,
+                "destination": destination,
+            })
+        return output
 
     def _clear_detected_zone_rows(self):
         """Remove detected-zone row widgets from the UI."""
@@ -710,7 +1428,20 @@ class RouteGenerationPage(QWidget):
             self.detected_zones_status.setText(f"Detected {len(all_zone_names)} zone(s) ({mode_label}).")
 
         self.refresh_zone_allocation_section()
-        self._apply_detected_zone_colors()
+        self.refresh_weekday_schedule_options()
+        self._apply_color_overlays()
+        self._persist_current_config_safely()
+
+    def detect_landmarks_from_network(self):
+        """Detect landmarks from net.xml edge landmark params."""
+        if not self.network_parser:
+            return
+        landmarks_map = self._load_landmarks_from_network_file()
+        self._set_landmarks_from_mapping(landmarks_map)
+        self.refresh_default_landmark_zone_options()
+        self.refresh_weekday_schedule_options()
+        self._apply_color_overlays()
+        self._persist_current_config_safely()
 
     def _create_detected_zone_row(self, zone_name: str, edge_count: int, node_count: int) -> QWidget:
         """Create one detected-zone line: zone - edges - nodes - show/hide."""
@@ -742,6 +1473,36 @@ class RouteGenerationPage(QWidget):
         self.detected_zone_row_widgets[zone_name] = row
         return row
 
+    def _create_detected_landmark_row(self, landmark_name: str, edge_count: int) -> QWidget:
+        """Create one detected-landmark line: name - edges - show/hide."""
+        row = QFrame()
+        row_layout = QHBoxLayout()
+        row_layout.setContentsMargins(4, 2, 4, 2)
+        row_layout.setSpacing(8)
+
+        color = self.detected_landmarks[landmark_name]['color']
+        color_chip = QLabel()
+        color_chip.setFixedSize(12, 12)
+        color_chip.setStyleSheet(
+            f"background-color: rgb({color.red()}, {color.green()}, {color.blue()});"
+            "border: 1px solid #444; border-radius: 2px;"
+        )
+        row_layout.addWidget(color_chip)
+        row_layout.addWidget(QLabel(landmark_name))
+        row_layout.addWidget(QLabel(f"- {edge_count} edges"))
+        row_layout.addStretch()
+
+        toggle_btn = QPushButton("Show")
+        toggle_btn.setCheckable(True)
+        toggle_btn.toggled.connect(
+            lambda checked, l=landmark_name, b=toggle_btn: self.toggle_detected_landmark(l, checked, b)
+        )
+        row_layout.addWidget(toggle_btn)
+
+        row.setLayout(row_layout)
+        self.detected_landmark_row_widgets[landmark_name] = row
+        return row
+
     def toggle_detected_zone(self, zone_name: str, checked: bool, button: QPushButton):
         """Show/hide one detected zone on the map with its unique color."""
         if zone_name not in self.detected_zones:
@@ -754,12 +1515,25 @@ class RouteGenerationPage(QWidget):
             self.detected_visible_zones.discard(zone_name)
             button.setText("Show")
 
-        self._apply_detected_zone_colors()
+        self._apply_color_overlays()
 
-    def _apply_detected_zone_colors(self):
-        """Apply visible detected-zone colors to edges and nodes."""
+    def toggle_detected_landmark(self, landmark_name: str, checked: bool, button: QPushButton):
+        """Show/hide one detected landmark edges with unique color."""
+        if landmark_name not in self.detected_landmarks:
+            return
+        if checked:
+            self.detected_visible_landmarks.add(landmark_name)
+            button.setText("Hide")
+        else:
+            self.detected_visible_landmarks.discard(landmark_name)
+            button.setText("Show")
+        self._apply_color_overlays()
+
+    def _apply_color_overlays(self):
+        """Apply visible zone and landmark color overlays to map entities."""
         edge_colors = {}
         node_colors = {}
+        # Zones: edges + nodes
         for zone_name in self.detected_visible_zones:
             zone_data = self.detected_zones.get(zone_name)
             if not zone_data:
@@ -769,6 +1543,14 @@ class RouteGenerationPage(QWidget):
                 edge_colors[edge_id] = color
             for node_id in zone_data['nodes']:
                 node_colors[node_id] = color
+        # Landmarks: edges only (override zone edge colors when both active).
+        for landmark_name in self.detected_visible_landmarks:
+            landmark_data = self.detected_landmarks.get(landmark_name)
+            if not landmark_data:
+                continue
+            color = landmark_data['color']
+            for edge_id in landmark_data['edges']:
+                edge_colors[edge_id] = color
 
         self.map_view.set_edge_color_overrides(edge_colors)
         self.map_view.set_node_color_overrides(node_colors)
@@ -795,22 +1577,22 @@ class RouteGenerationPage(QWidget):
         type_form.setSpacing(6)
 
         name_input = QLineEdit(name)
-        length_spin = QDoubleSpinBox()
+        length_spin = NoScrollDoubleSpinBox()
         length_spin.setRange(0.1, 100.0)
         length_spin.setDecimals(2)
         length_spin.setValue(length)
 
-        width_spin = QDoubleSpinBox()
+        width_spin = NoScrollDoubleSpinBox()
         width_spin.setRange(0.1, 20.0)
         width_spin.setDecimals(2)
         width_spin.setValue(width)
 
-        height_spin = QDoubleSpinBox()
+        height_spin = NoScrollDoubleSpinBox()
         height_spin.setRange(0.1, 20.0)
         height_spin.setDecimals(2)
         height_spin.setValue(height)
 
-        speed_spin = QDoubleSpinBox()
+        speed_spin = NoScrollDoubleSpinBox()
         speed_spin.setRange(0.1, 100.0)
         speed_spin.setDecimals(2)
         speed_spin.setValue(max_speed)
@@ -846,6 +1628,7 @@ class RouteGenerationPage(QWidget):
         self.vehicle_type_entries.append(entry)
         self.vehicle_types_cards_layout.addWidget(card_container)
         self.refresh_zone_allocation_section()
+        self._persist_current_config_safely()
 
     def remove_vehicle_type_card(self, card_container: QWidget):
         """Remove one vehicle type card."""
@@ -855,6 +1638,7 @@ class RouteGenerationPage(QWidget):
                 card_container.deleteLater()
                 self.vehicle_type_entries.pop(idx)
                 self.refresh_zone_allocation_section()
+                self._persist_current_config_safely()
                 break
 
     def _collect_vehicle_types_from_cards(self) -> Dict[str, Dict]:
@@ -911,32 +1695,43 @@ class RouteGenerationPage(QWidget):
             }
         return existing
 
-    def refresh_zone_allocation_section(self):
+    def refresh_zone_allocation_section(self, preserve_existing: bool = True):
         """Rebuild zone allocation cards using detected zones and vehicle types."""
         if not hasattr(self, "zone_allocation_cards_layout"):
             return
 
-        existing = self._get_existing_zone_allocation_data()
+        existing = self._get_existing_zone_allocation_data() if preserve_existing else {}
+        seed = self._zone_allocation_seed if isinstance(self._zone_allocation_seed, dict) else {}
         vehicle_type_names = self._get_vehicle_type_names()
 
-        zone_names = sorted(self.detected_zones.keys()) if self.detected_zones else []
+        zone_names = set(self.detected_zones.keys()) if self.detected_zones else set()
+        zone_names.update(seed.keys())
         # Keep a noise bucket aligned with desired JSON structure.
-        if "noise" not in zone_names:
-            zone_names.append("noise")
+        zone_names.add("noise")
+        zone_names = sorted(zone_names)
 
         self._clear_zone_allocation_cards()
         for zone_name in zone_names:
             prior = existing.get(zone_name, {})
+            seed_zone = seed.get(zone_name, {}) if isinstance(seed.get(zone_name, {}), dict) else {}
+            prior_percentage = prior.get("percentage", seed_zone.get("percentage", 0.0))
+            prior_distribution = prior.get(
+                "distribution",
+                seed_zone.get("vehicle_type_distribution", {}) if isinstance(seed_zone.get("vehicle_type_distribution", {}), dict) else {}
+            )
             has_distribution = zone_name.lower() != "noise"
             if "has_distribution" in prior:
                 has_distribution = bool(prior["has_distribution"])
             self._add_zone_allocation_card(
                 zone_name=zone_name,
                 vehicle_type_names=vehicle_type_names,
-                percentage=float(prior.get("percentage", 0.0)),
-                distribution=prior.get("distribution", {}),
+                percentage=float(prior_percentage),
+                distribution=prior_distribution,
                 has_distribution=has_distribution,
             )
+        self._update_zone_allocation_total_label()
+        self.refresh_default_landmark_zone_options()
+        self.refresh_weekday_schedule_options()
 
     def _add_zone_allocation_card(
         self,
@@ -954,7 +1749,7 @@ class RouteGenerationPage(QWidget):
 
         percentage_row = QHBoxLayout()
         percentage_row.addWidget(QLabel("percentage"))
-        percentage_spin = QDoubleSpinBox()
+        percentage_spin = NoScrollDoubleSpinBox()
         percentage_spin.setRange(0.0, 100.0)
         percentage_spin.setDecimals(2)
         percentage_spin.setValue(float(percentage))
@@ -968,14 +1763,26 @@ class RouteGenerationPage(QWidget):
             for vt_name in vehicle_type_names:
                 row = QHBoxLayout()
                 row.addWidget(QLabel(vt_name))
-                spin = QDoubleSpinBox()
+                spin = NoScrollDoubleSpinBox()
                 spin.setRange(0.0, 100.0)
                 spin.setDecimals(2)
-                spin.setValue(float(distribution.get(vt_name, 0.0)))
+                if distribution:
+                    spin.setValue(float(distribution.get(vt_name, 0.0)))
+                elif vt_name == "passenger":
+                    spin.setValue(100.0)
+                else:
+                    spin.setValue(0.0)
+                spin.valueChanged.connect(lambda _v, z=zone_name, vt=vt_name: self._on_distribution_spin_changed(z, vt))
                 row.addWidget(spin)
                 row.addStretch()
                 card_layout.addLayout(row)
                 distribution_spins[vt_name] = spin
+
+            distribution_total_label = QLabel("Distribution total: 0%")
+            distribution_total_label.setStyleSheet("color: #666; font-size: 10px;")
+            card_layout.addWidget(distribution_total_label)
+        else:
+            distribution_total_label = None
 
         card.setLayout(card_layout)
         self.zone_allocation_cards_layout.addWidget(card)
@@ -984,30 +1791,78 @@ class RouteGenerationPage(QWidget):
             "percentage_spin": percentage_spin,
             "distribution_spins": distribution_spins,
             "has_distribution": has_distribution,
+            "distribution_total_label": distribution_total_label,
         }
+        percentage_spin.valueChanged.connect(lambda _v, z=zone_name: self._on_zone_percentage_changed(z))
+        if has_distribution:
+            self._update_distribution_total_label(zone_name)
+
+    def _on_zone_percentage_changed(self, changed_zone: str):
+        """Handle zone percentage updates."""
+        if self._suppress_auto_persist:
+            return
+        self._update_zone_allocation_total_label()
+        self._persist_current_config_safely()
+
+    def _update_zone_allocation_total_label(self):
+        """Update total percentage label for all zones."""
+        total = 0.0
+        for entry in self.zone_allocation_entries.values():
+            total += entry["percentage_spin"].value()
+        self.zone_allocation_total_label.setText(f"Total: {total:.2f}%")
+        if abs(total - 100.0) <= 0.01:
+            self.zone_allocation_total_label.setStyleSheet("color: #2e7d32; font-size: 10px;")
+        else:
+            self.zone_allocation_total_label.setStyleSheet("color: #c62828; font-size: 10px;")
+
+    def _update_distribution_total_label(self, zone_name: str):
+        """Update distribution total label for one zone."""
+        entry = self.zone_allocation_entries.get(zone_name)
+        if not entry or not entry.get("has_distribution", True):
+            return
+        total = sum(spin.value() for spin in entry["distribution_spins"].values())
+        label = entry.get("distribution_total_label")
+        if label is None:
+            return
+        label.setText(f"Distribution total: {total:.2f}%")
+        if abs(total - 100.0) <= 0.01:
+            label.setStyleSheet("color: #2e7d32; font-size: 10px;")
+        else:
+            label.setStyleSheet("color: #c62828; font-size: 10px;")
+
+    def _on_distribution_spin_changed(self, zone_name: str, changed_type: str):
+        """Handle distribution updates and refresh total label."""
+        if self._suppress_auto_persist:
+            return
+        self._update_distribution_total_label(zone_name)
+        self._persist_current_config_safely()
 
     def _collect_zone_allocation_from_cards(self) -> Dict[str, Dict]:
         """Collect zone_allocation dict in target JSON structure."""
         zone_allocation = {}
+        total_percentage = 0.0
         for zone_name, entry in self.zone_allocation_entries.items():
             zone_payload = {
                 "percentage": float(entry["percentage_spin"].value())
             }
+            total_percentage += zone_payload["percentage"]
             if entry.get("has_distribution", True):
-                zone_payload["vehicle_type_distribution"] = {
+                distribution = {
                     vt_name: float(spin.value())
                     for vt_name, spin in entry["distribution_spins"].items()
                 }
+                if abs(sum(distribution.values()) - 100.0) > 0.01:
+                    raise ValueError(f"vehicle_type_distribution for zone '{zone_name}' must total 100%.")
+                zone_payload["vehicle_type_distribution"] = distribution
             zone_allocation[zone_name] = zone_payload
+        if abs(total_percentage - 100.0) > 0.01:
+            raise ValueError("Sum of all zone percentages (including noise) must be 100%.")
         return zone_allocation
 
     def _build_config_from_form(self) -> dict:
         """Build simulation config dict from GUI inputs."""
-        try:
-            landmarks = json.loads(self.landmarks_editor.toPlainText().strip() or "{}")
-            weekday_schedule = json.loads(self.weekday_schedule_editor.toPlainText().strip() or "[]")
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"Invalid JSON section: {exc.msg} (line {exc.lineno})") from exc
+        weekday_schedule = self._collect_weekday_schedule_from_cards()
+        landmarks = self._collect_landmarks_for_config()
         zone_allocation = self._collect_zone_allocation_from_cards()
         vehicle_types = self._collect_vehicle_types_from_cards()
 
@@ -1026,38 +1881,31 @@ class RouteGenerationPage(QWidget):
         }
         return config
 
-    def generate_config_preview(self):
-        """Generate and show JSON preview from current GUI values."""
+    def _collect_landmarks_for_config(self) -> Dict[str, List[str]]:
+        """Collect landmarks as JSON-serializable mapping used by simulation config."""
+        source = self.detected_landmarks
+        if not source and isinstance(self._landmarks_seed, dict):
+            source = {
+                name: {"edges": set(edges) if isinstance(edges, list) else set(edges or []), "color": QColor(120, 120, 120)}
+                for name, edges in self._landmarks_seed.items()
+            }
+        output = {}
+        for landmark_name in sorted(source.keys()):
+            edge_ids = source[landmark_name].get("edges", set())
+            output[landmark_name] = sorted(list(edge_ids))
+        output["default_landmarks"] = self._collect_default_landmarks_from_form()
+        return output
+
+    def _persist_current_config_safely(self):
+        """Try to persist current form into project config; ignore transient invalid edits."""
+        if self._suppress_auto_persist:
+            return
         try:
             config = self._build_config_from_form()
-            self.config_preview.setPlainText(json.dumps(config, indent=2))
-        except ValueError as exc:
-            QMessageBox.warning(self, "Invalid Input", str(exc))
-
-    def save_config_json(self):
-        """Save generated config JSON to disk."""
-        try:
-            config = self._build_config_from_form()
-        except ValueError as exc:
-            QMessageBox.warning(self, "Invalid Input", str(exc))
-            return
-
-        output_path, _ = QFileDialog.getSaveFileName(
-            self,
-            "Save Simulation Config JSON",
-            str((Path(self.project_path) / "simulation.config.json").resolve()),
-            "JSON Files (*.json)"
-        )
-        if not output_path:
-            return
-
-        try:
-            with open(output_path, 'w', encoding='utf-8') as f:
-                json.dump(config, f, indent=2)
-            self.config_preview.setPlainText(json.dumps(config, indent=2))
-            QMessageBox.information(self, "Saved", f"Configuration saved to:\n{output_path}")
-        except Exception as exc:
-            QMessageBox.warning(self, "Save Failed", f"Failed to save config: {exc}")
+            self._write_project_simulation_config(config)
+        except Exception:
+            # Ignore while user is still editing incomplete data.
+            pass
 
     def on_map_network_render_finished(self):
         """Restore current selection/display visualization after network redraw."""
@@ -1069,8 +1917,8 @@ class RouteGenerationPage(QWidget):
         else:
             self._update_zone_visualization()
 
-        # Re-apply detected-zone coloring overlays after map items are rebuilt.
-        self._apply_detected_zone_colors()
+        # Re-apply zone/landmark coloring overlays after map items are rebuilt.
+        self._apply_color_overlays()
         self.map_view.viewport().update()
     
     def on_area_selected(self, area_type: str, rect: QRectF):

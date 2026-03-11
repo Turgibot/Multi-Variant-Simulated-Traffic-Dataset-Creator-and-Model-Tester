@@ -20,6 +20,7 @@ from src.gui.project_dialog import NewProjectDialog
 from src.gui.route_generation_page import RouteGenerationPage
 from src.gui.simulation_page import SimulationPage
 from src.utils.project_manager import ProjectManager
+from src.utils.sumo_config_manager import SUMOConfigManager
 
 
 class WelcomePage(QWidget):
@@ -728,6 +729,7 @@ class MainWindow(QMainWindow):
             # Create new page for the current project
             self.route_page = RouteGenerationPage(project_name, project_path)
             self.route_page.back_clicked.connect(self.show_dataset_generation)
+            self.route_page.run_simulation_clicked.connect(self.open_simulation_from_route_page)
             self.central_widget.addWidget(self.route_page)
         
         # Show route generation page
@@ -741,6 +743,31 @@ class MainWindow(QMainWindow):
             # Reopen dataset generation if page doesn't exist
             if hasattr(self, 'current_project_name') and self.current_project_name:
                 self.open_dataset_generation(self.current_project_name)
+
+    def open_simulation_from_route_page(self):
+        """Open simulation page using current project settings from route page."""
+        project_name = getattr(self, "current_project_name", None)
+        project_path = getattr(self, "current_project_path", None)
+        if not project_name or not project_path:
+            QMessageBox.warning(self, "Error", "No project selected.")
+            return
+
+        config_manager = SUMOConfigManager(project_path)
+        sumocfg_path = config_manager.get_sumocfg_path()
+        if not sumocfg_path:
+            QMessageBox.warning(self, "Error", "SUMO configuration file is not set for this project.")
+            return
+
+        output_folder = config_manager.get_dataset_output_folder()
+        if not output_folder:
+            output_folder = str((Path(project_path) / "datasets").resolve())
+            Path(output_folder).mkdir(parents=True, exist_ok=True)
+            try:
+                config_manager.set_dataset_output_folder(output_folder)
+            except Exception:
+                pass
+
+        self.open_simulation(project_name, sumocfg_path, output_folder)
     
     def open_simulation(self, project_name: str, sumocfg_path: str, output_folder: str):
         """Open simulation page for a project."""
