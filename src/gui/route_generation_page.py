@@ -13,19 +13,20 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from xml.dom import minidom
 
-from PySide6.QtCore import QPointF, QRectF, QSize, Qt, Signal, QTime, QUrl
+from PySide6.QtCore import QObject, QPointF, QRectF, QSize, Qt, QThread, Signal, QTime, QUrl
 from PySide6.QtGui import (QBrush, QColor, QDesktopServices, QFont, QGuiApplication,
                            QPainter, QPen)
 from PySide6.QtWidgets import (QFrame, QGraphicsView, QGroupBox, QHBoxLayout,
                                QCheckBox, QGridLayout,
                                QFileDialog, QFormLayout, QLabel, QLineEdit,
-                               QMessageBox, QPushButton,
+                               QMessageBox, QProgressBar, QPushButton,
                                QScrollArea, QSizePolicy, QSpinBox,
                                QDoubleSpinBox, QTimeEdit, QVBoxLayout, QWidget)
 
 from src.gui.simulation_view import SimulationView
 from src.utils.network_parser import NetworkParser
 from src.utils.route_xml_generator import RouteXMLGenerator
+from src.utils.simulation_db_service import SimulationDBService
 from src.utils.sumo_config_manager import SUMOConfigManager
 
 
@@ -268,6 +269,38 @@ class AreaSelectionView(SimulationView):
         return []
 
 
+class SimulationPrepWorker(QObject):
+    """Background worker that runs step-2 preparation checks."""
+
+    progress_changed = Signal(int, str)
+    finished = Signal(bool, str, object)
+
+    def __init__(self, project_name: str, project_path: str):
+        super().__init__()
+        self.project_name = project_name
+        self.project_path = project_path
+        self._cancel_requested = False
+
+    def cancel(self):
+        """Request cancellation (best-effort)."""
+        self._cancel_requested = True
+
+    def run(self):
+        """Run Step A preparation into simulation DB."""
+        try:
+            service = SimulationDBService(self.project_name, self.project_path)
+            summary = service.prepare_initial_snapshot(
+                progress_cb=lambda pct, msg: self.progress_changed.emit(pct, msg),
+                is_cancelled=lambda: self._cancel_requested,
+            )
+            if self._cancel_requested:
+                self.finished.emit(False, "Preparation cancelled.", {})
+            else:
+                self.finished.emit(True, "Simulation DB generated successfully.", summary)
+        except Exception as exc:
+            self.finished.emit(False, str(exc), {})
+
+
 class RouteGenerationPage(QWidget):
     """Page for generating SUMO route files manually."""
     
@@ -309,6 +342,8 @@ class RouteGenerationPage(QWidget):
         self._zone_allocation_seed = {}
         self.weekday_schedule_entries = []
         self._suppress_auto_persist = False
+        self._prep_thread = None
+        self._prep_worker = None
         
         # Track assignments: junction_id -> zone_id, edge_id -> zone_id
         self.junction_assignments = {}  # Dict of {junction_id: zone_id}
@@ -593,6 +628,13 @@ class RouteGenerationPage(QWidget):
 
         config_actions_row = QHBoxLayout()
         config_actions_row.addStretch()
+        self.generate_sim_db_btn = QPushButton("Generate Simulation DB")
+        self.generate_sim_db_btn.clicked.connect(self.on_generate_simulation_db_clicked)
+        config_actions_row.addWidget(self.generate_sim_db_btn)
+        self.cancel_prepare_btn = QPushButton("Cancel")
+        self.cancel_prepare_btn.setEnabled(False)
+        self.cancel_prepare_btn.clicked.connect(self.on_cancel_preparation_clicked)
+        config_actions_row.addWidget(self.cancel_prepare_btn)
         open_config_btn = QPushButton("Open simulation.config.json")
         open_config_btn.clicked.connect(self.open_simulation_config_json)
         config_actions_row.addWidget(open_config_btn)
@@ -600,6 +642,15 @@ class RouteGenerationPage(QWidget):
         run_sim_btn.clicked.connect(self.run_simulation_clicked.emit)
         config_actions_row.addWidget(run_sim_btn)
         config_layout.addLayout(config_actions_row)
+        self.prepare_progress_bar = QProgressBar()
+        self.prepare_progress_bar.setRange(0, 100)
+        self.prepare_progress_bar.setValue(0)
+        self.prepare_progress_bar.setVisible(False)
+        config_layout.addWidget(self.prepare_progress_bar)
+        self.prepare_status_label = QLabel("")
+        self.prepare_status_label.setStyleSheet("color: #666;")
+        self.prepare_status_label.setVisible(False)
+        config_layout.addWidget(self.prepare_status_label)
 
         # Keep stats label available for existing logic.
         self.stats_label = QLabel("")
@@ -685,6 +736,65 @@ class RouteGenerationPage(QWidget):
                 QMessageBox.warning(self, "Open Failed", f"Could not open:\n{self.simulation_config_path}")
         except Exception as exc:
             QMessageBox.warning(self, "Open Failed", f"Could not open config JSON:\n{exc}")
+
+    def on_generate_simulation_db_clicked(self):
+        """Run step-2 preparation checks in background."""
+        if self._prep_thread is not None:
+            return
+        self.generate_sim_db_btn.setEnabled(False)
+        self.cancel_prepare_btn.setEnabled(True)
+        self.prepare_progress_bar.setVisible(True)
+        self.prepare_status_label.setVisible(True)
+        self.prepare_progress_bar.setValue(0)
+        self.prepare_status_label.setText("Starting preparation...")
+        self.prepare_status_label.setStyleSheet("color: #666;")
+
+        self._prep_thread = QThread(self)
+        self._prep_worker = SimulationPrepWorker(self.project_name, self.project_path)
+        self._prep_worker.moveToThread(self._prep_thread)
+        self._prep_thread.started.connect(self._prep_worker.run)
+        self._prep_worker.progress_changed.connect(self.on_preparation_progress_changed)
+        self._prep_worker.finished.connect(self.on_preparation_finished)
+        self._prep_worker.finished.connect(self._prep_thread.quit)
+        self._prep_thread.finished.connect(self._prep_thread.deleteLater)
+        self._prep_thread.start()
+
+    def on_cancel_preparation_clicked(self):
+        """Best-effort cancellation for running preparation worker."""
+        if self._prep_worker is not None:
+            self._prep_worker.cancel()
+            self.prepare_status_label.setText("Cancelling...")
+            self.prepare_status_label.setStyleSheet("color: #c62828;")
+            self.cancel_prepare_btn.setEnabled(False)
+
+    def on_preparation_progress_changed(self, value: int, message: str):
+        """Update progress bar and status text."""
+        self.prepare_progress_bar.setValue(max(0, min(100, int(value))))
+        self.prepare_status_label.setText(message)
+
+    def on_preparation_finished(self, success: bool, message: str, summary: object):
+        """Handle completion of step-2 background preparation checks."""
+        self.generate_sim_db_btn.setEnabled(True)
+        self.cancel_prepare_btn.setEnabled(False)
+        if success:
+            details = ""
+            if isinstance(summary, dict):
+                details = (
+                    f" db={summary.get('db_path', '')},"
+                    f" zones={summary.get('zone_count', 0)},"
+                    f" vehicles={summary.get('vehicle_count', 0)}"
+                )
+            self.prepare_status_label.setText(f"{message}{details}")
+            self.prepare_status_label.setStyleSheet("color: #2e7d32;")
+            self.prepare_progress_bar.setValue(100)
+        else:
+            self.prepare_status_label.setText(f"Preparation failed: {message}")
+            self.prepare_status_label.setStyleSheet("color: #c62828;")
+
+        if self._prep_worker is not None:
+            self._prep_worker.deleteLater()
+        self._prep_worker = None
+        self._prep_thread = None
 
     def _connect_auto_persist_signals(self):
         """Persist to project simulation config whenever form values change."""
