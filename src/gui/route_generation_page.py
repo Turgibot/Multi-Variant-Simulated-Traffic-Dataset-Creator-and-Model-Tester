@@ -413,8 +413,8 @@ class RouteGenerationPage(QWidget):
         content_layout.addWidget(map_group, stretch=2)
 
         # Right side: Simulation Configuration (fixed title + scrollable form)
-        config_panel = QGroupBox("Simulation Configuration")
-        config_panel.setStyleSheet("""
+        self.config_panel = QGroupBox("Simulation Configuration")
+        self.config_panel.setStyleSheet("""
             QGroupBox {
                 font-weight: bold;
                 border: 2px solid #ddd;
@@ -428,6 +428,7 @@ class RouteGenerationPage(QWidget):
                 padding: 0 5px;
             }
         """)
+        self.config_panel.setFixedWidth(640)
         config_panel_layout = QVBoxLayout()
         config_panel_layout.setContentsMargins(8, 8, 8, 8)
         config_panel_layout.setSpacing(6)
@@ -635,12 +636,12 @@ class RouteGenerationPage(QWidget):
         self.cancel_prepare_btn.setEnabled(False)
         self.cancel_prepare_btn.clicked.connect(self.on_cancel_preparation_clicked)
         config_actions_row.addWidget(self.cancel_prepare_btn)
-        open_config_btn = QPushButton("Open simulation.config.json")
-        open_config_btn.clicked.connect(self.open_simulation_config_json)
-        config_actions_row.addWidget(open_config_btn)
-        run_sim_btn = QPushButton("Run Simulation")
-        run_sim_btn.clicked.connect(self.run_simulation_clicked.emit)
-        config_actions_row.addWidget(run_sim_btn)
+        self.open_config_btn = QPushButton("Open simulation.config.json")
+        self.open_config_btn.clicked.connect(self.open_simulation_config_json)
+        config_actions_row.addWidget(self.open_config_btn)
+        self.run_sim_btn = QPushButton("Run Simulation")
+        self.run_sim_btn.clicked.connect(self.run_simulation_clicked.emit)
+        config_actions_row.addWidget(self.run_sim_btn)
         config_layout.addLayout(config_actions_row)
         self.prepare_progress_bar = QProgressBar()
         self.prepare_progress_bar.setRange(0, 100)
@@ -648,6 +649,8 @@ class RouteGenerationPage(QWidget):
         self.prepare_progress_bar.setVisible(False)
         config_layout.addWidget(self.prepare_progress_bar)
         self.prepare_status_label = QLabel("")
+        self.prepare_status_label.setWordWrap(True)
+        self.prepare_status_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         self.prepare_status_label.setStyleSheet("color: #666;")
         self.prepare_status_label.setVisible(False)
         config_layout.addWidget(self.prepare_status_label)
@@ -661,8 +664,8 @@ class RouteGenerationPage(QWidget):
         config_group.setLayout(config_layout)
         config_scroll.setWidget(config_group)
         config_panel_layout.addWidget(config_scroll)
-        config_panel.setLayout(config_panel_layout)
-        content_layout.addWidget(config_panel, stretch=1)
+        self.config_panel.setLayout(config_panel_layout)
+        content_layout.addWidget(self.config_panel, stretch=1)
 
         main_layout.addLayout(content_layout)
         self.setLayout(main_layout)
@@ -776,17 +779,40 @@ class RouteGenerationPage(QWidget):
         """Handle completion of step-2 background preparation checks."""
         self.generate_sim_db_btn.setEnabled(True)
         self.cancel_prepare_btn.setEnabled(False)
+        self.generate_sim_db_btn.setVisible(True)
+        self.cancel_prepare_btn.setVisible(True)
+        if hasattr(self, "open_config_btn"):
+            self.open_config_btn.setVisible(True)
+        if hasattr(self, "run_sim_btn"):
+            self.run_sim_btn.setVisible(True)
         if success:
             details = ""
+            config_updated = False
             if isinstance(summary, dict):
+                db_name = Path(str(summary.get("db_path", ""))).name if summary.get("db_path") else ""
                 details = (
-                    f" db={summary.get('db_path', '')},"
+                    f" db={db_name},"
+                    f" vehicles={summary.get('vehicle_count', 0)},"
+                    f" roads={summary.get('road_count', 0)},"
+                    f" junctions={summary.get('junction_count', 0)},"
                     f" zones={summary.get('zone_count', 0)},"
-                    f" vehicles={summary.get('vehicle_count', 0)}"
+                    f" scheduled={summary.get('scheduled_count', 0)},"
+                    f" required={summary.get('required_vehicles', 0)},"
+                    f" total={summary.get('total_num_vehicles', 0)}"
                 )
+                config_updated = bool(summary.get("config_updated", False))
+                if config_updated:
+                    details += ", config_updated=true"
             self.prepare_status_label.setText(f"{message}{details}")
             self.prepare_status_label.setStyleSheet("color: #2e7d32;")
             self.prepare_progress_bar.setValue(100)
+            if config_updated:
+                # Reflect only the updated total value without reloading whole UI.
+                if isinstance(summary, dict) and hasattr(self, "total_vehicles_spin"):
+                    try:
+                        self.total_vehicles_spin.setValue(int(summary.get("total_num_vehicles", self.total_vehicles_spin.value())))
+                    except Exception:
+                        pass
         else:
             self.prepare_status_label.setText(f"Preparation failed: {message}")
             self.prepare_status_label.setStyleSheet("color: #c62828;")

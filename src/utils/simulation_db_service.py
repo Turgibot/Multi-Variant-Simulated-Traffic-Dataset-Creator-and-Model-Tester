@@ -111,7 +111,7 @@ class SimulationDBService:
 
         try:
             emit(5, "Loading and validating simulation config...")
-            config, config_hash = self.load_and_validate_config()
+            config, _config_hash = self.load_and_validate_config()
             if cancelled():
                 raise RuntimeError("Preparation cancelled.")
 
@@ -146,12 +146,22 @@ class SimulationDBService:
 
             emit(70, "Generating initial vehicles...")
             with self.sim_db.connect() as conn:
-                vehicles_count = self._insert_initial_vehicles(conn, parser, config, zone_edge_map, positive_zones)
+                vehicles_count, required_vehicles, config_updated = self._insert_initial_vehicles(
+                    conn, parser, config, zone_edge_map, positive_zones
+                )
+                conn.commit()
+            if cancelled():
+                raise RuntimeError("Preparation cancelled.")
+
+            emit(82, "Populating scheduler assignments...")
+            with self.sim_db.connect() as conn:
+                scheduled_count = self._populate_scheduler_from_config(conn, config)
                 conn.commit()
             if cancelled():
                 raise RuntimeError("Preparation cancelled.")
 
             emit(92, "Finalizing metadata...")
+            config_hash = compute_config_hash(config)
             self.sim_db.write_preparation_fingerprint(config_hash)
             emit(100, "Simulation DB generated successfully.")
 
@@ -159,9 +169,15 @@ class SimulationDBService:
                 "db_path": str(self.sim_db.db_path),
                 "config_hash": config_hash,
                 "network_path": str(net_path),
+                "road_count": len(parser.get_edges()),
+                "junction_count": len(parser.get_junctions()),
                 "zone_count": len(zone_edge_map),
                 "landmark_count": len(landmarks_map),
                 "vehicle_count": vehicles_count,
+                "scheduled_count": scheduled_count,
+                "required_vehicles": required_vehicles,
+                "config_updated": config_updated,
+                "total_num_vehicles": int(config.get("vehicle_generation", {}).get("total_num_vehicles", 0)),
             }
         except Exception:
             if cancelled() and self.sim_db.db_path.exists():
@@ -256,10 +272,7 @@ class SimulationDBService:
                 raise ValueError(f"weekday_schedule '{name}' has invalid 'start_time'.")
             if not isinstance(end_time, str) or not _HHMM_RE.match(end_time):
                 raise ValueError(f"weekday_schedule '{name}' has invalid 'end_time'.")
-            if self._hhmm_to_minutes(end_time) <= self._hhmm_to_minutes(start_time):
-                raise ValueError(
-                    f"weekday_schedule '{name}' must have end_time later than start_time."
-                )
+            # Allow overnight windows (e.g. 23:00 -> 06:00), matching legacy flow.
 
             repeat_on_days = item.get("repeat_on_days")
             if not isinstance(repeat_on_days, list) or not repeat_on_days:
@@ -271,9 +284,9 @@ class SimulationDBService:
                     )
 
             vpm_rate = item.get("vpm_rate")
-            if not isinstance(vpm_rate, int) or vpm_rate < 1 or vpm_rate > 100:
+            if not isinstance(vpm_rate, (int, float)) or float(vpm_rate) <= 0 or float(vpm_rate) > 100:
                 raise ValueError(
-                    f"weekday_schedule '{name}' vpm_rate must be an integer in [1, 100]."
+                    f"weekday_schedule '{name}' vpm_rate must be in (0, 100]."
                 )
 
             for field_name in ("source_zones", "origin", "destination"):
@@ -362,19 +375,28 @@ class SimulationDBService:
                 node_to_zone[node_id] = zone_name
         rows = []
         for junc_id, j in parser.get_junctions().items():
+            incoming = []
+            outgoing = []
+            if junc_id in parser.get_nodes():
+                node_entry = parser.get_nodes().get(junc_id, {})
+                incoming = list(node_entry.get("incoming_roads", [])) if isinstance(node_entry, dict) else []
+                outgoing = list(node_entry.get("outgoing_roads", [])) if isinstance(node_entry, dict) else []
             rows.append(
                 (
                     junc_id,
+                    0,
                     float(j.get("x", 0.0)),
                     float(j.get("y", 0.0)),
+                    str(j.get("type", "priority")),
                     node_to_zone.get(junc_id),
-                    json.dumps(j, ensure_ascii=False),
+                    json.dumps(sorted(incoming), ensure_ascii=False),
+                    json.dumps(sorted(outgoing), ensure_ascii=False),
                 )
             )
         conn.executemany(
             """
-            INSERT INTO junctions (junction_id, x, y, zone_name, payload_json)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO junctions (id, node_type, x, y, type, zone, incoming_roads_json, outgoing_roads_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             rows,
         )
@@ -394,21 +416,25 @@ class SimulationDBService:
             lanes = edge.get("lanes", [])
             lane_count = len(lanes)
             length = parser.get_edge_length(edge_id)
+            road_speed = float(lanes[0].get("speed", 13.89)) if lanes else 13.89
             rows.append(
                 (
                     edge_id,
                     edge.get("from"),
                     edge.get("to"),
+                    road_speed,
                     float(length),
                     int(lane_count),
                     edge_to_zone.get(edge_id),
-                    json.dumps(edge, ensure_ascii=False),
+                    json.dumps({}, ensure_ascii=False),  # vehicles_on_road
+                    0.0,  # density
+                    0.0,  # avg_speed
                 )
             )
         conn.executemany(
             """
-            INSERT INTO roads (edge_id, from_junction_id, to_junction_id, length, lane_count, zone_name, payload_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO roads (id, from_junction, to_junction, speed, length, num_lanes, zone, vehicles_on_road_json, density, avg_speed)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             rows,
         )
@@ -426,23 +452,21 @@ class SimulationDBService:
         for zone_name in zone_names:
             payload = zone_alloc.get(zone_name, {}) if isinstance(zone_alloc, dict) else {}
             pct = float(payload.get("percentage", 0.0)) if isinstance(payload, dict) else 0.0
-            zone_payload = {
-                "zone_name": zone_name,
-                "percentage": pct,
-            }
             rows.append(
                 (
                     zone_name,
+                    None,
                     pct,
-                    json.dumps(zone_edge_map.get(zone_name, []), ensure_ascii=False),
-                    json.dumps(zone_node_map.get(zone_name, []), ensure_ascii=False),
-                    json.dumps(zone_payload, ensure_ascii=False),
+                    json.dumps(sorted(zone_edge_map.get(zone_name, [])), ensure_ascii=False),
+                    json.dumps(sorted(zone_node_map.get(zone_name, [])), ensure_ascii=False),
+                    json.dumps([], ensure_ascii=False),  # original_vehicles
+                    json.dumps([], ensure_ascii=False),  # current_vehicles
                 )
             )
         conn.executemany(
             """
-            INSERT INTO zones (zone_name, percentage, edge_ids_json, node_ids_json, payload_json)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO zones (id, description, percentage, edges_json, junctions_json, original_vehicles_json, current_vehicles_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             rows,
         )
@@ -509,7 +533,7 @@ class SimulationDBService:
                     str(item.get("start_time", "")),
                     str(item.get("end_time", "")),
                     json.dumps(item.get("repeat_on_days", []), ensure_ascii=False),
-                    int(item.get("vpm_rate", 1)),
+                    float(item.get("vpm_rate", 1)),
                     json.dumps(item.get("source_zones", []), ensure_ascii=False),
                     json.dumps(origin_expanded, ensure_ascii=False),
                     json.dumps(destination_expanded, ensure_ascii=False),
@@ -533,7 +557,7 @@ class SimulationDBService:
         config: Dict,
         zone_edge_map: Dict[str, List[str]],
         positive_zones: List[str],
-    ) -> int:
+    ) -> Tuple[int, int, bool]:
         vg = config.get("vehicle_generation", {})
         zone_alloc = vg.get("zone_allocation", {})
         vehicle_types = vg.get("vehicle_types", {})
@@ -541,10 +565,19 @@ class SimulationDBService:
         dev_fraction = float(vg.get("dev_fraction", 1.0))
         original_total_vehicles = int(vg.get("total_num_vehicles", 0))
         total_vehicles = round(original_total_vehicles * dev_fraction)
+        original_required = self._estimate_required_vehicles(config)
+        required_vehicles = round(original_required * dev_fraction)
+        config_updated = False
+        if required_vehicles > total_vehicles:
+            updated_total_num_vehicles = max(original_total_vehicles, int(original_required))
+            vg["total_num_vehicles"] = int(updated_total_num_vehicles)
+            self._write_simulation_config(config)
+            total_vehicles = round(float(updated_total_num_vehicles) * dev_fraction)
+            config_updated = True
 
         active_zone_ids = [z for z in positive_zones if z.upper() != "H"]
         if not active_zone_ids or total_vehicles <= 0:
-            return 0
+            return 0, required_vehicles, config_updated
 
         noise_per_zone: Dict[str, int] = {}
         sum_vehicles = 0
@@ -581,6 +614,8 @@ class SimulationDBService:
         visit_count = max(1, min(3, visit_count))
 
         rows = []
+        zone_original: Dict[str, List[str]] = {}
+        zone_current: Dict[str, List[str]] = {}
         vehicle_id_counter = 0
         for zone_id in active_zone_ids:
             zone_cfg = zone_alloc.get(zone_id, {})
@@ -646,24 +681,58 @@ class SimulationDBService:
                     restaurant_prefs = [f"restaurant{z}" for z in restaurants_zones]
                     visit_prefs = [f"visit{k}" for k in range(1, visit_count + 1)]
                     payload = {
-                        "vehicle_id": veh_id,
-                        "vehicle_type": vtype,
-                        "current_zone": zone_id,
-                        "current_edge": road_id,
-                        "current_position": position,
-                        "current_x": start_x,
-                        "current_y": start_y,
-                        "length": float(attrs.get("length", 4.5)),
-                        "width": float(attrs.get("width", 1.8)),
-                        "height": float(attrs.get("height", 1.5)),
-                        "color": "white" if is_noise else str(attrs.get("color", "gray")),
-                        "status": "parked",
-                        "is_noise": bool(is_noise),
+                        "home": {"edge": road_id, "position": position},
+                        "work": None,
+                        "friend1": None,
+                        "friend2": None,
+                        "friend3": None,
+                        "park1": None,
+                        "park2": None,
+                        "park3": None,
+                        "park4": None,
+                        "stadium1": None,
+                        "stadium2": None,
+                        "restaurantA": None,
+                        "restaurantB": None,
+                        "restaurantC": None,
                     }
                     rows.append(
                         (
                             veh_id,
+                            1,  # node_type
                             vtype,
+                            float(attrs.get("length", 4.5)),
+                            float(attrs.get("width", 1.8)),
+                            float(attrs.get("height", 1.5)),
+                            "white" if is_noise else str(attrs.get("color", "gray")),
+                            0.0,  # speed
+                            0.0,  # acceleration
+                            float(start_x),
+                            float(start_y),
+                            zone_id,
+                            road_id,
+                            float(position),
+                            "parked",
+                            json.dumps([False, False, False, False], ensure_ascii=False),
+                            1 if is_noise else 0,
+                            json.dumps([], ensure_ascii=False),  # route
+                            0.0,  # route_length
+                            json.dumps([], ensure_ascii=False),  # route_left
+                            0.0,  # route_length_left
+                            None,  # origin_name
+                            None,  # origin_zone
+                            None,  # origin_edge
+                            None,  # origin_position
+                            None,  # origin_x
+                            None,  # origin_y
+                            None,  # origin_start_sec
+                            None,  # destination_name
+                            None,  # destination_zone
+                            None,  # destination_edge
+                            None,  # destination_position
+                            None,  # destination_x
+                            None,  # destination_y
+                            None,  # destination_step
                             home_zone,
                             work_zone,
                             json.dumps(restaurant_prefs, ensure_ascii=False),
@@ -671,6 +740,8 @@ class SimulationDBService:
                             json.dumps(payload, ensure_ascii=False),
                         )
                     )
+                    zone_original.setdefault(zone_id, []).append(veh_id)
+                    zone_current.setdefault(zone_id, []).append(veh_id)
                     vehicle_id_counter += 1
                     if vehicle_id_counter >= total_vehicles:
                         break
@@ -683,12 +754,196 @@ class SimulationDBService:
             conn.executemany(
                 """
                 INSERT INTO vehicles
-                (vehicle_id, vehicle_type, home_zone, work_zone, restaurant_preferences_json, visit_preferences_json, payload_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                (
+                    id, node_type, vehicle_type, length, width, height, color,
+                    speed, acceleration, current_x, current_y, current_zone, current_edge, current_position,
+                    status, scheduled_json, is_stagnant, route_json, route_length, route_left_json, route_length_left,
+                    origin_name, origin_zone, origin_edge, origin_position, origin_x, origin_y, origin_start_sec,
+                    destination_name, destination_zone, destination_edge, destination_position, destination_x, destination_y, destination_step,
+                    home_zone, work_zone, restaurant_preferences_json, visit_preferences_json, destinations_json
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 rows,
             )
-        return len(rows)
+        # Keep Zone entity parity with legacy flow before scheduler population.
+        for zone_id, vehicle_ids in zone_original.items():
+            conn.execute(
+                """
+                UPDATE zones
+                SET original_vehicles_json = ?, current_vehicles_json = ?
+                WHERE id = ?
+                """,
+                (
+                    json.dumps(sorted(vehicle_ids), ensure_ascii=False),
+                    json.dumps(sorted(zone_current.get(zone_id, [])), ensure_ascii=False),
+                    zone_id,
+                ),
+            )
+        return len(rows), required_vehicles, config_updated
+
+    def _estimate_required_vehicles(self, config: Dict) -> int:
+        """
+        Estimate required vehicles using legacy SimManager logic.
+
+        Mirrors Traffic-DSTG-Gen estimate_required_vehicles:
+        total += dispatches_per_window * num_source_zones * num_repeat_days
+        """
+        total = 0
+        for entry in config.get("weekday_schedule", []):
+            if not isinstance(entry, dict):
+                continue
+            vpm = float(entry.get("vpm_rate", 0.0))
+            interval = 60.0 / max(vpm, 0.01)
+
+            start = self._hhmm_to_minutes(str(entry.get("start_time", "00:00"))) * 60
+            end = self._hhmm_to_minutes(str(entry.get("end_time", "00:00"))) * 60
+            duration = max(end - start, 0)
+
+            num_dispatches = int(duration // interval)
+            num_zones = len(entry.get("source_zones", []))
+            num_days = len(entry.get("repeat_on_days", [1, 2, 3, 4, 5]))
+            total += num_dispatches * num_zones * num_days
+        return int(total)
+
+    def _write_simulation_config(self, config: Dict) -> None:
+        """Persist updated simulation config JSON to project file."""
+        with open(self.simulation_config_path, "w", encoding="utf-8") as f:
+            json.dump(config, f, indent=2, ensure_ascii=False)
+
+    def _populate_scheduler_from_config(self, conn: sqlite3.Connection, config: Dict) -> int:
+        """
+        Populate scheduler assignments in DB, mirroring legacy schedule_from_config flow.
+
+        Creates step-level dispatch assignments per vehicle.
+        """
+        schedule_entries = config.get("weekday_schedule", [])
+        vg = config.get("vehicle_generation", {})
+        num_weeks = int(vg.get("simulation_weeks", 1))
+        dev_fraction = float(vg.get("dev_fraction", 1.0))
+        seconds_in_day = 86400
+        seconds_in_week = seconds_in_day * 7
+
+        # window lookup by name for FK linkage when possible
+        window_id_by_name: Dict[str, int] = {}
+        for row in conn.execute("SELECT window_id, name FROM schedule_windows").fetchall():
+            window_id_by_name[str(row[1])] = int(row[0])
+
+        # zone -> vehicle pool (legacy: zone.current_vehicles)
+        zone_current_vehicles: Dict[str, List[str]] = {}
+        for row in conn.execute("SELECT id, current_vehicles_json FROM zones").fetchall():
+            zone_id = str(row[0])
+            try:
+                vids = json.loads(row[1]) if row[1] else []
+            except Exception:
+                vids = []
+            zone_current_vehicles[zone_id] = [str(v) for v in vids if isinstance(v, str)]
+
+        # vehicle scheduled flags by week, mirrored from legacy vehicle.scheduled[week]
+        vehicle_scheduled: Dict[str, List[bool]] = {}
+        for row in conn.execute("SELECT id FROM vehicles").fetchall():
+            vid = str(row[0])
+            vehicle_scheduled[vid] = [False] * max(num_weeks, 1)
+
+        assignment_rows = []
+        total_scheduled = 0
+
+        for week in range(num_weeks):
+            week_start = week * seconds_in_week
+            for entry in schedule_entries:
+                if not isinstance(entry, dict):
+                    continue
+                entry_name = str(entry.get("name", ""))
+                start_sec_local = self._hhmm_to_minutes(str(entry.get("start_time", "00:00"))) * 60
+                end_sec_local = self._hhmm_to_minutes(str(entry.get("end_time", "00:00"))) * 60
+                # support overnight windows
+                if end_sec_local <= start_sec_local:
+                    end_sec_local += seconds_in_day
+                start_sec = start_sec_local + week_start
+                end_sec = end_sec_local + week_start
+
+                vpm_rate = float(entry.get("vpm_rate", 0.0)) * dev_fraction
+                if vpm_rate <= 0:
+                    continue
+                interval = max(int(60 // vpm_rate), 1)
+                local_steps = list(range(start_sec, end_sec + 1, int(interval)))
+                if not local_steps:
+                    local_steps = [start_sec]
+
+                source_zones = entry.get("source_zones", [])
+                origin_keys = [str(v) for v in entry.get("origin", []) if isinstance(v, str)]
+                destination_keys = [str(v) for v in entry.get("destination", []) if isinstance(v, str)]
+                repeat_days = [int(d) for d in entry.get("repeat_on_days", []) if isinstance(d, int)]
+                if not origin_keys or not destination_keys:
+                    continue
+
+                for day in repeat_days:
+                    base_step = (day - 1) * seconds_in_day
+                    steps = [base_step + s for s in local_steps]
+                    for zone_id in source_zones:
+                        zone_id = str(zone_id)
+                        eligible = [
+                            vid
+                            for vid in zone_current_vehicles.get(zone_id, [])
+                            if vid in vehicle_scheduled and not vehicle_scheduled[vid][week]
+                        ]
+                        eligible = eligible[: int(len(eligible) * dev_fraction)]
+                        steps_to_use = steps[: int(len(eligible))]
+                        for step, veh_id in zip(steps_to_use, eligible):
+                            vehicle_scheduled[veh_id][week] = True
+
+                            # pick different origin/destination labels
+                            origin = random.choice(origin_keys)
+                            dest = random.choice(destination_keys)
+                            attempts = 0
+                            while origin == dest and attempts < 20:
+                                origin = random.choice(origin_keys)
+                                dest = random.choice(destination_keys)
+                                attempts += 1
+                            if origin == dest:
+                                continue
+
+                            payload = {
+                                "entry_name": entry_name,
+                                "zone_id": zone_id,
+                                "week_index": week,
+                                "day_of_week": day,
+                                "simulation_step": int(step),
+                                "origin_name": origin,
+                                "destination_name": dest,
+                            }
+                            assignment_rows.append(
+                                (
+                                    veh_id,
+                                    window_id_by_name.get(entry_name),
+                                    int(step),
+                                    int(week),
+                                    int(day),
+                                    origin,
+                                    dest,
+                                    0,
+                                    json.dumps(payload, ensure_ascii=False),
+                                )
+                            )
+                            total_scheduled += 1
+
+        if assignment_rows:
+            conn.executemany(
+                """
+                INSERT INTO vehicle_schedule_assignments
+                (vehicle_id, window_id, simulation_step, week_index, day_of_week, origin_name, destination_name, priority, payload_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                assignment_rows,
+            )
+
+        # Persist scheduled flags into vehicle rows.
+        for vid, flags in vehicle_scheduled.items():
+            conn.execute(
+                "UPDATE vehicles SET scheduled_json = ? WHERE id = ?",
+                (json.dumps(flags, ensure_ascii=False), vid),
+            )
+        return total_scheduled
 
     def _load_zone_attributes_from_network_file(self, parser: NetworkParser) -> Tuple[Dict[str, str], Dict[str, str]]:
         """Parse explicit zone attributes from net file for edges and nodes/junctions."""

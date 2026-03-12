@@ -92,29 +92,37 @@ class SimulationDB:
             );
 
             CREATE TABLE IF NOT EXISTS junctions (
-                junction_id TEXT PRIMARY KEY,
+                id TEXT PRIMARY KEY,
+                node_type INTEGER NOT NULL DEFAULT 0,
                 x REAL,
                 y REAL,
-                zone_name TEXT,
-                payload_json TEXT NOT NULL
+                type TEXT,
+                zone TEXT,
+                incoming_roads_json TEXT NOT NULL,
+                outgoing_roads_json TEXT NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS roads (
-                edge_id TEXT PRIMARY KEY,
-                from_junction_id TEXT,
-                to_junction_id TEXT,
+                id TEXT PRIMARY KEY,
+                from_junction TEXT,
+                to_junction TEXT,
+                speed REAL,
                 length REAL,
-                lane_count INTEGER,
-                zone_name TEXT,
-                payload_json TEXT NOT NULL
+                num_lanes INTEGER,
+                zone TEXT,
+                vehicles_on_road_json TEXT NOT NULL,
+                density REAL,
+                avg_speed REAL
             );
 
             CREATE TABLE IF NOT EXISTS zones (
-                zone_name TEXT PRIMARY KEY,
+                id TEXT PRIMARY KEY,
+                description TEXT,
                 percentage REAL,
-                edge_ids_json TEXT NOT NULL,
-                node_ids_json TEXT NOT NULL,
-                payload_json TEXT NOT NULL
+                edges_json TEXT NOT NULL,
+                junctions_json TEXT NOT NULL,
+                original_vehicles_json TEXT NOT NULL,
+                current_vehicles_json TEXT NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS landmarks (
@@ -134,13 +142,46 @@ class SimulationDB:
             );
 
             CREATE TABLE IF NOT EXISTS vehicles (
-                vehicle_id TEXT PRIMARY KEY,
+                id TEXT PRIMARY KEY,
+                node_type INTEGER NOT NULL DEFAULT 1,
                 vehicle_type TEXT NOT NULL,
+                length REAL,
+                width REAL,
+                height REAL,
+                color TEXT,
+                speed REAL,
+                acceleration REAL,
+                current_x REAL,
+                current_y REAL,
+                current_zone TEXT,
+                current_edge TEXT,
+                current_position REAL,
+                status TEXT,
+                scheduled_json TEXT NOT NULL,
+                is_stagnant INTEGER NOT NULL DEFAULT 0,
+                route_json TEXT NOT NULL,
+                route_length REAL,
+                route_left_json TEXT NOT NULL,
+                route_length_left REAL,
+                origin_name TEXT,
+                origin_zone TEXT,
+                origin_edge TEXT,
+                origin_position REAL,
+                origin_x REAL,
+                origin_y REAL,
+                origin_start_sec INTEGER,
+                destination_name TEXT,
+                destination_zone TEXT,
+                destination_edge TEXT,
+                destination_position REAL,
+                destination_x REAL,
+                destination_y REAL,
+                destination_step INTEGER,
                 home_zone TEXT,
                 work_zone TEXT,
                 restaurant_preferences_json TEXT NOT NULL,
                 visit_preferences_json TEXT NOT NULL,
-                payload_json TEXT NOT NULL,
+                destinations_json TEXT NOT NULL,
                 FOREIGN KEY(vehicle_type) REFERENCES vehicle_types(type_name)
             );
 
@@ -150,7 +191,7 @@ class SimulationDB:
                 start_time TEXT NOT NULL,
                 end_time TEXT NOT NULL,
                 repeat_on_days_json TEXT NOT NULL,
-                vpm_rate INTEGER NOT NULL,
+                vpm_rate REAL NOT NULL,
                 source_zones_json TEXT NOT NULL,
                 origin_json TEXT NOT NULL,
                 destination_json TEXT NOT NULL,
@@ -160,10 +201,15 @@ class SimulationDB:
             CREATE TABLE IF NOT EXISTS vehicle_schedule_assignments (
                 assignment_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 vehicle_id TEXT NOT NULL,
-                window_id INTEGER NOT NULL,
+                window_id INTEGER,
+                simulation_step INTEGER NOT NULL,
+                week_index INTEGER NOT NULL,
+                day_of_week INTEGER NOT NULL,
+                origin_name TEXT NOT NULL,
+                destination_name TEXT NOT NULL,
                 priority INTEGER DEFAULT 0,
                 payload_json TEXT NOT NULL,
-                FOREIGN KEY(vehicle_id) REFERENCES vehicles(vehicle_id),
+                FOREIGN KEY(vehicle_id) REFERENCES vehicles(id),
                 FOREIGN KEY(window_id) REFERENCES schedule_windows(window_id)
             );
 
@@ -179,13 +225,15 @@ class SimulationDB:
             );
 
             CREATE INDEX IF NOT EXISTS idx_roads_zone_name
-                ON roads(zone_name);
+                ON roads(zone);
             CREATE INDEX IF NOT EXISTS idx_vehicles_type
                 ON vehicles(vehicle_type);
             CREATE INDEX IF NOT EXISTS idx_assignments_vehicle
                 ON vehicle_schedule_assignments(vehicle_id);
             CREATE INDEX IF NOT EXISTS idx_assignments_window
                 ON vehicle_schedule_assignments(window_id);
+            CREATE INDEX IF NOT EXISTS idx_assignments_step
+                ON vehicle_schedule_assignments(simulation_step);
             CREATE INDEX IF NOT EXISTS idx_route_candidates_vehicle
                 ON route_candidates(vehicle_id);
             """
