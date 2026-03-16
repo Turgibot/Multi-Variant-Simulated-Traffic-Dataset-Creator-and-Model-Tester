@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import random
 import re
+import shutil
 import sqlite3
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -88,6 +89,78 @@ class SimulationDBService:
         parser = NetworkParser(str(resolved_net_path))
         return parser, resolved_net_path
 
+    def validate_db_readiness_for_current_config(self) -> Tuple[bool, str]:
+        """
+        Check whether simulation DB is ready for current simulation.config.json.
+
+        Readiness requires:
+        - DB exists
+        - schema version matches
+        - stored config hash matches current config hash
+        """
+        try:
+            _config, config_hash = self.load_and_validate_config()
+        except Exception as exc:
+            return False, f"Simulation config invalid: {exc}"
+        return self.sim_db.validate_ready_for_config(config_hash)
+
+    def get_simulation_limit_seconds(self) -> int:
+        """
+        Return simulation end time in seconds (legacy calculate_simulation_limit).
+
+        Formula: num_weeks * seconds_per_week + 1800 (30 min extra for finalization).
+        If config is missing or invalid, returns 86400 + 1800 (1 day + 30 min).
+        """
+        seconds_in_day = 86400
+        seconds_in_week = seconds_in_day * 7
+        extra_time = 1800  # 30 minutes
+        default = seconds_in_week + extra_time  # 1 week + 30 min if no config
+        if not self.simulation_config_path.exists():
+            return default
+        try:
+            with open(self.simulation_config_path, "r", encoding="utf-8") as f:
+                config = json.load(f)
+            vg = config.get("vehicle_generation")
+            if not isinstance(vg, dict):
+                return default
+            num_weeks = int(vg.get("simulation_weeks", 1))
+            num_weeks = max(1, num_weeks)
+            return num_weeks * seconds_in_week + extra_time
+        except Exception:
+            return default
+
+    def clear_roads_and_zones(self) -> Dict[str, int]:
+        """
+        Clear runtime traffic state for roads/zones before simulation dispatch.
+
+        Mirrors legacy clear_roads_and_zones behavior:
+        - roads: clear vehicles, reset density/avg_speed
+        - zones: clear original/current vehicles
+        """
+        with self.sim_db.connect() as conn:
+            road_count_row = conn.execute("SELECT COUNT(*) FROM roads").fetchone()
+            zone_count_row = conn.execute("SELECT COUNT(*) FROM zones").fetchone()
+            road_count = int(road_count_row[0]) if road_count_row else 0
+            zone_count = int(zone_count_row[0]) if zone_count_row else 0
+
+            conn.execute(
+                """
+                UPDATE roads
+                SET vehicles_on_road_json = ?, density = 0.0, avg_speed = 0.0
+                """,
+                (json.dumps([], ensure_ascii=False),),
+            )
+            conn.execute(
+                """
+                UPDATE zones
+                SET original_vehicles_json = ?, current_vehicles_json = ?
+                """,
+                (json.dumps([], ensure_ascii=False), json.dumps([], ensure_ascii=False)),
+            )
+            conn.commit()
+
+        return {"roads_cleared": road_count, "zones_cleared": zone_count}
+
     def prepare_initial_snapshot(
         self,
         progress_cb: Optional[Callable[[int, str], None]] = None,
@@ -117,6 +190,11 @@ class SimulationDBService:
 
             emit(15, "Loading SUMO network...")
             parser, net_path = self.load_network()
+            if cancelled():
+                raise RuntimeError("Preparation cancelled.")
+
+            emit(22, "Resetting mapping directory...")
+            self.delete_mapping_dir_if_exists()
             if cancelled():
                 raise RuntimeError("Preparation cancelled.")
 
@@ -153,7 +231,14 @@ class SimulationDBService:
             if cancelled():
                 raise RuntimeError("Preparation cancelled.")
 
-            emit(82, "Populating scheduler assignments...")
+            emit(76, "Assigning destinations (origin/destination labels → edges)...")
+            with self.sim_db.connect() as conn:
+                self._assign_destinations_from_config(conn, parser, config, zone_edge_map, landmarks_map, positive_zones)
+                conn.commit()
+            if cancelled():
+                raise RuntimeError("Preparation cancelled.")
+
+            emit(82, "Populating scheduler assignments (step, origin, destination per vehicle)...")
             with self.sim_db.connect() as conn:
                 scheduled_count = self._populate_scheduler_from_config(conn, config)
                 conn.commit()
@@ -311,13 +396,19 @@ class SimulationDBService:
         zone_edges: Dict[str, List[str]] = {}
         zone_nodes: Dict[str, List[str]] = {}
 
+        # Same zone→edge logic as GUI "Zones" section Show button (detect_zones_from_network).
         for edge_id, edge_data in parser.get_edges().items():
-            zone_name = (
-                edge_zone_attr.get(edge_id)
-                or node_zone_attr.get(edge_data.get("from", ""))
-                or node_zone_attr.get(edge_data.get("to", ""))
-                or self._extract_zone_name_from_id(edge_id)
-            )
+            zone_name = edge_zone_attr.get(edge_id)
+            if not zone_name:
+                zone_name = node_zone_attr.get(edge_data.get("from", ""))
+            if not zone_name:
+                zone_name = node_zone_attr.get(edge_data.get("to", ""))
+            if not zone_name:
+                zone_name = self._extract_zone_name_from_id(edge_id)
+            if not zone_name:
+                zone_name = self._extract_zone_name_from_id(edge_data.get("from", ""))
+            if not zone_name:
+                zone_name = self._extract_zone_name_from_id(edge_data.get("to", ""))
             if not zone_name:
                 continue
             zone_edges.setdefault(zone_name, []).append(edge_id)
@@ -623,21 +714,16 @@ class SimulationDBService:
                 continue
 
             num_zone_vehicles = zone_vehicle_counts.get(zone_id, 0) + noise_per_zone.get(zone_id, 0)
+            noise_assigned_in_zone = 0  # first N vehicles in this zone are noise
             type_distribution = zone_cfg.get("vehicle_type_distribution", {})
             if not isinstance(type_distribution, dict):
                 continue
 
-            all_zone_edges = zone_edge_map.get(zone_id, [])
-            eligible_roads = []
-            for edge_id in all_zone_edges:
-                edge = parser.get_edges().get(edge_id, {})
-                lane_count = len(edge.get("lanes", []))
-                if lane_count == 1:
-                    eligible_roads.append(edge_id)
-            if not eligible_roads:
-                eligible_roads = list(all_zone_edges)
+            # Use all zone edges for vehicle placement (same zone→edges as GUI Show button; no single-lane filter).
+            eligible_roads = list(zone_edge_map.get(zone_id, []))
             if not eligible_roads:
                 continue
+            # Do not shuffle: match legacy — vehicles distributed in order across zone roads
 
             type_allocations = {
                 vtype: round((float(vperc) / 100.0) * num_zone_vehicles)
@@ -654,12 +740,14 @@ class SimulationDBService:
                 vehicle_specs.append((vtype, vehicle_types[vtype]))
             random.shuffle(vehicle_specs)
 
+            # Legacy (entities.py): per_road = specs // len(eligible_roads), overflow; distribute evenly across zone roads
             per_road = len(vehicle_specs) // len(eligible_roads)
             overflow = len(vehicle_specs) % len(eligible_roads)
             vehicle_iter = iter(vehicle_specs)
             for i, road_id in enumerate(eligible_roads):
                 vehicles_on_road = per_road + (1 if i < overflow else 0)
                 length = parser.get_edge_length(road_id)
+                # Legacy: spacing = length / (vehicles_on_road + 1); pos = (j+1)*spacing → evenly spaced along road
                 spacing = length / (vehicles_on_road + 1) if vehicles_on_road > 0 else 0.0
                 edge = parser.get_edges().get(road_id, {})
                 lanes = edge.get("lanes", [])
@@ -674,15 +762,34 @@ class SimulationDBService:
                         break
 
                     veh_id = f"veh_{vehicle_id_counter}"
+                    # Home position: evenly spaced along road (legacy: pos = (j+1)*spacing, spacing = length/(vehicles_on_road+1))
                     position = (j + 1) * spacing
-                    is_noise = j < noise_per_zone.get(zone_id, 0)
-                    home_zone = random.choice(home_zones) if home_zones else zone_id
+                    zone_noise_limit = noise_per_zone.get(zone_id, 0)
+                    is_noise = noise_assigned_in_zone < zone_noise_limit
+                    if is_noise:
+                        noise_assigned_in_zone += 1
+                    # For debugging and consistency with GUI, use the zone itself as home_zone.
+                    home_zone = zone_id
                     work_zone = random.choice(work_zones) if work_zones else zone_id
                     restaurant_prefs = [f"restaurant{z}" for z in restaurants_zones]
                     visit_prefs = [f"visit{k}" for k in range(1, visit_count + 1)]
+                    work_dest = None
+                    if work_zones:
+                        work_edges = [
+                            eid for eid in zone_edge_map.get(work_zone, [])
+                            if len(parser.get_edges().get(eid, {}).get("lanes", [])) == 1
+                        ]
+                        if not work_edges:
+                            work_edges = list(zone_edge_map.get(work_zone, []))
+                        if work_edges:
+                            w_road = random.choice(work_edges)
+                            w_len = parser.get_edge_length(w_road)
+                            w_pos = random.uniform(0.0, max(0.0, w_len - 1.0)) if w_len else 0.0
+                            work_dest = {"edge": w_road, "position": w_pos}
+                    # Origin for this vehicle = "home" (starting edge/position); filled in _assign_destinations_from_config
                     payload = {
                         "home": {"edge": road_id, "position": position},
-                        "work": None,
+                        "work": work_dest,
                         "friend1": None,
                         "friend2": None,
                         "friend3": None,
@@ -757,7 +864,7 @@ class SimulationDBService:
                 (
                     id, node_type, vehicle_type, length, width, height, color,
                     speed, acceleration, current_x, current_y, current_zone, current_edge, current_position,
-                    status, scheduled_json, is_stagnant, route_json, route_length, route_left_json, route_length_left,
+                    status, scheduled_json, is_noise, route_json, route_length, route_left_json, route_length_left,
                     origin_name, origin_zone, origin_edge, origin_position, origin_x, origin_y, origin_start_sec,
                     destination_name, destination_zone, destination_edge, destination_position, destination_x, destination_y, destination_step,
                     home_zone, work_zone, restaurant_preferences_json, visit_preferences_json, destinations_json
@@ -811,11 +918,231 @@ class SimulationDBService:
         with open(self.simulation_config_path, "w", encoding="utf-8") as f:
             json.dump(config, f, indent=2, ensure_ascii=False)
 
+    def _resolve_mapping_dir(self, dataset_output_folder: Optional[str] = None) -> Path:
+        """Resolve <dataset_output>/mapping directory path."""
+        if dataset_output_folder:
+            output_dir = Path(dataset_output_folder).resolve()
+        else:
+            output = self.config_manager.get_dataset_output_folder()
+            if output:
+                output_dir = Path(output).resolve()
+            else:
+                output_dir = (self.project_path / "datasets").resolve()
+        return output_dir / "mapping"
+
+    def delete_mapping_dir_if_exists(self, dataset_output_folder: Optional[str] = None) -> bool:
+        """
+        Delete mapping directory if present.
+
+        This is called on DB generation so mapping files always match the new snapshot.
+        """
+        mapping_dir = self._resolve_mapping_dir(dataset_output_folder)
+        if mapping_dir.exists():
+            if mapping_dir.is_dir():
+                shutil.rmtree(mapping_dir, ignore_errors=False)
+            else:
+                mapping_dir.unlink()
+            return True
+        return False
+
+    def create_mapping_files_if_missing(
+        self,
+        dataset_output_folder: Optional[str] = None,
+        progress_cb: Optional[Callable[[str], None]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Create mapping files only when mapping directory does not exist.
+
+        Files:
+        - vehicle_mapping.json
+        - junction_mapping.json
+        - edge_mapping.json
+        """
+        def emit(msg: str) -> None:
+            if progress_cb:
+                progress_cb(msg)
+
+        mapping_dir = self._resolve_mapping_dir(dataset_output_folder)
+        emit(f"Mapping: target directory {mapping_dir}")
+        if mapping_dir.exists():
+            emit("Mapping: directory already exists, skipping creation.")
+            return {"created": False, "mapping_dir": str(mapping_dir)}
+
+        emit("Mapping: creating directory...")
+        mapping_dir.mkdir(parents=True, exist_ok=True)
+
+        def natural_sort_key(text: str):
+            def as_num_or_text(chunk: str):
+                return int(chunk) if chunk.isdigit() else chunk.lower()
+            return [as_num_or_text(c) for c in re.split(r"(\d+)", str(text))]
+
+        def row_to_dict(row: sqlite3.Row) -> Dict[str, Any]:
+            obj = {}
+            for key in row.keys():
+                value = row[key]
+                if key.endswith("_json") and isinstance(value, str):
+                    try:
+                        obj[key] = json.loads(value)
+                        continue
+                    except Exception:
+                        pass
+                obj[key] = value
+            return obj
+
+        emit("Mapping: reading vehicles/junctions/roads from DB...")
+        with self.sim_db.connect() as conn:
+            conn.row_factory = sqlite3.Row
+            vehicle_rows = conn.execute("SELECT * FROM vehicles").fetchall()
+            junction_rows = conn.execute("SELECT * FROM junctions").fetchall()
+            road_rows = conn.execute("SELECT * FROM roads").fetchall()
+
+        emit("Mapping: building sorted mapping objects...")
+        vehicle_mapping = {str(r["id"]): row_to_dict(r) for r in vehicle_rows}
+        junction_mapping = {str(r["id"]): row_to_dict(r) for r in junction_rows}
+        edge_mapping = {str(r["id"]): row_to_dict(r) for r in road_rows}
+
+        vehicle_mapping = dict(sorted(vehicle_mapping.items(), key=lambda kv: natural_sort_key(kv[0])))
+        junction_mapping = dict(sorted(junction_mapping.items(), key=lambda kv: natural_sort_key(kv[0])))
+        edge_mapping = dict(sorted(edge_mapping.items(), key=lambda kv: natural_sort_key(kv[0])))
+
+        emit("Mapping: writing vehicle_mapping.json...")
+        with open(mapping_dir / "vehicle_mapping.json", "w", encoding="utf-8") as f:
+            json.dump(vehicle_mapping, f, indent=2, ensure_ascii=False)
+        emit("Mapping: writing junction_mapping.json...")
+        with open(mapping_dir / "junction_mapping.json", "w", encoding="utf-8") as f:
+            json.dump(junction_mapping, f, indent=2, ensure_ascii=False)
+        emit("Mapping: writing edge_mapping.json...")
+        with open(mapping_dir / "edge_mapping.json", "w", encoding="utf-8") as f:
+            json.dump(edge_mapping, f, indent=2, ensure_ascii=False)
+
+        emit("Mapping: completed successfully.")
+        return {
+            "created": True,
+            "mapping_dir": str(mapping_dir),
+            "vehicle_count": len(vehicle_mapping),
+            "junction_count": len(junction_mapping),
+            "edge_count": len(edge_mapping),
+        }
+
+    def _assign_destinations_from_config(
+        self,
+        conn: sqlite3.Connection,
+        parser: NetworkParser,
+        config: Dict,
+        zone_edge_map: Dict[str, List[str]],
+        landmarks_map: Dict[str, List[str]],
+        active_zone_ids: List[str],
+    ) -> None:
+        """
+        Assign origin and destinations per vehicle (legacy assign_destinations).
+
+        - Origin: each vehicle's origin (starting location) is "home" = (current_edge, current_position).
+          We set it here from the DB so destinations_json["home"] is the canonical origin for dispatch.
+        - Destinations: work, friend1–3, park1–4, stadium1–2, restaurantA/B/C, visit1–3 from zones/landmarks.
+
+        Called after _insert_initial_vehicles so dispatch can resolve origin_name/destination_name
+        from vehicle_schedule_assignments to edge/position via destinations_json.
+        """
+        default_landmarks = {}
+        landmarks = config.get("landmarks", {})
+        if isinstance(landmarks, dict) and isinstance(landmarks.get("default_landmarks"), dict):
+            default_landmarks = landmarks.get("default_landmarks", {})
+        visit_count = max(1, min(3, int(default_landmarks.get("visit_count", 1))))
+        restaurants_zones = [z for z in default_landmarks.get("restaurants_zones", []) if z in active_zone_ids] if isinstance(default_landmarks, dict) else []
+
+        rows = conn.execute(
+            "SELECT id, current_zone, current_edge, current_position, destinations_json, home_zone, work_zone "
+            "FROM vehicles"
+        ).fetchall()
+        for row in rows:
+            veh_id = str(row[0])
+            current_zone = str(row[1]) if row[1] else None
+            current_edge = str(row[2]) if row[2] else ""
+            current_position = float(row[3] or 0.0)
+            try:
+                dest = json.loads(row[4]) if row[4] else {}
+            except Exception:
+                dest = {}
+            if not isinstance(dest, dict):
+                dest = {}
+            home_zone = str(row[5]) if row[5] else current_zone
+            work_zone = str(row[6]) if row[6] else current_zone
+
+            # Origin: each vehicle's starting location = "home" (canonical for trip origin at dispatch)
+            dest["home"] = {"edge": current_edge, "position": current_position}
+
+            # WORK (random edge in work_zone; do not restrict to single-lane edges)
+            work_edges = list(zone_edge_map.get(work_zone, []))
+            if work_edges:
+                w_edge = random.choice(work_edges)
+                w_len = parser.get_edge_length(w_edge)
+                dest["work"] = {"edge": w_edge, "position": random.uniform(1.0, max(1.0, w_len - 1.0))}
+
+            # FRIEND1: same zone (all edges)
+            same_edges = list(zone_edge_map.get(current_zone, [])) if current_zone else []
+            if same_edges:
+                e = random.choice(same_edges)
+                ln = parser.get_edge_length(e)
+                dest["friend1"] = {"edge": e, "position": random.uniform(1.0, max(1.0, ln - 1.0))}
+
+            # FRIEND2, FRIEND3: other zones (all edges)
+            other_zones = [z for z in active_zone_ids if z != current_zone][:2]
+            for i, z in enumerate(other_zones):
+                label = f"friend{i + 2}"
+                other_edges = list(zone_edge_map.get(z, []))
+                if other_edges:
+                    e = random.choice(other_edges)
+                    ln = parser.get_edge_length(e)
+                    dest[label] = {"edge": e, "position": random.uniform(1.0, max(1.0, ln - 1.0))}
+
+            # PARKS, STADIUMS, RESTAURANTS, VISIT from landmarks_map
+            for label, edge_ids in landmarks_map.items():
+                if not edge_ids:
+                    continue
+                e = random.choice(edge_ids)
+                ln = parser.get_edge_length(e)
+                dest[label] = {"edge": e, "position": random.uniform(1.0, max(1.0, ln - 1.0))}
+
+            # Restaurant labels by zone if not in landmarks_map (all edges)
+            for z in restaurants_zones:
+                label = f"restaurant{z}"
+                if label in dest:
+                    continue
+                rest_edges = list(zone_edge_map.get(z, []))
+                if rest_edges:
+                    e = random.choice(rest_edges)
+                    ln = parser.get_edge_length(e)
+                    dest[label] = {"edge": e, "position": random.uniform(1.0, max(1.0, ln - 1.0))}
+
+            # Visit labels (visit1, visit2, visit3)
+            for k in range(1, visit_count + 1):
+                label = f"visit{k}"
+                if label in dest:
+                    continue
+                if label in landmarks_map and landmarks_map[label]:
+                    e = random.choice(landmarks_map[label])
+                    ln = parser.get_edge_length(e)
+                    dest[label] = {"edge": e, "position": random.uniform(1.0, max(1.0, ln - 1.0))}
+                else:
+                    z = random.choice(active_zone_ids) if active_zone_ids else None
+                    if z:
+                        visit_edges = list(zone_edge_map.get(z, []))
+                        if visit_edges:
+                            e = random.choice(visit_edges)
+                            ln = parser.get_edge_length(e)
+                            dest[label] = {"edge": e, "position": random.uniform(1.0, max(1.0, ln - 1.0))}
+
+            conn.execute("UPDATE vehicles SET destinations_json = ? WHERE id = ?", (json.dumps(dest, ensure_ascii=False), veh_id))
+
     def _populate_scheduler_from_config(self, conn: sqlite3.Connection, config: Dict) -> int:
         """
-        Populate scheduler assignments in DB, mirroring legacy schedule_from_config flow.
+        Equivalent of legacy schedule_from_config (Traffic-DSTG-Gen/graph/entities.py).
 
-        Creates step-level dispatch assignments per vehicle.
+        For each week/schedule entry/day/source_zone, pairs simulation steps with eligible
+        vehicles and assigns (simulation_step, origin_name, destination_name) per vehicle.
+        Results are stored in vehicle_schedule_assignments. At dispatch time, the runner
+        resolves origin_name/destination_name to edge/position via each vehicle's destinations_json
+        (filled by _assign_destinations_from_config).
         """
         schedule_entries = config.get("weekday_schedule", [])
         vg = config.get("vehicle_generation", {})
@@ -875,7 +1202,12 @@ class SimulationDBService:
                 destination_keys = [str(v) for v in entry.get("destination", []) if isinstance(v, str)]
                 repeat_days = [int(d) for d in entry.get("repeat_on_days", []) if isinstance(d, int)]
                 if not origin_keys or not destination_keys:
+                    # print(f"[WARNING] scheduler no origin/destination keys for {entry_name}")
                     continue
+
+                # print(f"[DEBUG] scheduler origin keys: {origin_keys}")
+                # print(f"[DEBUG] scheduler destination keys: {destination_keys}")
+                # print(f"[DEBUG] scheduler source zones: {source_zones}")
 
                 for day in repeat_days:
                     base_step = (day - 1) * seconds_in_day
@@ -887,6 +1219,9 @@ class SimulationDBService:
                             for vid in zone_current_vehicles.get(zone_id, [])
                             if vid in vehicle_scheduled and not vehicle_scheduled[vid][week]
                         ]
+                        # Randomize order so that the fixed creation order (and thus home edge order)
+                        # is decoupled from the chronological dispatch order.
+                        random.shuffle(eligible)
                         eligible = eligible[: int(len(eligible) * dev_fraction)]
                         steps_to_use = steps[: int(len(eligible))]
                         for step, veh_id in zip(steps_to_use, eligible):
@@ -925,6 +1260,10 @@ class SimulationDBService:
                                     json.dumps(payload, ensure_ascii=False),
                                 )
                             )
+                            # print(
+                            #     f"[DEBUG] scheduler origin for {veh_id}: week={week}, day={day}, step={int(step)}, "
+                            #     f"origin_name={origin}, destination_name={dest}"
+                            # )
                             total_scheduled += 1
 
         if assignment_rows:

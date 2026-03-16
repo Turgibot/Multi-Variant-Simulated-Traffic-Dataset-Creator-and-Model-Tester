@@ -332,28 +332,36 @@ class NetworkNodeItem(QGraphicsPolygonItem):
 
 class VehicleItem(QGraphicsEllipseItem):
     """Graphics item for rendering a vehicle."""
-    
-    def __init__(self, vehicle_id: str, x: float, y: float, angle: float = 0, parent=None):
+
+    def _set_color(self, r: int, g: int, b: int) -> None:
+        """Set fill and pen from (r, g, b) 0-255."""
+        self.setBrush(QBrush(QColor(r, g, b)))
+        # Darker border for contrast
+        self.setPen(QPen(QColor(max(0, r - 50), max(0, g - 50), max(0, b - 50)), 3))
+
+    def __init__(self, vehicle_id: str, x: float, y: float, angle: float = 0, parent=None, color_rgb: Optional[Tuple[int, int, int]] = None):
         super().__init__(parent)
         self.vehicle_id = vehicle_id
         self.setPos(x, y)
         self.setRotation(angle)
         self.setZValue(10)  # Foreground layer
-        
+
         # Vehicle size (meters to pixels approximation) - 20x bigger for visibility
         size = 80.0  # 4.0 * 20
         self.setRect(-size/2, -size/2, size, size)
-        
-        # Vehicle color
-        brush = QBrush(QColor(255, 100, 100))
-        self.setBrush(brush)
-        pen = QPen(QColor(200, 50, 50), 3)  # Thicker pen for larger vehicle
-        self.setPen(pen)
-    
-    def update_position(self, x: float, y: float, angle: float = 0):
-        """Update vehicle position."""
+
+        if color_rgb is not None:
+            self._set_color(*color_rgb)
+        else:
+            self.setBrush(QBrush(QColor(255, 100, 100)))
+            self.setPen(QPen(QColor(200, 50, 50), 3))
+
+    def update_position(self, x: float, y: float, angle: float = 0, color_rgb: Optional[Tuple[int, int, int]] = None):
+        """Update vehicle position and optionally color."""
         self.setPos(x, y)
         self.setRotation(angle)
+        if color_rgb is not None:
+            self._set_color(*color_rgb)
 
 
 class SimulationView(QGraphicsView):
@@ -853,12 +861,14 @@ class SimulationView(QGraphicsView):
         """Set network edge thickness scale factor for subsequent network loads."""
         self.edge_thickness_multiplier = max(0.1, float(multiplier))
     
-    def update_vehicle(self, vehicle_id: str, x: float, y: float, angle: float = 0):
-        """Update or create a vehicle."""
+    def update_vehicle(self, vehicle_id: str, x: float, y: float, angle: float = 0, color_rgb: Optional[Tuple[int, int, int]] = None):
+        """Update or create a vehicle. Converts SUMO coords to scene coords (same Y-flip as network)."""
+        y_scene = self._network_y_max + self._network_y_min - y
+        angle_scene = -angle  # mirror angle for Y-flip
         if vehicle_id in self.vehicle_items:
-            self.vehicle_items[vehicle_id].update_position(x, y, angle)
+            self.vehicle_items[vehicle_id].update_position(x, y_scene, angle_scene, color_rgb)
         else:
-            vehicle_item = VehicleItem(vehicle_id, x, y, angle)
+            vehicle_item = VehicleItem(vehicle_id, x, y_scene, angle_scene, color_rgb=color_rgb)
             self.scene.addItem(vehicle_item)
             self.vehicle_items[vehicle_id] = vehicle_item
     

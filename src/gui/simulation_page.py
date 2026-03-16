@@ -2,18 +2,57 @@
 SUMO Simulation page for running and monitoring traffic simulations.
 """
 
+import traceback
 from pathlib import Path
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QPushButton, QMessageBox, QGroupBox, QTextEdit, QSlider
+    QPushButton, QMessageBox, QGroupBox, QTextEdit, QSlider, QCheckBox
 )
-from PySide6.QtCore import Qt, Signal, QTimer
+from PySide6.QtCore import QObject, Qt, QThread, Signal, QTimer
 from PySide6.QtGui import QFont
 
 from src.gui.simulation_view import SimulationView
 from src.utils.network_parser import NetworkParser
+
+
+def _format_sim_time_ww_dd_hh_mm_ss(seconds: float) -> str:
+    """Format simulation time as WW:DD:HH:MM:SS (weeks, days, hours, minutes, seconds)."""
+    s = max(0.0, float(seconds))
+    weeks, s = divmod(s, 604800)
+    days, s = divmod(s, 86400)
+    hours, s = divmod(s, 3600)
+    minutes, s = divmod(s, 60)
+    secs = int(s)
+    return f"{int(weeks):02d}:{int(days):02d}:{int(hours):02d}:{int(minutes):02d}:{secs:02d}"
+from src.utils.simulation_db_service import SimulationDBService
+from src.utils.simulation_runner import SimulationRunner
 from src.utils.sumo_config_manager import SUMOConfigManager
 from src.utils.sumo_detector import auto_detect_sumo_home, setup_sumo_environment
+
+
+class MappingExportWorker(QObject):
+    """Background worker for optional mapping file export."""
+
+    progress = Signal(str)
+    finished = Signal(bool, str, object)
+
+    def __init__(self, project_name: str, project_path: str, output_folder: str):
+        super().__init__()
+        self.project_name = project_name
+        self.project_path = project_path
+        self.output_folder = output_folder
+
+    def run(self):
+        """Generate mapping files without blocking UI."""
+        try:
+            service = SimulationDBService(self.project_name, self.project_path)
+            result = service.create_mapping_files_if_missing(
+                self.output_folder,
+                progress_cb=lambda msg: self.progress.emit(msg),
+            )
+            self.finished.emit(True, "Mapping export finished.", result)
+        except Exception as exc:
+            self.finished.emit(False, str(exc), {})
 
 
 class SimulationPage(QWidget):
@@ -93,8 +132,8 @@ class SimulationPage(QWidget):
                 color: #666666;
             }
         """)
+        self.start_btn.setEnabled(False)
         self.start_btn.clicked.connect(self.start_simulation)
-        controls_layout.addWidget(self.start_btn)
         
         self.pause_btn = QPushButton("Pause")
         self.pause_btn.setStyleSheet("""
@@ -117,7 +156,6 @@ class SimulationPage(QWidget):
         """)
         self.pause_btn.setEnabled(False)
         self.pause_btn.clicked.connect(self.pause_simulation)
-        controls_layout.addWidget(self.pause_btn)
         
         self.stop_btn = QPushButton("Stop")
         self.stop_btn.setStyleSheet("""
@@ -140,7 +178,6 @@ class SimulationPage(QWidget):
         """)
         self.stop_btn.setEnabled(False)
         self.stop_btn.clicked.connect(self.stop_simulation)
-        controls_layout.addWidget(self.stop_btn)
         
         controls_layout.addStretch()
         
@@ -203,10 +240,50 @@ class SimulationPage(QWidget):
         
         main_layout.addLayout(controls_layout)
         
-        # Main simulation rendering area (Center)
+        # Main simulation area: map on left, control buttons on right
+        simulation_content_layout = QHBoxLayout()
+        simulation_content_layout.setSpacing(10)
+
+        # Left: map
         self.simulation_view = SimulationView()
         self.simulation_view.setMinimumHeight(400)
-        main_layout.addWidget(self.simulation_view, stretch=1)
+        simulation_content_layout.addWidget(self.simulation_view, stretch=1)
+
+        # Right: simulation action buttons
+        controls_group = QGroupBox("Simulation Controls")
+        controls_group.setStyleSheet("""
+            QGroupBox {
+                font-weight: bold;
+                border: 2px solid #ddd;
+                border-radius: 5px;
+                margin-top: 10px;
+                padding-top: 10px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 5px;
+            }
+        """)
+        right_controls_layout = QVBoxLayout()
+        right_controls_layout.setSpacing(10)
+        right_controls_layout.setContentsMargins(10, 10, 10, 10)
+        right_controls_layout.addWidget(self.start_btn)
+        right_controls_layout.addWidget(self.pause_btn)
+        right_controls_layout.addWidget(self.stop_btn)
+        self.create_mappings_checkbox = QCheckBox("Create mapping files")
+        self.create_mappings_checkbox.setToolTip(
+            "If checked, create mapping files under <dataset_output>/mapping\n"
+            "when starting simulation, only if that directory does not already exist."
+        )
+        right_controls_layout.addWidget(self.create_mappings_checkbox)
+        right_controls_layout.addStretch()
+        controls_group.setLayout(right_controls_layout)
+        controls_group.setMinimumWidth(220)
+        controls_group.setMaximumWidth(280)
+        simulation_content_layout.addWidget(controls_group, stretch=0)
+
+        main_layout.addLayout(simulation_content_layout, stretch=1)
         
         # Simulation Log (Bottom)
         log_group = QGroupBox("Simulation Log")
@@ -257,9 +334,47 @@ class SimulationPage(QWidget):
         self.update_timer.timeout.connect(self.update_simulation)
         self.step_interval = 0  # Update interval in ms (default: 0ms = maximum speed)
         self.sumo_step_length = 1.0  # SUMO step length in seconds (default: 1.0)
+        self._mapping_thread = None
+        self._mapping_worker = None
+        self._simulation_runner = None  # SimulationRunner for update/dispatch
         
         # Load network if sumocfg is available (after UI is complete)
         self.load_network()
+        self.prepare_simulation_for_start()
+
+    def prepare_simulation_for_start(self):
+        """Validate DB readiness and clear roads/zones before allowing play."""
+        self.start_btn.setEnabled(False)
+        self.status_label.setText("Status: Preparing")
+        self.status_label.setStyleSheet("color: #666; padding: 5px 15px; font-size: 14px; font-weight: bold;")
+        self.log_text.append("Preparing simulation state...")
+        try:
+            service = SimulationDBService(self.project_name, self.project_path)
+            ready, reason = service.validate_db_readiness_for_current_config()
+            if not ready:
+                self.log_text.append(f"Simulation DB not ready: {reason}")
+                self.status_label.setText("Status: Blocked (DB not ready)")
+                self.status_label.setStyleSheet(
+                    "color: #f44336; padding: 5px 15px; font-size: 14px; font-weight: bold;"
+                )
+                return
+
+            cleared = service.clear_roads_and_zones()
+            self.log_text.append(
+                f"Cleared roads/zones data: roads={cleared.get('roads_cleared', 0)}, "
+                f"zones={cleared.get('zones_cleared', 0)}"
+            )
+            self.status_label.setText("Status: Ready")
+            self.status_label.setStyleSheet(
+                "color: #2e7d32; padding: 5px 15px; font-size: 14px; font-weight: bold;"
+            )
+            self.start_btn.setEnabled(True)
+        except Exception as exc:
+            self.log_text.append(f"Failed to prepare simulation state: {exc}")
+            self.status_label.setText("Status: Blocked (prepare failed)")
+            self.status_label.setStyleSheet(
+                "color: #f44336; padding: 5px 15px; font-size: 14px; font-weight: bold;"
+            )
     
     def load_network(self):
         """Load network from sumocfg file."""
@@ -314,6 +429,67 @@ class SimulationPage(QWidget):
     
     def start_simulation(self):
         """Start the SUMO simulation."""
+        if hasattr(self, "create_mappings_checkbox") and self.create_mappings_checkbox.isChecked():
+            if self._mapping_thread is not None:
+                return
+            self.log_text.append("Starting mapping export (background)...")
+            self.status_label.setText("Status: Preparing mappings")
+            self.status_label.setStyleSheet("color: #666; padding: 5px 15px; font-size: 14px; font-weight: bold;")
+            self.start_btn.setEnabled(False)
+            self._start_mapping_export()
+            return
+        self._start_sumo_simulation()
+
+    def _start_mapping_export(self):
+        """Run optional mapping export asynchronously, then launch simulation."""
+        self._mapping_thread = QThread(self)
+        self._mapping_worker = MappingExportWorker(
+            self.project_name,
+            self.project_path,
+            self.output_folder,
+        )
+        self._mapping_worker.moveToThread(self._mapping_thread)
+        self._mapping_thread.started.connect(self._mapping_worker.run)
+        self._mapping_worker.progress.connect(self.on_mapping_progress)
+        self._mapping_worker.finished.connect(self.on_mapping_finished)
+        self._mapping_worker.finished.connect(self._mapping_thread.quit)
+        self._mapping_thread.finished.connect(self._mapping_thread.deleteLater)
+        self._mapping_thread.start()
+
+    def on_mapping_progress(self, message: str):
+        """Append mapping export progress in simulation log."""
+        self.log_text.append(message)
+
+    def on_mapping_finished(self, success: bool, message: str, result: object):
+        """Continue startup flow after background mapping export."""
+        if success:
+            if isinstance(result, dict):
+                if result.get("created"):
+                    self.log_text.append(
+                        f"Mapping files created at {result.get('mapping_dir')}"
+                    )
+                else:
+                    self.log_text.append(
+                        f"Mapping directory already exists, skipped: {result.get('mapping_dir')}"
+                    )
+            self.log_text.append(message)
+            self._start_sumo_simulation()
+        else:
+            self.log_text.append(f"Mapping export failed: {message}")
+            self.status_label.setText("Status: Blocked (mapping failed)")
+            self.status_label.setStyleSheet(
+                "color: #f44336; padding: 5px 15px; font-size: 14px; font-weight: bold;"
+            )
+            if not self.simulation_running:
+                self.start_btn.setEnabled(True)
+
+        if self._mapping_worker is not None:
+            self._mapping_worker.deleteLater()
+        self._mapping_worker = None
+        self._mapping_thread = None
+
+    def _start_sumo_simulation(self):
+        """Internal SUMO startup flow (called directly or after mapping export)."""
         self.log_text.append("Starting SUMO simulation...")
         self.log_text.append(f"SUMO Config: {self.sumocfg_path}")
         self.log_text.append(f"Output Folder: {self.output_folder}")
@@ -359,17 +535,27 @@ class SimulationPage(QWidget):
                 else:
                     sumo_binary = 'sumo'  # Fallback to system PATH
             
+            # Simulation end time (legacy: num_weeks * 604800 + 1800 seconds)
+            try:
+                service = SimulationDBService(self.project_name, self.project_path)
+                simulation_limit_sec = service.get_simulation_limit_seconds()
+            except Exception:
+                simulation_limit_sec = 86400 + 1800  # 1 day + 30 min fallback
+            self.log_text.append(f"Simulation end time: {_format_sim_time_ww_dd_hh_mm_ss(simulation_limit_sec)} (WW:DD:HH:MM:SS)")
+
             # Start SUMO
             sumo_cmd = [
                 sumo_binary,
                 '-c', self.sumocfg_path,
                 '--start',  # Start simulation immediately
+                '--end', str(float(simulation_limit_sec)),
                 '--quit-on-end',  # Quit when simulation ends
             ]
-            
+
             traci.start(sumo_cmd)
             self.traci_connection = traci
-            
+            self._simulation_runner = SimulationRunner(self.project_path, self.project_name)
+
             self.log_text.append("Simulation started successfully!")
             
             # Start update timer
@@ -414,23 +600,48 @@ class SimulationPage(QWidget):
         
         try:
             import traci
-            
-            # Step simulation (advance by 1 SUMO step)
+
+            # 1. Advance SUMO by one step
             if not self.simulation_paused:
                 traci.simulationStep()
-            
-            # Get all vehicles
-            vehicle_ids = traci.vehicle.getIDList()
-            
-            # Update vehicle positions
+
+            # Step that just completed (0 after first step), matching legacy loop index
+            current_step = max(0, int(traci.simulation.getTime()) - 1)
+
+            # 2. Update: sync DB from TraCI (vehicle positions, road occupancy, arrivals)
+            if self._simulation_runner is not None:
+                try:
+                    self._simulation_runner.update(current_step, traci)
+                except Exception as e:
+                    self.log_text.append(f"Update error: {e}")
+
+            # 3. Dispatch: add vehicles scheduled for this step to SUMO
+            if self._simulation_runner is not None:
+                try:
+                    self._simulation_runner.dispatch(current_step, traci)
+                except Exception as e:
+                    self.log_text.append(f"Dispatch error: {e}")
+
+            # Get all vehicles for view (ensure list of strings; TraCI can vary by version)
+            try:
+                raw_ids = traci.vehicle.getIDList()
+                vehicle_ids = [str(v) for v in (raw_ids if isinstance(raw_ids, (list, tuple)) else [])]
+            except Exception:
+                vehicle_ids = []
+
+            # Update vehicle positions on map (color from DB: JSON color, noise = black)
             current_vehicles = set()
             for vehicle_id in vehicle_ids:
                 try:
                     pos = traci.vehicle.getPosition(vehicle_id)
                     angle = traci.vehicle.getAngle(vehicle_id)
-                    self.simulation_view.update_vehicle(vehicle_id, pos[0], pos[1], angle)
+                    x = float(pos[0]) if len(pos) > 0 else 0.0
+                    y = float(pos[1]) if len(pos) > 1 else 0.0
+                    a = float(angle)
+                    color_rgb = self._simulation_runner.get_vehicle_display_color(vehicle_id) if self._simulation_runner else None
+                    self.simulation_view.update_vehicle(vehicle_id, x, y, a, color_rgb=color_rgb)
                     current_vehicles.add(vehicle_id)
-                except:
+                except Exception:
                     pass
             
             # Remove vehicles that no longer exist
@@ -453,13 +664,15 @@ class SimulationPage(QWidget):
                 effective_speed = steps_per_second * self.sumo_step_length  # simulation seconds per real second
                 speed_text = f"{effective_speed:.2f}x"
             
+            time_str = _format_sim_time_ww_dd_hh_mm_ss(sim_time)
             self.status_label.setText(
-                f"Status: Running | Time: {sim_time:.1f}s | Vehicles: {vehicle_count} | "
+                f"Status: Running | Time: {time_str} | Vehicles: {vehicle_count} | "
                 f"Speed: {speed_text}"
             )
             
         except Exception as e:
             self.log_text.append(f"Error updating simulation: {str(e)}")
+            self.log_text.append(traceback.format_exc())
             self.stop_simulation()
     
     def pause_simulation(self):
@@ -503,10 +716,12 @@ class SimulationPage(QWidget):
             try:
                 import traci
                 traci.close()
-            except:
+            except Exception:
                 pass
             self.traci_connection = None
-        
+
+        self._simulation_runner = None
+
         # Clear vehicles
         self.simulation_view.clear_vehicles()
         

@@ -142,7 +142,7 @@ class Vehicle:
         current_zone=None,
         color='green',
         status="parked",
-        is_stagnant=False
+        is_noise=False
     ):
         # static properties
         self.id = vehicle_id
@@ -163,7 +163,7 @@ class Vehicle:
         
 
         self.node_type = 1  # 0 for junction, 1 for vehicle
-        self.is_stagnant = is_stagnant  # True if vehicle is not tracked by the model
+        self.is_noise = is_noise  # True if vehicle is marked as noise
 
         # routing and scheduling properties
         self.status = status  # e.g., "moving", "parked"
@@ -367,15 +367,15 @@ class DataBase:
 
             # Vehicles
             vehicle_type_counts = {}
-            stagnant_count = 0
+            noise_count = 0
             for vid in zone.current_vehicles:
                 vehicle = self.get_vehicle(vid)
                 vehicle_type_counts[vehicle.vehicle_type] = vehicle_type_counts.get(vehicle.vehicle_type, 0) + 1
-                if vehicle.is_stagnant:
-                    stagnant_count += 1
+                if vehicle.is_noise:
+                    noise_count += 1
 
             total_vehicles = len(zone.current_vehicles)
-            print(f"  Vehicles: {total_vehicles} ({stagnant_count} stagnant)")
+            print(f"  Vehicles: {total_vehicles} ({noise_count} noise)")
             for vtype, count in vehicle_type_counts.items():
                 print(f"    {count} {vtype}")
 

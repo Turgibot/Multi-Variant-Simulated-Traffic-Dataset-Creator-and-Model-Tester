@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Optional, Tuple
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def compute_sha256_for_bytes(data: bytes) -> str:
@@ -158,7 +158,7 @@ class SimulationDB:
                 current_position REAL,
                 status TEXT,
                 scheduled_json TEXT NOT NULL,
-                is_stagnant INTEGER NOT NULL DEFAULT 0,
+                is_noise INTEGER NOT NULL DEFAULT 0,
                 route_json TEXT NOT NULL,
                 route_length REAL,
                 route_left_json TEXT NOT NULL,

@@ -17,7 +17,7 @@ from PySide6.QtCore import QObject, QPointF, QRectF, QSize, Qt, QThread, Signal,
 from PySide6.QtGui import (QBrush, QColor, QDesktopServices, QFont, QGuiApplication,
                            QPainter, QPen)
 from PySide6.QtWidgets import (QFrame, QGraphicsView, QGroupBox, QHBoxLayout,
-                               QCheckBox, QGridLayout,
+                               QCheckBox, QColorDialog, QGridLayout,
                                QFileDialog, QFormLayout, QLabel, QLineEdit,
                                QMessageBox, QProgressBar, QPushButton,
                                QScrollArea, QSizePolicy, QSpinBox,
@@ -28,6 +28,23 @@ from src.utils.network_parser import NetworkParser
 from src.utils.route_xml_generator import RouteXMLGenerator
 from src.utils.simulation_db_service import SimulationDBService
 from src.utils.sumo_config_manager import SUMOConfigManager
+
+
+def _color_string_to_hex(s: str) -> str:
+    """Convert a color string (name or #hex) to #RRGGBB for JSON/config."""
+    s = (s or "").strip()
+    if not s:
+        return "#808080"
+    if s.startswith("#"):
+        if len(s) == 7:  # #RRGGBB
+            return s
+        if len(s) == 4:  # #RGB
+            return f"#{s[1]*2}{s[2]*2}{s[3]*2}"
+        return s
+    q = QColor(s)
+    if q.isValid():
+        return q.name()
+    return "#808080"
 
 
 class NoScrollSpinBox(QSpinBox):
@@ -357,6 +374,7 @@ class RouteGenerationPage(QWidget):
         if hasattr(self, 'zones_container'):
             self.load_saved_zones()
             self._restore_route_generation_state()
+        self._refresh_run_simulation_readiness()
     
     def init_ui(self):
         """Initialize the page UI."""
@@ -448,6 +466,27 @@ class RouteGenerationPage(QWidget):
         config_layout.setContentsMargins(12, 12, 12, 12)
         config_layout.setSpacing(10)
 
+        # Top action buttons (duplicate of bottom row, but scrolls with content).
+        # Placed above all config sections, aligned like the bottom buttons.
+        top_actions_row = QHBoxLayout()
+        top_actions_row.addStretch()
+        top_generate_btn = QPushButton("Generate Simulation DB")
+        top_generate_btn.clicked.connect(self.on_generate_simulation_db_clicked)
+        top_actions_row.addWidget(top_generate_btn)
+        top_cancel_btn = QPushButton("Cancel")
+        top_cancel_btn.setEnabled(False)
+        top_cancel_btn.clicked.connect(self.on_cancel_preparation_clicked)
+        top_actions_row.addWidget(top_cancel_btn)
+        top_open_btn = QPushButton("Open simulation.config.json")
+        top_open_btn.clicked.connect(self.open_simulation_config_json)
+        top_actions_row.addWidget(top_open_btn)
+        self.top_run_sim_btn = QPushButton("Run Simulation")
+        self.top_run_sim_btn.clicked.connect(self.run_simulation_clicked.emit)
+        self.top_run_sim_btn.setEnabled(False)
+        self.top_run_sim_btn.setToolTip("Generate a ready Simulation DB first.")
+        top_actions_row.addWidget(self.top_run_sim_btn)
+        config_layout.addLayout(top_actions_row)
+
         # Detected zones block
         detected_group = QGroupBox("Zones (Neighborhoods)")
         self._set_config_block_style(detected_group, "#dceeff")
@@ -518,43 +557,6 @@ class RouteGenerationPage(QWidget):
         zone_alloc_group.setLayout(zone_alloc_layout)
         config_layout.addWidget(zone_alloc_group)
         self.refresh_zone_allocation_section()
-
-        # Core simulation fields
-        core_group = QGroupBox("Core Settings")
-        self._set_config_block_style(core_group, "#ece6ff")
-        core_form = QFormLayout()
-
-        snapshot_row = QHBoxLayout()
-        self.snapshot_dir_input = QLineEdit(str((Path(self.project_path) / "snapshots").resolve()))
-        browse_snapshot_btn = QPushButton("Browse")
-        browse_snapshot_btn.clicked.connect(self.browse_snapshot_dir)
-        snapshot_row.addWidget(self.snapshot_dir_input)
-        snapshot_row.addWidget(browse_snapshot_btn)
-        core_form.addRow("snapshot_dir", snapshot_row)
-
-        self.snapshot_interval_spin = NoScrollSpinBox()
-        self.snapshot_interval_spin.setRange(1, 3600)
-        self.snapshot_interval_spin.setValue(30)
-        core_form.addRow("snapshot_interval_sec", self.snapshot_interval_spin)
-
-        self.simulation_weeks_spin = NoScrollSpinBox()
-        self.simulation_weeks_spin.setRange(1, 520)
-        self.simulation_weeks_spin.setValue(1)
-        core_form.addRow("simulation_weeks", self.simulation_weeks_spin)
-
-        self.total_vehicles_spin = NoScrollSpinBox()
-        self.total_vehicles_spin.setRange(1, 10_000_000)
-        self.total_vehicles_spin.setValue(200_000)
-        core_form.addRow("total_num_vehicles", self.total_vehicles_spin)
-
-        self.dev_fraction_spin = NoScrollDoubleSpinBox()
-        self.dev_fraction_spin.setRange(0.0, 1.0)
-        self.dev_fraction_spin.setDecimals(3)
-        self.dev_fraction_spin.setSingleStep(0.05)
-        self.dev_fraction_spin.setValue(1.0)
-        core_form.addRow("dev_fraction", self.dev_fraction_spin)
-        core_group.setLayout(core_form)
-        config_layout.addWidget(core_group)
 
         # Landmarks block (from net.xml edge params)
         landmarks_group = QGroupBox("Landmarks")
@@ -627,6 +629,44 @@ class RouteGenerationPage(QWidget):
         weekday_group.setLayout(weekday_layout)
         config_layout.addWidget(weekday_group)
 
+        # Core simulation fields (moved to bottom, just before action buttons)
+        core_group = QGroupBox("Core Settings")
+        self._set_config_block_style(core_group, "#ece6ff")
+        core_form = QFormLayout()
+
+        snapshot_row = QHBoxLayout()
+        self.snapshot_dir_input = QLineEdit(str((Path(self.project_path) / "snapshots").resolve()))
+        browse_snapshot_btn = QPushButton("Browse")
+        browse_snapshot_btn.clicked.connect(self.browse_snapshot_dir)
+        snapshot_row.addWidget(self.snapshot_dir_input)
+        snapshot_row.addWidget(browse_snapshot_btn)
+        core_form.addRow("snapshot_dir", snapshot_row)
+
+        self.snapshot_interval_spin = NoScrollSpinBox()
+        self.snapshot_interval_spin.setRange(1, 3600)
+        self.snapshot_interval_spin.setValue(30)
+        core_form.addRow("snapshot_interval_sec", self.snapshot_interval_spin)
+
+        self.simulation_weeks_spin = NoScrollSpinBox()
+        self.simulation_weeks_spin.setRange(1, 520)
+        self.simulation_weeks_spin.setValue(1)
+        core_form.addRow("simulation_weeks", self.simulation_weeks_spin)
+
+        self.total_vehicles_spin = NoScrollSpinBox()
+        self.total_vehicles_spin.setRange(1, 10_000_000)
+        self.total_vehicles_spin.setValue(200_000)
+        core_form.addRow("total_num_vehicles", self.total_vehicles_spin)
+
+        self.dev_fraction_spin = NoScrollDoubleSpinBox()
+        self.dev_fraction_spin.setRange(0.0, 1.0)
+        self.dev_fraction_spin.setDecimals(3)
+        self.dev_fraction_spin.setSingleStep(0.05)
+        self.dev_fraction_spin.setValue(1.0)
+        core_form.addRow("dev_fraction", self.dev_fraction_spin)
+        core_group.setLayout(core_form)
+        config_layout.addWidget(core_group)
+
+        # Action buttons (bottom)
         config_actions_row = QHBoxLayout()
         config_actions_row.addStretch()
         self.generate_sim_db_btn = QPushButton("Generate Simulation DB")
@@ -641,19 +681,35 @@ class RouteGenerationPage(QWidget):
         config_actions_row.addWidget(self.open_config_btn)
         self.run_sim_btn = QPushButton("Run Simulation")
         self.run_sim_btn.clicked.connect(self.run_simulation_clicked.emit)
+        self.run_sim_btn.setEnabled(False)
+        self.run_sim_btn.setToolTip("Generate a ready Simulation DB first.")
+        # Green when enabled, grey when disabled. Keep styling minimal to avoid horizontal overflow.
+        run_sim_style = """
+            QPushButton:enabled {
+                background-color: #2e7d32;
+                color: white;
+                font-weight: bold;
+            }
+            QPushButton:disabled {
+                background-color: #bdbdbd;
+                color: #f5f5f5;
+                font-weight: normal;
+            }
+        """
+        self.run_sim_btn.setStyleSheet(run_sim_style)
+        if hasattr(self, "top_run_sim_btn"):
+            self.top_run_sim_btn.setStyleSheet(run_sim_style)
         config_actions_row.addWidget(self.run_sim_btn)
         config_layout.addLayout(config_actions_row)
         self.prepare_progress_bar = QProgressBar()
         self.prepare_progress_bar.setRange(0, 100)
         self.prepare_progress_bar.setValue(0)
         self.prepare_progress_bar.setVisible(False)
-        config_layout.addWidget(self.prepare_progress_bar)
         self.prepare_status_label = QLabel("")
         self.prepare_status_label.setWordWrap(True)
         self.prepare_status_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         self.prepare_status_label.setStyleSheet("color: #666;")
         self.prepare_status_label.setVisible(False)
-        config_layout.addWidget(self.prepare_status_label)
 
         # Keep stats label available for existing logic.
         self.stats_label = QLabel("")
@@ -664,6 +720,15 @@ class RouteGenerationPage(QWidget):
         config_group.setLayout(config_layout)
         config_scroll.setWidget(config_group)
         config_panel_layout.addWidget(config_scroll)
+
+        # Pin progress bar + status text to the bottom of the right panel (outside the scroll area).
+        bottom_status_layout = QVBoxLayout()
+        bottom_status_layout.setContentsMargins(12, 4, 12, 8)
+        bottom_status_layout.setSpacing(4)
+        bottom_status_layout.addWidget(self.prepare_progress_bar)
+        bottom_status_layout.addWidget(self.prepare_status_label)
+        config_panel_layout.addLayout(bottom_status_layout)
+
         self.config_panel.setLayout(config_panel_layout)
         content_layout.addWidget(self.config_panel, stretch=1)
 
@@ -746,6 +811,9 @@ class RouteGenerationPage(QWidget):
             return
         self.generate_sim_db_btn.setEnabled(False)
         self.cancel_prepare_btn.setEnabled(True)
+        if hasattr(self, "run_sim_btn"):
+            self.run_sim_btn.setEnabled(False)
+            self.run_sim_btn.setToolTip("Preparation in progress...")
         self.prepare_progress_bar.setVisible(True)
         self.prepare_status_label.setVisible(True)
         self.prepare_progress_bar.setValue(0)
@@ -821,6 +889,7 @@ class RouteGenerationPage(QWidget):
             self._prep_worker.deleteLater()
         self._prep_worker = None
         self._prep_thread = None
+        self._refresh_run_simulation_readiness(show_status=False)
 
     def _connect_auto_persist_signals(self):
         """Persist to project simulation config whenever form values change."""
@@ -884,7 +953,7 @@ class RouteGenerationPage(QWidget):
                             width=float(attrs.get("width", 1.8)),
                             height=float(attrs.get("height", 1.5)),
                             max_speed=float(attrs.get("max_speed", 30.0)),
-                            color=str(attrs.get("color", "blue")),
+                            color=_color_string_to_hex(str(attrs.get("color", "blue"))),
                         )
 
                 loaded_alloc = vg.get("zone_allocation", {})
@@ -1775,14 +1844,53 @@ class RouteGenerationPage(QWidget):
         speed_spin.setDecimals(2)
         speed_spin.setValue(max_speed)
 
-        color_input = QLineEdit(color)
+        color_hex = _color_string_to_hex(color)
+        color_input = QLineEdit(color_hex)
+        color_input.setPlaceholderText("#RRGGBB")
+        color_picker_btn = QPushButton("…")
+        color_picker_btn.setFixedWidth(32)
+        color_picker_btn.setToolTip("Pick color")
+        color_picker_btn.setStyleSheet(
+            f"QPushButton {{ background-color: {color_hex}; border: 1px solid #888; }}"
+        )
+
+        def on_pick_color():
+            current = color_input.text().strip() or "#808080"
+            q = QColor(_color_string_to_hex(current))
+            if not q.isValid():
+                q = QColor("#808080")
+            chosen = QColorDialog.getColor(q, self, "Vehicle type color")
+            if chosen.isValid():
+                hex_val = chosen.name()
+                color_input.setText(hex_val)
+                color_picker_btn.setStyleSheet(
+                    f"QPushButton {{ background-color: {hex_val}; border: 1px solid #888; }}"
+                )
+                self._persist_current_config_safely()
+
+        color_picker_btn.clicked.connect(on_pick_color)
+
+        def on_color_text_changed():
+            hex_val = _color_string_to_hex(color_input.text())
+            color_picker_btn.setStyleSheet(
+                f"QPushButton {{ background-color: {hex_val}; border: 1px solid #888; }}"
+            )
+        color_input.textChanged.connect(on_color_text_changed)
+
+        color_row = QWidget()
+        color_row_layout = QHBoxLayout()
+        color_row_layout.setContentsMargins(0, 0, 0, 0)
+        color_row_layout.setSpacing(6)
+        color_row_layout.addWidget(color_input)
+        color_row_layout.addWidget(color_picker_btn)
+        color_row.setLayout(color_row_layout)
 
         type_form.addRow("name", name_input)
         type_form.addRow("length", length_spin)
         type_form.addRow("width", width_spin)
         type_form.addRow("height", height_spin)
         type_form.addRow("max_speed", speed_spin)
-        type_form.addRow("color", color_input)
+        type_form.addRow("color", color_row)
         type_group.setLayout(type_form)
 
         remove_btn = QPushButton("x")
@@ -1856,7 +1964,7 @@ class RouteGenerationPage(QWidget):
                 "width": float(entry["width"].value()),
                 "height": float(entry["height"].value()),
                 "max_speed": float(entry["max_speed"].value()),
-                "color": entry["color"].text().strip() or "gray",
+                "color": _color_string_to_hex(entry["color"].text().strip()) or "#808080",
             }
 
         if not vehicle_types:
@@ -2104,9 +2212,39 @@ class RouteGenerationPage(QWidget):
         try:
             config = self._build_config_from_form()
             self._write_project_simulation_config(config)
+            self._refresh_run_simulation_readiness()
         except Exception:
             # Ignore while user is still editing incomplete data.
-            pass
+            if hasattr(self, "run_sim_btn"):
+                self.run_sim_btn.setEnabled(False)
+                self.run_sim_btn.setToolTip("Configuration is invalid or incomplete.")
+            if hasattr(self, "prepare_status_label"):
+                self.prepare_status_label.setVisible(True)
+                self.prepare_status_label.setText("Run blocked: configuration is invalid or incomplete.")
+                self.prepare_status_label.setStyleSheet("color: #c62828;")
+
+    def _refresh_run_simulation_readiness(self, show_status: bool = True):
+        """Enable Run Simulation only when DB exists and matches current config hash."""
+        if not hasattr(self, "run_sim_btn"):
+            return
+        try:
+            service = SimulationDBService(self.project_name, self.project_path)
+            ready, reason = service.validate_db_readiness_for_current_config()
+        except Exception as exc:
+            ready, reason = False, f"Readiness check failed: {exc}"
+        self.run_sim_btn.setEnabled(bool(ready))
+        if ready:
+            self.run_sim_btn.setToolTip("Simulation DB is ready.")
+        else:
+            self.run_sim_btn.setToolTip(reason or "Generate Simulation DB first.")
+        if show_status and hasattr(self, "prepare_status_label") and self._prep_thread is None:
+            self.prepare_status_label.setVisible(True)
+            if ready:
+                self.prepare_status_label.setText("Run ready: Simulation DB is ready.")
+                self.prepare_status_label.setStyleSheet("color: #2e7d32;")
+            else:
+                self.prepare_status_label.setText(f"Run blocked: {reason}")
+                self.prepare_status_label.setStyleSheet("color: #c62828;")
 
     def on_map_network_render_finished(self):
         """Restore current selection/display visualization after network redraw."""
