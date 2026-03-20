@@ -333,6 +333,14 @@ class SimulationPage(QWidget):
             "when starting simulation, only if that directory does not already exist."
         )
         right_controls_layout.addWidget(self.create_mappings_checkbox)
+        
+        # Dataset creation controls whether runtime DB updates/dispatch happen.
+        self.create_dataset_checkbox = QCheckBox("Create dataset")
+        self.create_dataset_checkbox.setChecked(True)
+        self.create_dataset_checkbox.setToolTip(
+            "If unchecked, skip updating/dispatching via the simulation DB during the run."
+        )
+        right_controls_layout.addWidget(self.create_dataset_checkbox)
         right_controls_layout.addStretch()
         controls_group.setLayout(right_controls_layout)
         controls_group.setMinimumWidth(220)
@@ -755,14 +763,14 @@ class SimulationPage(QWidget):
             current_step = max(0, int(traci.simulation.getTime()) - 1)
 
             # 2. Update: sync DB from TraCI (vehicle positions, road occupancy, arrivals)
-            if self._simulation_runner is not None:
+            if self._simulation_runner is not None and getattr(self, "create_dataset_checkbox", None) and self.create_dataset_checkbox.isChecked():
                 try:
                     self._simulation_runner.update(current_step, traci)
                 except Exception as e:
                     self.log_text.append(f"Update error: {e}")
 
             # 3. Dispatch: add vehicles scheduled for this step to SUMO
-            if self._simulation_runner is not None:
+            if self._simulation_runner is not None and getattr(self, "create_dataset_checkbox", None) and self.create_dataset_checkbox.isChecked():
                 try:
                     self._simulation_runner.dispatch(current_step, traci)
                 except Exception as e:
