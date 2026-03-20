@@ -4,12 +4,13 @@ SUMO Simulation page for running and monitoring traffic simulations.
 
 import traceback
 from pathlib import Path
+import json
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QPushButton, QMessageBox, QGroupBox, QTextEdit, QSlider, QCheckBox
+    QPushButton, QMessageBox, QGroupBox, QTextEdit, QSlider, QCheckBox, QLineEdit, QFormLayout,
 )
 from PySide6.QtCore import QObject, Qt, QThread, Signal, QTimer
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFont, QColor, QBrush
 
 from src.gui.simulation_view import SimulationView
 from src.utils.network_parser import NetworkParser
@@ -24,6 +25,23 @@ def _format_sim_time_ww_dd_hh_mm_ss(seconds: float) -> str:
     minutes, s = divmod(s, 60)
     secs = int(s)
     return f"{int(weeks):02d}:{int(days):02d}:{int(hours):02d}:{int(minutes):02d}:{secs:02d}"
+
+
+def _parse_ww_dd_hh_mm_ss(s: str) -> int:
+    """Parse WW:DD:HH:MM:SS to total seconds. Raises ValueError if invalid."""
+    s = (s or "").strip()
+    if not s:
+        raise ValueError("Empty time string")
+    parts = s.split(":")
+    if len(parts) != 5:
+        raise ValueError("Expected WW:DD:HH:MM:SS (5 parts)")
+    try:
+        w, d, h, m, sec = [int(x) for x in parts]
+    except ValueError:
+        raise ValueError("All parts must be integers")
+    if w < 0 or d < 0 or d > 6 or h < 0 or h > 23 or m < 0 or m > 59 or sec < 0 or sec > 59:
+        raise ValueError("Out of range (weeks>=0, days 0-6, hours 0-23, min/sec 0-59)")
+    return w * 604800 + d * 86400 + h * 3600 + m * 60 + sec
 from src.utils.simulation_db_service import SimulationDBService
 from src.utils.simulation_runner import SimulationRunner
 from src.utils.sumo_config_manager import SUMOConfigManager
@@ -244,10 +262,16 @@ class SimulationPage(QWidget):
         simulation_content_layout = QHBoxLayout()
         simulation_content_layout.setSpacing(10)
 
-        # Left: map
+        # Left: map area (we grey it out via the container background in background runs).
+        self.map_container = QWidget()
+        map_container_layout = QVBoxLayout()
+        map_container_layout.setContentsMargins(0, 0, 0, 0)
+        map_container_layout.setSpacing(0)
         self.simulation_view = SimulationView()
         self.simulation_view.setMinimumHeight(400)
-        simulation_content_layout.addWidget(self.simulation_view, stretch=1)
+        map_container_layout.addWidget(self.simulation_view)
+        self.map_container.setLayout(map_container_layout)
+        simulation_content_layout.addWidget(self.map_container, stretch=1)
 
         # Right: simulation action buttons
         controls_group = QGroupBox("Simulation Controls")
@@ -268,6 +292,38 @@ class SimulationPage(QWidget):
         right_controls_layout = QVBoxLayout()
         right_controls_layout.setSpacing(10)
         right_controls_layout.setContentsMargins(10, 10, 10, 10)
+
+        # Start/end time and run-in-background (saved/loaded from project JSON)
+        self._sim_run_settings_path = Path(self.project_path) / "simulation_run_settings.json"
+        try:
+            sim_limit_sec = SimulationDBService(self.project_name, self.project_path).get_simulation_limit_seconds()
+        except Exception:
+            sim_limit_sec = 86400 + 1800
+        default_end = _format_sim_time_ww_dd_hh_mm_ss(sim_limit_sec)
+        settings = self._load_simulation_run_settings()
+        start_time_str = settings.get("start_time", "00:00:00:00:00")
+        end_time_str = settings.get("end_time", default_end)
+        run_in_bg = bool(settings.get("run_in_background", False))
+
+        time_form = QFormLayout()
+        self.start_time_edit = QLineEdit()
+        self.start_time_edit.setPlaceholderText("00:00:00:00:00")
+        self.start_time_edit.setText(start_time_str)
+        self.start_time_edit.setToolTip("WW:DD:HH:MM:SS (weeks, days, hours, minutes, seconds). Max = simulation duration.")
+        time_form.addRow("Start time:", self.start_time_edit)
+        self.end_time_edit = QLineEdit()
+        self.end_time_edit.setPlaceholderText(default_end)
+        self.end_time_edit.setText(end_time_str)
+        self.end_time_edit.setToolTip("WW:DD:HH:MM:SS. Must be after start time; max = simulation duration.")
+        time_form.addRow("End time:", self.end_time_edit)
+        right_controls_layout.addLayout(time_form)
+
+        self.run_in_background_checkbox = QCheckBox("Run in background")
+        self.run_in_background_checkbox.setToolTip("Grey out the map and skip rendering SUMO to the screen for faster runs.")
+        self.run_in_background_checkbox.setChecked(run_in_bg)
+        self.run_in_background_checkbox.toggled.connect(self.on_run_in_background_toggled)
+        right_controls_layout.addWidget(self.run_in_background_checkbox)
+
         right_controls_layout.addWidget(self.start_btn)
         right_controls_layout.addWidget(self.pause_btn)
         right_controls_layout.addWidget(self.stop_btn)
@@ -328,6 +384,12 @@ class SimulationPage(QWidget):
         # Simulation state
         self.simulation_running = False
         self.simulation_paused = False
+        self.run_in_background = bool(
+            self.run_in_background_checkbox.isChecked()
+            if hasattr(self, "run_in_background_checkbox")
+            else False
+        )
+        self._apply_map_background(self.run_in_background)
         self.traci_connection = None
         self.network_parser = None
         self.update_timer = QTimer()
@@ -375,7 +437,60 @@ class SimulationPage(QWidget):
             self.status_label.setStyleSheet(
                 "color: #f44336; padding: 5px 15px; font-size: 14px; font-weight: bold;"
             )
-    
+
+    def _load_simulation_run_settings(self) -> dict:
+        """Load start_time, end_time, run_in_background from project simulation_run_settings.json."""
+        path = getattr(self, "_sim_run_settings_path", None) or Path(self.project_path) / "simulation_run_settings.json"
+        if not path.exists():
+            return {}
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+
+    def _save_simulation_run_settings(self, start_time: str, end_time: str, run_in_background: bool):
+        """Save start_time, end_time, run_in_background to project simulation_run_settings.json."""
+        path = getattr(self, "_sim_run_settings_path", None) or Path(self.project_path) / "simulation_run_settings.json"
+        try:
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump({
+                    "start_time": start_time,
+                    "end_time": end_time,
+                    "run_in_background": run_in_background,
+                }, f, indent=2)
+        except Exception:
+            pass
+
+    def _apply_map_background(self, run_in_background: bool) -> None:
+        """Set the map background to greenish (normal) or reddish-grey (background run)."""
+        try:
+            # Matches SimulationView default background (QColor(195, 225, 195))
+            normal_bg = QColor(195, 225, 195)
+            # Redish-grey "blanked" background
+            bg = QColor(176, 160, 160) if run_in_background else normal_bg
+            brush = QBrush(bg)
+
+            if hasattr(self, "simulation_view") and self.simulation_view is not None:
+                # SimulationView uses QGraphicsScene background brush.
+                try:
+                    if hasattr(self.simulation_view, "scene") and self.simulation_view.scene is not None:
+                        self.simulation_view.scene.setBackgroundBrush(brush)
+                except Exception:
+                    pass
+                try:
+                    self.simulation_view.setBackgroundBrush(brush)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    def on_run_in_background_toggled(self, checked: bool):
+        """Update UI/map appearance immediately when toggling background mode."""
+        self.run_in_background = bool(checked)
+        self._apply_map_background(self.run_in_background)
+
     def load_network(self):
         """Load network from sumocfg file."""
         try:
@@ -535,22 +650,53 @@ class SimulationPage(QWidget):
                 else:
                     sumo_binary = 'sumo'  # Fallback to system PATH
             
-            # Simulation end time (legacy: num_weeks * 604800 + 1800 seconds)
+            # Simulation time range (user start/end, clamped to simulation duration)
             try:
                 service = SimulationDBService(self.project_name, self.project_path)
                 simulation_limit_sec = service.get_simulation_limit_seconds()
             except Exception:
                 simulation_limit_sec = 86400 + 1800  # 1 day + 30 min fallback
-            self.log_text.append(f"Simulation end time: {_format_sim_time_ww_dd_hh_mm_ss(simulation_limit_sec)} (WW:DD:HH:MM:SS)")
 
-            # Start SUMO
+            start_time_str = self.start_time_edit.text().strip() or "00:00:00:00:00"
+            end_time_str = self.end_time_edit.text().strip()
+            run_in_bg = self.run_in_background_checkbox.isChecked()
+            try:
+                start_sec = _parse_ww_dd_hh_mm_ss(start_time_str)
+                end_sec = _parse_ww_dd_hh_mm_ss(end_time_str) if end_time_str else simulation_limit_sec
+            except ValueError as e:
+                self.log_text.append(f"Invalid time format: {e}")
+                QMessageBox.warning(
+                    self,
+                    "Invalid time",
+                    f"Start and end must be in format WW:DD:HH:MM:SS.\n{e}"
+                )
+                return
+            start_sec = max(0, min(start_sec, simulation_limit_sec))
+            end_sec = max(0, min(end_sec, simulation_limit_sec))
+            if start_sec >= end_sec:
+                QMessageBox.warning(
+                    self,
+                    "Invalid range",
+                    "Start time must be before end time."
+                )
+                return
+            self._save_simulation_run_settings(start_time_str, end_time_str, run_in_bg)
+            self.run_in_background = run_in_bg
+            self.log_text.append(f"Simulation range: {_format_sim_time_ww_dd_hh_mm_ss(start_sec)} to {_format_sim_time_ww_dd_hh_mm_ss(end_sec)} (WW:DD:HH:MM:SS)")
+            if run_in_bg:
+                self.log_text.append("Running in background (map greyed out, no on-screen rendering).")
+
+            # Start SUMO with user start/end.
+            # SUMO's --start is a boolean flag; use --begin for numeric start time.
             sumo_cmd = [
                 sumo_binary,
                 '-c', self.sumocfg_path,
-                '--start',  # Start simulation immediately
-                '--end', str(float(simulation_limit_sec)),
+                '--begin', str(float(start_sec)),
+                '--end', str(float(end_sec)),
                 '--quit-on-end',  # Quit when simulation ends
             ]
+
+            self._apply_map_background(run_in_bg)
 
             traci.start(sumo_cmd)
             self.traci_connection = traci
@@ -622,36 +768,35 @@ class SimulationPage(QWidget):
                 except Exception as e:
                     self.log_text.append(f"Dispatch error: {e}")
 
-            # Get all vehicles for view (ensure list of strings; TraCI can vary by version)
+            # Get current sim time and vehicle count for status
+            sim_time = traci.simulation.getTime()
             try:
                 raw_ids = traci.vehicle.getIDList()
                 vehicle_ids = [str(v) for v in (raw_ids if isinstance(raw_ids, (list, tuple)) else [])]
             except Exception:
                 vehicle_ids = []
+            vehicle_count = len(vehicle_ids)
 
-            # Update vehicle positions on map (color from DB: JSON color, noise = black)
-            current_vehicles = set()
-            for vehicle_id in vehicle_ids:
-                try:
-                    pos = traci.vehicle.getPosition(vehicle_id)
-                    angle = traci.vehicle.getAngle(vehicle_id)
-                    x = float(pos[0]) if len(pos) > 0 else 0.0
-                    y = float(pos[1]) if len(pos) > 1 else 0.0
-                    a = float(angle)
-                    color_rgb = self._simulation_runner.get_vehicle_display_color(vehicle_id) if self._simulation_runner else None
-                    self.simulation_view.update_vehicle(vehicle_id, x, y, a, color_rgb=color_rgb)
-                    current_vehicles.add(vehicle_id)
-                except Exception:
-                    pass
-            
-            # Remove vehicles that no longer exist
-            existing_vehicles = set(self.simulation_view.vehicle_items.keys())
-            for vehicle_id in existing_vehicles - current_vehicles:
-                self.simulation_view.remove_vehicle(vehicle_id)
+            # Update vehicle positions on map only when not running in background (skip rendering)
+            if not getattr(self, "run_in_background", False):
+                current_vehicles = set()
+                for vehicle_id in vehicle_ids:
+                    try:
+                        pos = traci.vehicle.getPosition(vehicle_id)
+                        angle = traci.vehicle.getAngle(vehicle_id)
+                        x = float(pos[0]) if len(pos) > 0 else 0.0
+                        y = float(pos[1]) if len(pos) > 1 else 0.0
+                        a = float(angle)
+                        color_rgb = self._simulation_runner.get_vehicle_display_color(vehicle_id) if self._simulation_runner else None
+                        self.simulation_view.update_vehicle(vehicle_id, x, y, a, color_rgb=color_rgb)
+                        current_vehicles.add(vehicle_id)
+                    except Exception:
+                        pass
+                existing_vehicles = set(self.simulation_view.vehicle_items.keys())
+                for vehicle_id in existing_vehicles - current_vehicles:
+                    self.simulation_view.remove_vehicle(vehicle_id)
             
             # Update status with speed information
-            sim_time = traci.simulation.getTime()
-            vehicle_count = len(vehicle_ids)
             
             # Calculate effective speed: simulation seconds per real second
             # If step_interval = 0ms, then maximum speed
@@ -665,8 +810,9 @@ class SimulationPage(QWidget):
                 speed_text = f"{effective_speed:.2f}x"
             
             time_str = _format_sim_time_ww_dd_hh_mm_ss(sim_time)
+            status_state = "Paused" if self.simulation_paused else "Running"
             self.status_label.setText(
-                f"Status: Running | Time: {time_str} | Vehicles: {vehicle_count} | "
+                f"Status: {status_state} | Time: {time_str} | Vehicles: {vehicle_count} | "
                 f"Speed: {speed_text}"
             )
             
@@ -722,9 +868,11 @@ class SimulationPage(QWidget):
 
         self._simulation_runner = None
 
-        # Clear vehicles
+        # Clear vehicles and restore normal map background.
         self.simulation_view.clear_vehicles()
-        
+        self.run_in_background = False
+        self._apply_map_background(False)
+
         self.status_label.setText("Status: Stopped")
         self.status_label.setStyleSheet("color: #f44336; padding: 5px 15px; font-size: 14px; font-weight: bold;")
         

@@ -460,6 +460,20 @@ class RouteGenerationPage(QWidget):
             QScrollArea {
                 border: none;
             }
+            QScrollBar:vertical {
+                background-color: #e0e0e0;
+                width: 12px;
+                border-radius: 6px;
+                margin: 0;
+            }
+            QScrollBar::handle:vertical {
+                background-color: #b0b0b0;
+                border-radius: 6px;
+                min-height: 24px;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0;
+            }
         """)
         config_group = QWidget()
         config_layout = QVBoxLayout()
@@ -484,6 +498,8 @@ class RouteGenerationPage(QWidget):
         self.top_run_sim_btn.clicked.connect(self.run_simulation_clicked.emit)
         self.top_run_sim_btn.setEnabled(False)
         self.top_run_sim_btn.setToolTip("Generate a ready Simulation DB first.")
+        self.top_run_sim_btn.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+        self.top_run_sim_btn.setMaximumWidth(130)
         top_actions_row.addWidget(self.top_run_sim_btn)
         config_layout.addLayout(top_actions_row)
 
@@ -683,6 +699,8 @@ class RouteGenerationPage(QWidget):
         self.run_sim_btn.clicked.connect(self.run_simulation_clicked.emit)
         self.run_sim_btn.setEnabled(False)
         self.run_sim_btn.setToolTip("Generate a ready Simulation DB first.")
+        self.run_sim_btn.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+        self.run_sim_btn.setMaximumWidth(130)
         # Green when enabled, grey when disabled. Keep styling minimal to avoid horizontal overflow.
         run_sim_style = """
             QPushButton:enabled {
@@ -699,6 +717,8 @@ class RouteGenerationPage(QWidget):
         self.run_sim_btn.setStyleSheet(run_sim_style)
         if hasattr(self, "top_run_sim_btn"):
             self.top_run_sim_btn.setStyleSheet(run_sim_style)
+            self.top_run_sim_btn.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+            self.top_run_sim_btn.setMaximumWidth(130)
         config_actions_row.addWidget(self.run_sim_btn)
         config_layout.addLayout(config_actions_row)
         self.prepare_progress_bar = QProgressBar()
@@ -814,6 +834,9 @@ class RouteGenerationPage(QWidget):
         if hasattr(self, "run_sim_btn"):
             self.run_sim_btn.setEnabled(False)
             self.run_sim_btn.setToolTip("Preparation in progress...")
+        if hasattr(self, "top_run_sim_btn"):
+            self.top_run_sim_btn.setEnabled(False)
+            self.top_run_sim_btn.setToolTip("Preparation in progress...")
         self.prepare_progress_bar.setVisible(True)
         self.prepare_status_label.setVisible(True)
         self.prepare_progress_bar.setValue(0)
@@ -2218,6 +2241,9 @@ class RouteGenerationPage(QWidget):
             if hasattr(self, "run_sim_btn"):
                 self.run_sim_btn.setEnabled(False)
                 self.run_sim_btn.setToolTip("Configuration is invalid or incomplete.")
+            if hasattr(self, "top_run_sim_btn"):
+                self.top_run_sim_btn.setEnabled(False)
+                self.top_run_sim_btn.setToolTip("Configuration is invalid or incomplete.")
             if hasattr(self, "prepare_status_label"):
                 self.prepare_status_label.setVisible(True)
                 self.prepare_status_label.setText("Run blocked: configuration is invalid or incomplete.")
@@ -2237,6 +2263,9 @@ class RouteGenerationPage(QWidget):
             self.run_sim_btn.setToolTip("Simulation DB is ready.")
         else:
             self.run_sim_btn.setToolTip(reason or "Generate Simulation DB first.")
+        if hasattr(self, "top_run_sim_btn"):
+            self.top_run_sim_btn.setEnabled(bool(ready))
+            self.top_run_sim_btn.setToolTip(self.run_sim_btn.toolTip())
         if show_status and hasattr(self, "prepare_status_label") and self._prep_thread is None:
             self.prepare_status_label.setVisible(True)
             if ready:
