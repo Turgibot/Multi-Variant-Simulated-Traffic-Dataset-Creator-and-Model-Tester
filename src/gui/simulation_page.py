@@ -334,12 +334,15 @@ class SimulationPage(QWidget):
         )
         right_controls_layout.addWidget(self.create_mappings_checkbox)
         
-        # Dataset creation controls whether runtime DB updates/dispatch happen.
+        # Controls future on-disk dataset export; must NOT disable dispatch/update or no vehicles
+        # are injected from the simulation DB into SUMO.
         self.create_dataset_checkbox = QCheckBox("Create dataset")
         self.create_dataset_checkbox.setChecked(True)
         self.create_dataset_checkbox.setToolTip(
-            "If unchecked, skip updating/dispatching via the simulation DB during the run."
+            "Reserved for writing dataset files after the run. "
+            "Vehicles are always injected from the simulation DB (dispatch is always on)."
         )
+        self.create_dataset_checkbox.toggled.connect(self._on_create_dataset_toggled)
         right_controls_layout.addWidget(self.create_dataset_checkbox)
         right_controls_layout.addStretch()
         controls_group.setLayout(right_controls_layout)
@@ -398,6 +401,11 @@ class SimulationPage(QWidget):
             else False
         )
         self._apply_map_background(self.run_in_background)
+        self.dataset_creation_enabled = bool(
+            self.create_dataset_checkbox.isChecked()
+            if hasattr(self, "create_dataset_checkbox")
+            else True
+        )
         self.traci_connection = None
         self.network_parser = None
         self.update_timer = QTimer()
@@ -498,6 +506,10 @@ class SimulationPage(QWidget):
         """Update UI/map appearance immediately when toggling background mode."""
         self.run_in_background = bool(checked)
         self._apply_map_background(self.run_in_background)
+
+    def _on_create_dataset_toggled(self, checked: bool):
+        """Mirror checkbox state for hooks that write dataset files (does not affect SUMO dispatch)."""
+        self.dataset_creation_enabled = bool(checked)
 
     def load_network(self):
         """Load network from sumocfg file."""
@@ -763,14 +775,14 @@ class SimulationPage(QWidget):
             current_step = max(0, int(traci.simulation.getTime()) - 1)
 
             # 2. Update: sync DB from TraCI (vehicle positions, road occupancy, arrivals)
-            if self._simulation_runner is not None and getattr(self, "create_dataset_checkbox", None) and self.create_dataset_checkbox.isChecked():
+            if self._simulation_runner is not None:
                 try:
                     self._simulation_runner.update(current_step, traci)
                 except Exception as e:
                     self.log_text.append(f"Update error: {e}")
 
             # 3. Dispatch: add vehicles scheduled for this step to SUMO
-            if self._simulation_runner is not None and getattr(self, "create_dataset_checkbox", None) and self.create_dataset_checkbox.isChecked():
+            if self._simulation_runner is not None:
                 try:
                     self._simulation_runner.dispatch(current_step, traci)
                 except Exception as e:
