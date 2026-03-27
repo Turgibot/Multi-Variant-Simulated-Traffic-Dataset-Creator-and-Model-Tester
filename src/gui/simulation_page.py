@@ -5,6 +5,7 @@ SUMO Simulation page for running and monitoring traffic simulations.
 import traceback
 from pathlib import Path
 import json
+import gzip
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QMessageBox, QGroupBox, QTextEdit, QSlider, QCheckBox, QLineEdit, QFormLayout,
@@ -14,6 +15,7 @@ from PySide6.QtGui import QFont, QColor, QBrush
 
 from src.gui.simulation_view import SimulationView
 from src.utils.network_parser import NetworkParser
+from src.utils.csv_to_steps_runner import create_dynamic_edges
 
 
 def _format_sim_time_ww_dd_hh_mm_ss(seconds: float) -> str:
@@ -304,6 +306,7 @@ class SimulationPage(QWidget):
         start_time_str = settings.get("start_time", "00:00:00:00:00")
         end_time_str = settings.get("end_time", default_end)
         run_in_bg = bool(settings.get("run_in_background", False))
+        compress_dataset = bool(settings.get("compress_dataset_output", False))
 
         time_form = QFormLayout()
         self.start_time_edit = QLineEdit()
@@ -344,6 +347,13 @@ class SimulationPage(QWidget):
         )
         self.create_dataset_checkbox.toggled.connect(self._on_create_dataset_toggled)
         right_controls_layout.addWidget(self.create_dataset_checkbox)
+        self.compress_dataset_checkbox = QCheckBox("Compress dataset files")
+        self.compress_dataset_checkbox.setChecked(compress_dataset)
+        self.compress_dataset_checkbox.setToolTip(
+            "When dataset export is enabled, write compressed .json.gz files instead of .json."
+        )
+        self.compress_dataset_checkbox.toggled.connect(self._on_compress_dataset_toggled)
+        right_controls_layout.addWidget(self.compress_dataset_checkbox)
         right_controls_layout.addStretch()
         controls_group.setLayout(right_controls_layout)
         controls_group.setMinimumWidth(220)
@@ -406,6 +416,11 @@ class SimulationPage(QWidget):
             if hasattr(self, "create_dataset_checkbox")
             else True
         )
+        self.compress_dataset_output = bool(
+            self.compress_dataset_checkbox.isChecked()
+            if hasattr(self, "compress_dataset_checkbox")
+            else False
+        )
         self.traci_connection = None
         self.network_parser = None
         self.update_timer = QTimer()
@@ -415,6 +430,12 @@ class SimulationPage(QWidget):
         self._mapping_thread = None
         self._mapping_worker = None
         self._simulation_runner = None  # SimulationRunner for update/dispatch
+        self._dataset_sampling_period_sec = 30
+        self._dataset_snapshots_dir = None
+        self._dataset_labels_dir = None
+        self._dataset_snapshot_timestamps = []
+        self._next_dataset_snapshot_sec = None
+        self._dataset_static_written = False
         
         # Load network if sumocfg is available (after UI is complete)
         self.load_network()
@@ -455,7 +476,7 @@ class SimulationPage(QWidget):
             )
 
     def _load_simulation_run_settings(self) -> dict:
-        """Load start_time, end_time, run_in_background from project simulation_run_settings.json."""
+        """Load run settings from project simulation_run_settings.json."""
         path = getattr(self, "_sim_run_settings_path", None) or Path(self.project_path) / "simulation_run_settings.json"
         if not path.exists():
             return {}
@@ -465,8 +486,14 @@ class SimulationPage(QWidget):
         except Exception:
             return {}
 
-    def _save_simulation_run_settings(self, start_time: str, end_time: str, run_in_background: bool):
-        """Save start_time, end_time, run_in_background to project simulation_run_settings.json."""
+    def _save_simulation_run_settings(
+        self,
+        start_time: str,
+        end_time: str,
+        run_in_background: bool,
+        compress_dataset_output: bool,
+    ):
+        """Save run settings to project simulation_run_settings.json."""
         path = getattr(self, "_sim_run_settings_path", None) or Path(self.project_path) / "simulation_run_settings.json"
         try:
             Path(path).parent.mkdir(parents=True, exist_ok=True)
@@ -475,6 +502,7 @@ class SimulationPage(QWidget):
                     "start_time": start_time,
                     "end_time": end_time,
                     "run_in_background": run_in_background,
+                    "compress_dataset_output": compress_dataset_output,
                 }, f, indent=2)
         except Exception:
             pass
@@ -510,6 +538,236 @@ class SimulationPage(QWidget):
     def _on_create_dataset_toggled(self, checked: bool):
         """Mirror checkbox state for hooks that write dataset files (does not affect SUMO dispatch)."""
         self.dataset_creation_enabled = bool(checked)
+
+    def _on_compress_dataset_toggled(self, checked: bool):
+        """Mirror compression toggle state for dataset export hooks."""
+        self.compress_dataset_output = bool(checked)
+
+    def _json_load_safe(self, raw_value, default):
+        if raw_value is None:
+            return default
+        try:
+            value = json.loads(raw_value) if isinstance(raw_value, str) else raw_value
+            return value if value is not None else default
+        except Exception:
+            return default
+
+    def _fetch_junctions_for_dataset(self):
+        with self._simulation_runner.sim_db.connect() as conn:
+            rows = conn.execute(
+                "SELECT id, x, y, type, zone, incoming_roads_json, outgoing_roads_json FROM junctions"
+            ).fetchall()
+        return [
+            {
+                "id": str(r[0]),
+                "x": float(r[1] or 0.0),
+                "y": float(r[2] or 0.0),
+                "type": str(r[3] or ""),
+                "zone": str(r[4] or ""),
+                "incoming": self._json_load_safe(r[5], []),
+                "outgoing": self._json_load_safe(r[6], []),
+            }
+            for r in rows
+        ]
+
+    def _fetch_road_edges_for_dataset(self):
+        with self._simulation_runner.sim_db.connect() as conn:
+            rows = conn.execute(
+                "SELECT id, from_junction, to_junction, speed, length, num_lanes, zone, "
+                "vehicles_on_road_json, density, avg_speed FROM roads"
+            ).fetchall()
+        roads = {}
+        for r in rows:
+            rid = str(r[0])
+            roads[rid] = {
+                "id": rid,
+                "from": str(r[1] or ""),
+                "to": str(r[2] or ""),
+                "edge_type": 0,
+                "speed": float(r[3] or 0.0),
+                "length": float(r[4] or 0.0),
+                "num_lanes": int(r[5] or 0),
+                "zone": str(r[6] or ""),
+                "vehicles_on_road": self._json_load_safe(r[7], []),
+                "density": float(r[8] or 0.0),
+                "avg_speed": float(r[9] or 0.0),
+                "edge_demand": 0.0,
+            }
+        return roads
+
+    def _fetch_active_nodes_for_dataset(self):
+        with self._simulation_runner.sim_db.connect() as conn:
+            rows = conn.execute(
+                "SELECT id, vehicle_type, length, width, height, speed, acceleration, current_x, current_y, "
+                "current_zone, current_edge, current_position, origin_name, origin_zone, origin_edge, "
+                "origin_position, origin_x, origin_y, origin_start_sec, route_json, route_length, "
+                "route_left_json, route_length_left, destination_name, destination_edge, destination_position, "
+                "destination_x, destination_y FROM vehicles WHERE status = 'in_route'"
+            ).fetchall()
+        vehicles = {}
+        for r in rows:
+            vid = str(r[0])
+            vehicles[vid] = {
+                "id": vid,
+                "vehicle_type": str(r[1] or ""),
+                "length": float(r[2] or 0.0),
+                "width": float(r[3] or 0.0),
+                "height": float(r[4] or 0.0),
+                "speed": float(r[5] or 0.0),
+                "acceleration": float(r[6] or 0.0),
+                "current_x": float(r[7] or 0.0),
+                "current_y": float(r[8] or 0.0),
+                "current_zone": str(r[9] or ""),
+                "current_edge": str(r[10] or ""),
+                "current_position": float(r[11] or 0.0),
+                "origin_name": str(r[12] or ""),
+                "origin_zone": str(r[13] or ""),
+                "origin_edge": str(r[14] or ""),
+                "origin_position": float(r[15] or 0.0),
+                "origin_x": float(r[16] or 0.0),
+                "origin_y": float(r[17] or 0.0),
+                "origin_start_sec": int(r[18] or 0),
+                "route": self._json_load_safe(r[19], []),
+                "route_length": float(r[20] or 0.0),
+                "route_left": self._json_load_safe(r[21], []),
+                "route_length_left": float(r[22] or 0.0),
+                "destination_name": str(r[23] or ""),
+                "destination_edge": str(r[24] or ""),
+                "destination_position": float(r[25] or 0.0),
+                "destination_x": float(r[26] or 0.0),
+                "destination_y": float(r[27] or 0.0),
+            }
+        return vehicles
+
+    def _compute_edge_demand(self, road_edges: dict, vehicles: dict):
+        for edge in road_edges.values():
+            edge["edge_demand"] = 0.0
+        tau_sec = 600.0
+        for vehicle in vehicles.values():
+            route_left = vehicle.get("route_left", [])
+            if not route_left:
+                continue
+            current_edge = vehicle.get("current_edge", "")
+            current_position = float(vehicle.get("current_position", 0.0) or 0.0)
+            t = 0.0
+            if current_edge:
+                e = road_edges.get(current_edge, {})
+                length = float(e.get("length", 0.0) or 0.0)
+                speed = float(e.get("avg_speed", 0.0) or e.get("speed", 1.0) or 1.0)
+                remaining = max(0.0, length - current_position)
+                t += remaining / max(speed, 1e-6)
+            for edge_id in route_left:
+                e = road_edges.get(edge_id, {})
+                if not e:
+                    continue
+                length = float(e.get("length", 0.0) or 0.0)
+                speed = float(e.get("avg_speed", 0.0) or e.get("speed", 1.0) or 1.0)
+                contribution = 1.0 / (1.0 + t / tau_sec)
+                e["edge_demand"] = float(e.get("edge_demand", 0.0) or 0.0) + contribution
+                t += length / max(speed, 1e-6)
+
+    def _write_json_file(self, path: Path, payload: dict):
+        if self.compress_dataset_output:
+            with gzip.open(path, "wt", encoding="utf-8") as f:
+                json.dump(payload, f, separators=(",", ":"))
+        else:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2)
+
+    def _init_dataset_export(self):
+        self._dataset_snapshot_timestamps = []
+        self._next_dataset_snapshot_sec = None
+        self._dataset_static_written = False
+        output_dir = Path(self.output_folder)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        self._dataset_snapshots_dir = output_dir / "snapshots"
+        self._dataset_labels_dir = output_dir / "labels"
+        self._dataset_snapshots_dir.mkdir(parents=True, exist_ok=True)
+        self._dataset_labels_dir.mkdir(parents=True, exist_ok=True)
+
+    def _write_dataset_static_file(self):
+        if not self.dataset_creation_enabled:
+            return
+        if self._simulation_runner is None:
+            raise RuntimeError("Dataset static creation requires initialized SimulationRunner.")
+        self._init_dataset_export()
+        junctions = self._fetch_junctions_for_dataset()
+        road_edges = self._fetch_road_edges_for_dataset()
+        static_payload = {
+            "junctions": junctions,
+            "road_edges": [
+                {
+                    "id": e["id"],
+                    "from": e["from"],
+                    "to": e["to"],
+                    "edge_type": e["edge_type"],
+                    "speed": e["speed"],
+                    "length": e["length"],
+                    "num_lanes": e["num_lanes"],
+                    "zone": e["zone"],
+                }
+                for e in road_edges.values()
+            ],
+        }
+        static_name = "static.json.gz" if self.compress_dataset_output else "static.json"
+        self._write_json_file(Path(self.output_folder) / static_name, static_payload)
+        self._dataset_static_written = True
+        self.log_text.append(f"Dataset static file created: {static_name}")
+
+    def _write_dataset_snapshot(self, snapshot_sec: int):
+        if not self.dataset_creation_enabled or not self._dataset_static_written:
+            return
+        if self._simulation_runner is None or self._dataset_snapshots_dir is None:
+            return
+        road_edges = self._fetch_road_edges_for_dataset()
+        vehicles = self._fetch_active_nodes_for_dataset()
+        if not vehicles:
+            return
+        self._compute_edge_demand(road_edges, vehicles)
+        road_edges_dynamic = [
+            {
+                "id": e["id"],
+                "vehicles_on_road": e.get("vehicles_on_road", []),
+                "edge_demand": e.get("edge_demand", 0.0),
+                "avg_speed": e.get("avg_speed", 0.0),
+                "density": e.get("density", 0.0),
+            }
+            for e in road_edges.values()
+            if e.get("vehicles_on_road")
+            or e.get("edge_demand", 0.0) != 0.0
+            or e.get("avg_speed", 0.0) != 0.0
+            or e.get("density", 0.0) != 0.0
+        ]
+        step_payload = {
+            "step": int(snapshot_sec),
+            "nodes": list(vehicles.values()),
+            "road_edges_dynamic": road_edges_dynamic,
+            "dynamic_edges": create_dynamic_edges(road_edges, vehicles),
+        }
+        suffix = ".json.gz" if self.compress_dataset_output else ".json"
+        path = self._dataset_snapshots_dir / f"step_{int(snapshot_sec):012d}{suffix}"
+        self._write_json_file(path, step_payload)
+        self._dataset_snapshot_timestamps.append(int(snapshot_sec))
+
+    def _write_dataset_labels_after_run(self):
+        if not self.dataset_creation_enabled or not self._dataset_snapshot_timestamps:
+            return
+        if self._simulation_runner is None or self._dataset_labels_dir is None:
+            return
+        with self._simulation_runner.sim_db.connect() as conn:
+            rows = conn.execute(
+                "SELECT id, destination_step FROM vehicles WHERE destination_step IS NOT NULL"
+            ).fetchall()
+        arrival_step_by_vehicle = {str(r[0]): int(r[1]) for r in rows if r[1] is not None}
+        suffix = ".json.gz" if self.compress_dataset_output else ".json"
+        for snapshot_sec in self._dataset_snapshot_timestamps:
+            labels = []
+            for vid, dest_step in arrival_step_by_vehicle.items():
+                labels.append({"id": vid, "eta": max(0, int(dest_step) - int(snapshot_sec))})
+            label_payload = {"timestamp": int(snapshot_sec), "labels": labels}
+            path = self._dataset_labels_dir / f"label_{int(snapshot_sec):012d}{suffix}"
+            self._write_json_file(path, label_payload)
+        self.log_text.append(f"Dataset labels created for {len(self._dataset_snapshot_timestamps)} snapshot(s).")
 
     def load_network(self):
         """Load network from sumocfg file."""
@@ -680,6 +938,11 @@ class SimulationPage(QWidget):
             start_time_str = self.start_time_edit.text().strip() or "00:00:00:00:00"
             end_time_str = self.end_time_edit.text().strip()
             run_in_bg = self.run_in_background_checkbox.isChecked()
+            compress_dataset_output = (
+                self.compress_dataset_checkbox.isChecked()
+                if hasattr(self, "compress_dataset_checkbox")
+                else False
+            )
             try:
                 start_sec = _parse_ww_dd_hh_mm_ss(start_time_str)
                 end_sec = _parse_ww_dd_hh_mm_ss(end_time_str) if end_time_str else simulation_limit_sec
@@ -700,8 +963,14 @@ class SimulationPage(QWidget):
                     "Start time must be before end time."
                 )
                 return
-            self._save_simulation_run_settings(start_time_str, end_time_str, run_in_bg)
+            self._save_simulation_run_settings(
+                start_time_str,
+                end_time_str,
+                run_in_bg,
+                compress_dataset_output,
+            )
             self.run_in_background = run_in_bg
+            self.compress_dataset_output = compress_dataset_output
             self.log_text.append(f"Simulation range: {_format_sim_time_ww_dd_hh_mm_ss(start_sec)} to {_format_sim_time_ww_dd_hh_mm_ss(end_sec)} (WW:DD:HH:MM:SS)")
             if run_in_bg:
                 self.log_text.append("Running in background (map greyed out, no on-screen rendering).")
@@ -717,10 +986,12 @@ class SimulationPage(QWidget):
             ]
 
             self._apply_map_background(run_in_bg)
+            self._simulation_runner = SimulationRunner(self.project_path, self.project_name)
+            if self.dataset_creation_enabled:
+                self._write_dataset_static_file()
 
             traci.start(sumo_cmd)
             self.traci_connection = traci
-            self._simulation_runner = SimulationRunner(self.project_path, self.project_name)
 
             self.log_text.append("Simulation started successfully!")
             
@@ -787,6 +1058,15 @@ class SimulationPage(QWidget):
                     self._simulation_runner.dispatch(current_step, traci)
                 except Exception as e:
                     self.log_text.append(f"Dispatch error: {e}")
+
+            # 4. Periodic dataset snapshot export during run.
+            if self.dataset_creation_enabled:
+                sim_time_sec = int(traci.simulation.getTime())
+                if self._next_dataset_snapshot_sec is None:
+                    self._next_dataset_snapshot_sec = sim_time_sec
+                while sim_time_sec >= int(self._next_dataset_snapshot_sec):
+                    self._write_dataset_snapshot(int(self._next_dataset_snapshot_sec))
+                    self._next_dataset_snapshot_sec += int(self._dataset_sampling_period_sec)
 
             # Get current sim time and vehicle count for status
             sim_time = traci.simulation.getTime()
@@ -886,6 +1166,11 @@ class SimulationPage(QWidget):
                 pass
             self.traci_connection = None
 
+        if self.dataset_creation_enabled:
+            try:
+                self._write_dataset_labels_after_run()
+            except Exception as exc:
+                self.log_text.append(f"Dataset label generation failed: {exc}")
         self._simulation_runner = None
 
         # Clear vehicles and restore normal map background.
