@@ -10,8 +10,8 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QMessageBox, QGroupBox, QTextEdit, QSlider, QCheckBox, QLineEdit, QFormLayout,
 )
-from PySide6.QtCore import QObject, Qt, QThread, Signal, QTimer
-from PySide6.QtGui import QFont, QColor, QBrush
+from PySide6.QtCore import QObject, Qt, QThread, Signal, QTimer, QRectF
+from PySide6.QtGui import QFont, QColor, QBrush, QPainter
 
 from src.gui.simulation_view import SimulationView
 from src.utils.network_parser import NetworkParser
@@ -55,6 +55,7 @@ class MappingExportWorker(QObject):
 
     progress = Signal(str)
     finished = Signal(bool, str, object)
+    progress_counts = Signal(int, int)
 
     def __init__(self, project_name: str, project_path: str, output_folder: str):
         super().__init__()
@@ -69,10 +70,85 @@ class MappingExportWorker(QObject):
             result = service.create_mapping_files_if_missing(
                 self.output_folder,
                 progress_cb=lambda msg: self.progress.emit(msg),
+                progress_counts_cb=lambda c, t: self.progress_counts.emit(c, t),
             )
             self.finished.emit(True, "Mapping export finished.", result)
         except Exception as exc:
             self.finished.emit(False, str(exc), {})
+
+
+class _SegmentedDatasetProgressBar(QWidget):
+    """
+    Single slim bar split into 3 segments:
+    mapping / snapshots / labels.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._map = (0, 1)
+        self._snap = (0, 1)
+        self._lab = (0, 1)
+
+    def set_mapping(self, current: int, total: int):
+        self._map = (max(0, int(current)), max(1, int(total)))
+        self.update()
+
+    def set_snapshots(self, current: int, total: int):
+        self._snap = (max(0, int(current)), max(1, int(total)))
+        self.update()
+
+    def set_labels(self, current: int, total: int):
+        self._lab = (max(0, int(current)), max(1, int(total)))
+        self.update()
+
+    def paintEvent(self, event):
+        w = max(1, self.width())
+        h = max(1, self.height())
+        # Segment widths: Mapping 5%, Snapshots 85%, Labels 10%
+        seg_fracs = (0.05, 0.85, 0.10)
+        seg_w = [w * f for f in seg_fracs]
+
+        def ratio(pair):
+            c, t = pair
+            return 0.0 if t <= 0 else max(0.0, min(1.0, float(c) / float(t)))
+
+        r_map = ratio(self._map)
+        r_snap = ratio(self._snap)
+        r_lab = ratio(self._lab)
+
+        # Light blue fill on a very light background.
+        bg = QColor(235, 245, 255)
+        fill = QColor(140, 195, 255)
+        border = QColor(190, 215, 245)
+
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing, True)
+
+        rect = QRectF(0.5, 0.5, w - 1.0, h - 1.0)
+        radius = min(5.0, rect.height() / 2.0)
+        p.setPen(border)
+        p.setBrush(bg)
+        p.drawRoundedRect(rect, radius, radius)
+
+        def draw_segment(i: int, frac: float):
+            x0 = rect.x() + sum(seg_w[:i])
+            x1 = rect.x() + sum(seg_w[: i + 1])
+            seg_rect = QRectF(x0, rect.y(), x1 - x0, rect.height())
+            fill_rect = QRectF(seg_rect.x(), seg_rect.y(), seg_rect.width() * frac, seg_rect.height())
+            p.setPen(Qt.NoPen)
+            p.setBrush(fill)
+            p.drawRoundedRect(fill_rect, radius, radius)
+
+            # Divider line between segments
+            if i in (0, 1):
+                p.setPen(border)
+                p.drawLine(int(x1), int(rect.y()), int(x1), int(rect.y() + rect.height()))
+
+        draw_segment(0, r_map)
+        draw_segment(1, r_snap)
+        draw_segment(2, r_lab)
+
+        p.end()
 
 
 class SimulationPage(QWidget):
@@ -361,7 +437,7 @@ class SimulationPage(QWidget):
         simulation_content_layout.addWidget(controls_group, stretch=0)
 
         main_layout.addLayout(simulation_content_layout, stretch=1)
-        
+
         # Simulation Log (Bottom)
         log_group = QGroupBox("Simulation Log")
         log_group.setStyleSheet("""
@@ -380,10 +456,25 @@ class SimulationPage(QWidget):
         """)
         log_layout = QVBoxLayout()
         log_layout.setContentsMargins(5, 5, 5, 5)
-        
+
+        # Dataset progress UI (inside log area so it does not steal map height).
+        self.dataset_progress_group = QWidget()
+        progress_layout = QVBoxLayout()
+        progress_layout.setContentsMargins(4, 2, 4, 4)
+        progress_layout.setSpacing(4)
+        legend = QLabel("Dataset Progress: Mapping / Snapshots / Labels")
+        legend.setStyleSheet("color: #666; font-size: 11px;")
+        progress_layout.addWidget(legend)
+        self.dataset_progress_bar = _SegmentedDatasetProgressBar()
+        self.dataset_progress_bar.setFixedHeight(10)
+        progress_layout.addWidget(self.dataset_progress_bar)
+        self.dataset_progress_group.setLayout(progress_layout)
+        self.dataset_progress_group.setVisible(False)
+        log_layout.addWidget(self.dataset_progress_group)
+
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
-        self.log_text.setMaximumHeight(150)
+        self.log_text.setMaximumHeight(120)
         self.log_text.setStyleSheet("""
             QTextEdit {
                 background-color: #f9f9f9;
@@ -436,6 +527,8 @@ class SimulationPage(QWidget):
         self._dataset_snapshot_timestamps = []
         self._next_dataset_snapshot_sec = None
         self._dataset_static_written = False
+        self._dataset_expected_snapshots_total = 0
+        self._sim_end_sec_limit = None
         
         # Load network if sumocfg is available (after UI is complete)
         self.load_network()
@@ -676,6 +769,7 @@ class SimulationPage(QWidget):
 
     def _init_dataset_export(self):
         self._dataset_snapshot_timestamps = []
+        self._dataset_snapshots_boundary_count = 0
         self._next_dataset_snapshot_sec = None
         self._dataset_static_written = False
         output_dir = Path(self.output_folder)
@@ -684,6 +778,10 @@ class SimulationPage(QWidget):
         self._dataset_labels_dir = output_dir / "labels"
         self._dataset_snapshots_dir.mkdir(parents=True, exist_ok=True)
         self._dataset_labels_dir.mkdir(parents=True, exist_ok=True)
+        if hasattr(self, "dataset_progress_bar") and self.dataset_progress_bar is not None:
+            total = int(self._dataset_expected_snapshots_total or 0)
+            self.dataset_progress_bar.set_snapshots(0, total if total > 0 else 1)
+            self.dataset_progress_bar.set_labels(0, 1)
 
     def _write_dataset_static_file(self):
         if not self.dataset_creation_enabled:
@@ -713,15 +811,26 @@ class SimulationPage(QWidget):
         self._write_json_file(Path(self.output_folder) / static_name, static_payload)
         self._dataset_static_written = True
         self.log_text.append(f"Dataset static file created: {static_name}")
+        if hasattr(self, "create_mappings_checkbox") and not self.create_mappings_checkbox.isChecked():
+            if hasattr(self, "dataset_progress_bar") and self.dataset_progress_bar is not None:
+                self.dataset_progress_bar.set_mapping(1, 1)
 
     def _write_dataset_snapshot(self, snapshot_sec: int):
         if not self.dataset_creation_enabled or not self._dataset_static_written:
             return
         if self._simulation_runner is None or self._dataset_snapshots_dir is None:
             return
+        self._dataset_snapshots_boundary_count = int(
+            getattr(self, "_dataset_snapshots_boundary_count", 0)
+        ) + 1
+        total_exp = int(self._dataset_expected_snapshots_total or 0)
+        denom = total_exp if total_exp > 0 else max(1, self._dataset_snapshots_boundary_count)
+
         road_edges = self._fetch_road_edges_for_dataset()
         vehicles = self._fetch_active_nodes_for_dataset()
         if not vehicles:
+            if hasattr(self, "dataset_progress_bar") and self.dataset_progress_bar is not None:
+                self.dataset_progress_bar.set_snapshots(self._dataset_snapshots_boundary_count, denom)
             return
         self._compute_edge_demand(road_edges, vehicles)
         road_edges_dynamic = [
@@ -748,6 +857,9 @@ class SimulationPage(QWidget):
         path = self._dataset_snapshots_dir / f"step_{int(snapshot_sec):012d}{suffix}"
         self._write_json_file(path, step_payload)
         self._dataset_snapshot_timestamps.append(int(snapshot_sec))
+        self.log_text.append(f"Dataset snapshot created: {path.name}")
+        if hasattr(self, "dataset_progress_bar") and self.dataset_progress_bar is not None:
+            self.dataset_progress_bar.set_snapshots(self._dataset_snapshots_boundary_count, denom)
 
     def _write_dataset_labels_after_run(self):
         if not self.dataset_creation_enabled or not self._dataset_snapshot_timestamps:
@@ -760,14 +872,38 @@ class SimulationPage(QWidget):
             ).fetchall()
         arrival_step_by_vehicle = {str(r[0]): int(r[1]) for r in rows if r[1] is not None}
         suffix = ".json.gz" if self.compress_dataset_output else ".json"
+        if hasattr(self, "dataset_progress_bar") and self.dataset_progress_bar is not None:
+            self.dataset_progress_bar.set_labels(0, len(self._dataset_snapshot_timestamps))
+        created = 0
         for snapshot_sec in self._dataset_snapshot_timestamps:
             labels = []
             for vid, dest_step in arrival_step_by_vehicle.items():
-                labels.append({"id": vid, "eta": max(0, int(dest_step) - int(snapshot_sec))})
+                # Vehicles with eta==0 have completed their trip and should not appear
+                # in snapshots or labels for this timestamp.
+                if int(dest_step) <= int(snapshot_sec):
+                    continue
+                labels.append({"id": vid, "eta": int(dest_step) - int(snapshot_sec)})
             label_payload = {"timestamp": int(snapshot_sec), "labels": labels}
             path = self._dataset_labels_dir / f"label_{int(snapshot_sec):012d}{suffix}"
             self._write_json_file(path, label_payload)
-        self.log_text.append(f"Dataset labels created for {len(self._dataset_snapshot_timestamps)} snapshot(s).")
+            created += 1
+            self.log_text.append(f"Dataset label created: {path.name}")
+            if hasattr(self, "dataset_progress_bar") and self.dataset_progress_bar is not None:
+                self.dataset_progress_bar.set_labels(created, len(self._dataset_snapshot_timestamps))
+            self.log_text.append(f"Dataset labels created for {len(self._dataset_snapshot_timestamps)} snapshot(s).")
+
+    def _finalize_dataset_snapshot_progress(self):
+        """Mark the snapshot segment full when the run ends (handles skipped empty snapshots and early stop)."""
+        if not getattr(self, "dataset_creation_enabled", False):
+            return
+        if not hasattr(self, "dataset_progress_bar") or self.dataset_progress_bar is None:
+            return
+        n = int(getattr(self, "_dataset_snapshots_boundary_count", 0) or 0)
+        if n <= 0:
+            n = len(getattr(self, "_dataset_snapshot_timestamps", []) or [])
+        if n <= 0:
+            return
+        self.dataset_progress_bar.set_snapshots(n, n)
 
     def load_network(self):
         """Load network from sumocfg file."""
@@ -822,10 +958,19 @@ class SimulationPage(QWidget):
     
     def start_simulation(self):
         """Start the SUMO simulation."""
+        if hasattr(self, "dataset_progress_group"):
+            self.dataset_progress_group.setVisible(True)
+        if hasattr(self, "dataset_progress_bar") and self.dataset_progress_bar is not None:
+            self.dataset_progress_bar.set_mapping(0, 1)
+            self.dataset_progress_bar.set_snapshots(0, 1)
+            self.dataset_progress_bar.set_labels(0, 1)
+
         if hasattr(self, "create_mappings_checkbox") and self.create_mappings_checkbox.isChecked():
             if self._mapping_thread is not None:
                 return
             self.log_text.append("Starting mapping export (background)...")
+            if hasattr(self, "dataset_progress_bar") and self.dataset_progress_bar is not None:
+                self.dataset_progress_bar.set_mapping(0, 1)
             self.status_label.setText("Status: Preparing mappings")
             self.status_label.setStyleSheet("color: #666; padding: 5px 15px; font-size: 14px; font-weight: bold;")
             self.start_btn.setEnabled(False)
@@ -844,6 +989,7 @@ class SimulationPage(QWidget):
         self._mapping_worker.moveToThread(self._mapping_thread)
         self._mapping_thread.started.connect(self._mapping_worker.run)
         self._mapping_worker.progress.connect(self.on_mapping_progress)
+        self._mapping_worker.progress_counts.connect(self.on_mapping_counts)
         self._mapping_worker.finished.connect(self.on_mapping_finished)
         self._mapping_worker.finished.connect(self._mapping_thread.quit)
         self._mapping_thread.finished.connect(self._mapping_thread.deleteLater)
@@ -853,8 +999,15 @@ class SimulationPage(QWidget):
         """Append mapping export progress in simulation log."""
         self.log_text.append(message)
 
+    def on_mapping_counts(self, current: int, total: int):
+        """Update mapping segment based on entity iteration progress."""
+        if hasattr(self, "dataset_progress_bar") and self.dataset_progress_bar is not None:
+            self.dataset_progress_bar.set_mapping(int(current), int(total))
+
     def on_mapping_finished(self, success: bool, message: str, result: object):
         """Continue startup flow after background mapping export."""
+        if hasattr(self, "dataset_progress_bar") and self.dataset_progress_bar is not None:
+            self.dataset_progress_bar.set_mapping(1 if success else 0, 1)
         if success:
             if isinstance(result, dict):
                 if result.get("created"):
@@ -963,6 +1116,16 @@ class SimulationPage(QWidget):
                     "Start time must be before end time."
                 )
                 return
+
+            # Expected dataset snapshots count (used for progress bars)
+            if self.dataset_creation_enabled:
+                period = max(1, int(getattr(self, "_dataset_sampling_period_sec", 30) or 30))
+                duration = max(0, int(end_sec) - int(start_sec))
+                self._dataset_expected_snapshots_total = (duration // period) + 1
+                if hasattr(self, "dataset_progress_bar") and self.dataset_progress_bar is not None:
+                    t = max(1, int(self._dataset_expected_snapshots_total))
+                    self.dataset_progress_bar.set_snapshots(0, t)
+                    self.dataset_progress_bar.set_labels(0, t)
             self._save_simulation_run_settings(
                 start_time_str,
                 end_time_str,
@@ -971,6 +1134,7 @@ class SimulationPage(QWidget):
             )
             self.run_in_background = run_in_bg
             self.compress_dataset_output = compress_dataset_output
+            self._sim_end_sec_limit = int(end_sec)
             self.log_text.append(f"Simulation range: {_format_sim_time_ww_dd_hh_mm_ss(start_sec)} to {_format_sim_time_ww_dd_hh_mm_ss(end_sec)} (WW:DD:HH:MM:SS)")
             if run_in_bg:
                 self.log_text.append("Running in background (map greyed out, no on-screen rendering).")
@@ -1070,6 +1234,12 @@ class SimulationPage(QWidget):
 
             # Get current sim time and vehicle count for status
             sim_time = traci.simulation.getTime()
+            # Enforce configured end time (SUMO --end is not always reliable across setups).
+            end_limit = getattr(self, "_sim_end_sec_limit", None)
+            if end_limit is not None and sim_time >= float(end_limit):
+                self.log_text.append("Reached configured end time. Stopping simulation and finalizing labels...")
+                self.stop_simulation(confirm=False)
+                return
             try:
                 raw_ids = traci.vehicle.getIDList()
                 vehicle_ids = [str(v) for v in (raw_ids if isinstance(raw_ids, (list, tuple)) else [])]
@@ -1138,9 +1308,9 @@ class SimulationPage(QWidget):
         
         # TODO: Implement actual SUMO simulation pause/resume
     
-    def stop_simulation(self):
+    def stop_simulation(self, confirm: bool = True):
         """Stop the SUMO simulation."""
-        if self.simulation_running:
+        if confirm and self.simulation_running:
             reply = QMessageBox.question(
                 self,
                 "Stop Simulation",
@@ -1167,6 +1337,10 @@ class SimulationPage(QWidget):
             self.traci_connection = None
 
         if self.dataset_creation_enabled:
+            try:
+                self._finalize_dataset_snapshot_progress()
+            except Exception:
+                pass
             try:
                 self._write_dataset_labels_after_run()
             except Exception as exc:

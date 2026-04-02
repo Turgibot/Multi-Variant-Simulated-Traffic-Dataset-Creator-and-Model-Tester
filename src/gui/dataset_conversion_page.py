@@ -2091,10 +2091,11 @@ class DatasetConversionPage(QWidget):
         self.dataset_count_spin.textChanged.connect(_on_dataset_count_changed)
         self.dataset_last_traj_spin.textChanged.connect(_on_dataset_last_changed)
         self.dataset_start_traj_spin.textChanged.connect(_on_dataset_start_changed)
-        self.dataset_count_spin.setText("10")  # Set default, triggers last update
-
         self.dataset_start_traj_spin.textChanged.connect(self._update_dataset_buttons_visibility)
         self.dataset_output_path.textChanged.connect(self._update_dataset_buttons_visibility)
+        self.dataset_start_traj_spin.setText("1")
+        self.dataset_count_spin.setText("10")  # triggers last from start + count
+
         self.dataset_output_path.textChanged.connect(lambda _: self._schedule_save_settings())
         self.dataset_sorted_check.stateChanged.connect(lambda _: self._schedule_save_settings())
         self.dataset_save_sorted_input.textChanged.connect(lambda _: self._schedule_save_settings())

@@ -949,6 +949,7 @@ class SimulationDBService:
         self,
         dataset_output_folder: Optional[str] = None,
         progress_cb: Optional[Callable[[str], None]] = None,
+        progress_counts_cb: Optional[Callable[[int, int], None]] = None,
     ) -> Dict[str, Any]:
         """
         Create mapping files only when mapping directory does not exist.
@@ -961,6 +962,10 @@ class SimulationDBService:
         def emit(msg: str) -> None:
             if progress_cb:
                 progress_cb(msg)
+
+        def emit_counts(current: int, total: int) -> None:
+            if progress_counts_cb:
+                progress_counts_cb(int(current), int(total))
 
         mapping_dir = self._resolve_mapping_dir(dataset_output_folder)
         emit(f"Mapping: target directory {mapping_dir}")
@@ -996,10 +1001,26 @@ class SimulationDBService:
             junction_rows = conn.execute("SELECT * FROM junctions").fetchall()
             road_rows = conn.execute("SELECT * FROM roads").fetchall()
 
+        total_entities = len(vehicle_rows) + len(junction_rows) + len(road_rows)
+        done = 0
+        emit_counts(done, max(1, total_entities))
+
         emit("Mapping: building sorted mapping objects...")
-        vehicle_mapping = {str(r["id"]): row_to_dict(r) for r in vehicle_rows}
-        junction_mapping = {str(r["id"]): row_to_dict(r) for r in junction_rows}
-        edge_mapping = {str(r["id"]): row_to_dict(r) for r in road_rows}
+        vehicle_mapping = {}
+        for r in vehicle_rows:
+            vehicle_mapping[str(r["id"])] = row_to_dict(r)
+            done += 1
+            emit_counts(done, max(1, total_entities))
+        junction_mapping = {}
+        for r in junction_rows:
+            junction_mapping[str(r["id"])] = row_to_dict(r)
+            done += 1
+            emit_counts(done, max(1, total_entities))
+        edge_mapping = {}
+        for r in road_rows:
+            edge_mapping[str(r["id"])] = row_to_dict(r)
+            done += 1
+            emit_counts(done, max(1, total_entities))
 
         vehicle_mapping = dict(sorted(vehicle_mapping.items(), key=lambda kv: natural_sort_key(kv[0])))
         junction_mapping = dict(sorted(junction_mapping.items(), key=lambda kv: natural_sort_key(kv[0])))
