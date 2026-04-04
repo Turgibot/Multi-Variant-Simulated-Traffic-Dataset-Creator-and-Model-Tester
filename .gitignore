@@ -44,14 +44,14 @@ dmypy.json
 # Local GUI project registries (machine-specific paths). Copy from projects_registry.json.example where provided.
 **/projects_registry.json
 !examples/projects_registry.json
-# Generated dataset artifacts under each GUI project folder
+# Generated dataset artifacts under each GUI project folder (not under examples/ — see bottom)
 projects/**/datasets/
-examples/**/datasets/
-examples/porto_conversion/data/train_sorted.csv
 *.log
 *.db
 *.sqlite
 *.sqlite3
+*.db-wal
+*.db-shm
 
 # Data files (uncomment if you don't want to track data)
 # *.csv
@@ -150,3 +150,19 @@ Porto/dataset/invalid_trips.csv
 output_dir/
 output/
 Traffic-DSTG-Gen
+
+# Example bundled projects: track everything (override *.net.xml, *.sumocfg, results/, etc. above)
+!examples/porto_conversion/
+!examples/porto_conversion/**
+!examples/3_zones_simulation/
+!examples/3_zones_simulation/**
+# Must follow the rules above so datasets/ stays ignored despite !**/
+examples/**/datasets/
+# Same: *.db / sqlite was overridden by !**/ above
+examples/**/*.db
+examples/**/*.db-wal
+examples/**/*.db-shm
+examples/**/*.sqlite
+examples/**/*.sqlite3
+# Too large for GitHub (>100 MB); keep locally or obtain separately
+examples/porto_conversion/config/porto.net.xml
