@@ -1,5 +1,5 @@
 {
-  "snapshot_dir": "/home/guy/Projects/Traffic/Develop/Projects/3zones/snapshots",
+  "snapshot_dir": "/tmp/snapshots",
   "snapshot_interval_sec": 30,
   "vehicle_generation": {
     "simulation_weeks": 1,

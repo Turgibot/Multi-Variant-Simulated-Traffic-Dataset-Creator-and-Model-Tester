@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (QCheckBox, QFileDialog, QFrame,
 
 from src.gui.simulation_view import SimulationView
 from src.utils.cursor_debug_log import cursor_debug_path
+from src.utils.project_paths import compact_path, resolve_path, to_display_path
 from src.utils.network_parser import NetworkParser
 from src.utils.route_finding import (EdgeSpatialIndex, build_edges_data,
                                      build_node_positions,
@@ -37,11 +38,11 @@ from src.utils.trajectory_converter import (
     convert_trajectory,
     iter_trajectories_from_csv,
 )
+from src.utils.sumo_detector import effective_sumo_home
 from src.utils.trip_validator import (TripValidationResult,
                                       validate_trip_segments)
 
-# Default SUMO_HOME path
-DEFAULT_SUMO_HOME = "/usr/share/sumo"
+DEFAULT_SUMO_HOME = ""
 
 # Settings file name
 SETTINGS_FILE = "dataset_conversion_settings.json"
@@ -201,7 +202,7 @@ class DownloadWorker(QThread):
         super().__init__(parent)
         self.task_type = task_type
         self.output_path = output_path
-        self.sumo_home = sumo_home or DEFAULT_SUMO_HOME
+        self.sumo_home = (sumo_home or DEFAULT_SUMO_HOME).strip()
         self.bbox = bbox or dict(DEFAULT_BBOX)
         self.map_basename = (map_basename or "porto").strip()
         self._is_cancelled = False
@@ -292,25 +293,24 @@ class DownloadWorker(QThread):
             self.finished.emit(False, "Cancelled")
             return
         
-        # Find netconvert using provided SUMO_HOME
+        # Resolve install root: worker hint, $SUMO_HOME, then pip/uv (eclipse-sumo) layout
+        home_root = effective_sumo_home(self.sumo_home)
+
         netconvert_path = None
-        
-        # First try the provided SUMO_HOME path
-        if self.sumo_home:
-            netconvert_path = Path(self.sumo_home) / 'bin' / 'netconvert'
+
+        if home_root:
+            netconvert_path = Path(home_root) / 'bin' / 'netconvert'
             if not netconvert_path.exists():
                 netconvert_path = None
-                self.status.emit(f"netconvert not found at {self.sumo_home}/bin/")
-        
-        # Try environment variable as fallback
+                self.status.emit(f"netconvert not found at {home_root}/bin/")
+
         if not netconvert_path:
             env_sumo_home = os.environ.get('SUMO_HOME')
             if env_sumo_home:
                 netconvert_path = Path(env_sumo_home) / 'bin' / 'netconvert'
                 if not netconvert_path.exists():
                     netconvert_path = None
-        
-        # Try to find in PATH as last resort
+
         if not netconvert_path:
             try:
                 result = subprocess.run(['which', 'netconvert'], capture_output=True, text=True)
@@ -318,15 +318,32 @@ class DownloadWorker(QThread):
                     netconvert_path = Path(result.stdout.strip())
             except Exception:
                 pass
-        
+
         if not netconvert_path or not netconvert_path.exists():
-            self.finished.emit(False, f"SUMO netconvert not found.\n\nChecked paths:\n• {self.sumo_home}/bin/netconvert\n• System PATH\n\nPlease verify SUMO_HOME path is correct.")
+            checked = (
+                f"• {home_root}/bin/netconvert\n"
+                if home_root
+                else "• (auto-detect — set $SUMO_HOME or install eclipse-sumo in this venv)\n"
+            )
+            self.finished.emit(
+                False,
+                "SUMO netconvert not found.\n\nChecked paths:\n"
+                f"{checked}"
+                "• $SUMO_HOME/bin/netconvert\n"
+                "• netconvert on PATH\n\n"
+                "Install SUMO for this environment: uv pip install -r requirements.txt\n"
+                "Or set the SUMO_HOME environment variable.",
+            )
             return
-        
+
         self.progress.emit(70)
-        
-        # Build netconvert command
-        typemap_file = Path(self.sumo_home) / 'data' / 'typemap' / 'osmNetconvert.typ.xml'
+
+        typemap_base = home_root or (self.sumo_home or "").strip() or os.environ.get("SUMO_HOME", "")
+        typemap_file = (
+            Path(typemap_base) / 'data' / 'typemap' / 'osmNetconvert.typ.xml'
+            if typemap_base
+            else Path()
+        )
         
         cmd = [
             str(netconvert_path),
@@ -350,10 +367,11 @@ class DownloadWorker(QThread):
         try:
             self.status.emit("Running netconvert (this may take a while)...")
             
-            # Set up environment with SUMO_HOME
             env = os.environ.copy()
-            env['SUMO_HOME'] = self.sumo_home
-            
+            eh = effective_sumo_home(self.sumo_home)
+            if eh:
+                env['SUMO_HOME'] = eh
+
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=600, env=env)
             
             if result.returncode == 0:
@@ -668,6 +686,8 @@ class DatasetConversionPage(QWidget):
         self._candidate_edge_items = []  # Green/orange edge items (separate for fast toggle)
         self._dataset_gen_worker = None
         self._dataset_gen_cancelled = False
+        # Optional path from legacy dataset_conversion JSON only (no GUI); omitted on save.
+        self._sumo_home_override = ""
         self._sumo_route_items = []  # SUMO path lines and stars (separate for fast toggle)
         self._current_polyline = None  # Store current polyline for SUMO route mapping
         self._current_segments = None  # Store current segments for SUMO route mapping
@@ -1163,7 +1183,7 @@ class DatasetConversionPage(QWidget):
         panel_title.setStyleSheet("color: #FF9800; margin-bottom: 10px;")
         controls_layout.addWidget(panel_title)
         
-        # ---- SUMO_HOME Section ----
+        # ---- SUMO (auto-detected) ----
         sumo_group = QGroupBox("Simulation Configuration")
         sumo_group.setMinimumWidth(0)
         sumo_group.setStyleSheet("""
@@ -1186,74 +1206,16 @@ class DatasetConversionPage(QWidget):
         sumo_group_layout = QVBoxLayout()
         sumo_group_layout.setSpacing(8)
         
-        sumo_label = QLabel("SUMO_HOME Path:")
-        sumo_label.setStyleSheet("color: #555; font-size: 11px; font-weight: normal;")
-        sumo_group_layout.addWidget(sumo_label)
-        
-        # SUMO_HOME path input with browse and reset buttons
-        sumo_path_layout = QHBoxLayout()
-        sumo_path_layout.setSpacing(5)
-        
-        self.sumo_home_input = QLineEdit()
-        self.sumo_home_input.setText(DEFAULT_SUMO_HOME)
-        self.sumo_home_input.setPlaceholderText("e.g., /usr/share/sumo")
-        self.sumo_home_input.setMinimumWidth(0)
-        self.sumo_home_input.setStyleSheet("""
-            QLineEdit {
-                padding: 8px;
-                border: 1px solid #ccc;
-                border-radius: 4px;
-                background-color: #fafafa;
-                font-size: 11px;
-            }
-            QLineEdit:focus {
-                border-color: #FF9800;
-            }
-        """)
-        self.sumo_home_input.textChanged.connect(self.on_sumo_home_changed)
-        sumo_path_layout.addWidget(self.sumo_home_input, stretch=1)
-        
-        # Browse button
-        browse_btn = QPushButton("📁")
-        browse_btn.setToolTip("Browse for SUMO installation folder")
-        browse_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #607D8B;
-                color: white;
-                border: none;
-                padding: 8px 12px;
-                border-radius: 4px;
-                font-size: 12px;
-            }
-            QPushButton:hover {
-                background-color: #546E7A;
-            }
-        """)
-        browse_btn.clicked.connect(self.browse_sumo_home)
-        sumo_path_layout.addWidget(browse_btn)
-        
-        # Reset button
-        reset_btn = QPushButton("Reset")
-        reset_btn.setToolTip("Reset to default path (/usr/share/sumo)")
-        reset_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #9E9E9E;
-                color: white;
-                border: none;
-                padding: 8px 12px;
-                border-radius: 4px;
-                font-size: 12px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #757575;
-            }
-        """)
-        reset_btn.clicked.connect(self.reset_sumo_home)
-        sumo_path_layout.addWidget(reset_btn)
-        
-        sumo_group_layout.addLayout(sumo_path_layout)
-        
+        sumo_hint = QLabel(
+            "SUMO is resolved automatically (<tt>eclipse-sumo</tt> in this env, "
+            "<tt>SUMO_HOME</tt>, <tt>netconvert</tt> on <tt>PATH</tt>, …). "
+            "Install: <tt>uv pip install -r requirements.txt</tt> (includes <tt>eclipse-sumo</tt>)."
+        )
+        sumo_hint.setWordWrap(True)
+        sumo_hint.setTextFormat(Qt.TextFormat.RichText)
+        sumo_hint.setStyleSheet("color: #555; font-size: 11px; font-weight: normal;")
+        sumo_group_layout.addWidget(sumo_hint)
+
         # SUMO status label
         self.sumo_status_label = QLabel("")
         self.sumo_status_label.setStyleSheet("color: #666; font-size: 10px;")
@@ -2241,65 +2203,32 @@ class DatasetConversionPage(QWidget):
             screen_size = screen.availableGeometry()
             self.setMaximumSize(screen_size.width(), screen_size.height())
     
-    def browse_sumo_home(self):
-        """Open file dialog to browse for SUMO_HOME directory."""
-        current_path = self.sumo_home_input.text().strip() or DEFAULT_SUMO_HOME
-        
-        # Use non-native dialog for faster response
-        directory = QFileDialog.getExistingDirectory(
-            self,
-            "Select SUMO Installation Directory",
-            current_path,
-            QFileDialog.ShowDirsOnly | QFileDialog.DontResolveSymlinks | QFileDialog.DontUseNativeDialog
-        )
-        
-        if directory:
-            self.sumo_home_input.setText(directory)
-            self.verify_sumo_installation()
-            self.log(f"SUMO_HOME set to: {directory}")
-    
-    def reset_sumo_home(self):
-        """Reset SUMO_HOME to default path."""
-        self.sumo_home_input.setText(DEFAULT_SUMO_HOME)
-        self.verify_sumo_installation()
-        self.log(f"SUMO_HOME reset to default: {DEFAULT_SUMO_HOME}")
-    
     def verify_sumo_installation(self):
-        """Verify the SUMO installation at the given path."""
-        sumo_home = self.sumo_home_input.text().strip()
-        
-        if not sumo_home:
-            self.sumo_status_label.setText("Path is empty")
-            self.sumo_status_label.setStyleSheet("color: #f44336; font-size: 10px;")
-            return False
-        
-        sumo_path = Path(sumo_home)
-        
-        if not sumo_path.exists():
-            self.sumo_status_label.setText("Path does not exist")
-            self.sumo_status_label.setStyleSheet("color: #f44336; font-size: 10px;")
-            return False
-        
-        netconvert_path = sumo_path / 'bin' / 'netconvert'
-        typemap_path = sumo_path / 'data' / 'typemap' / 'osmNetconvert.typ.xml'
-        
-        if netconvert_path.exists():
-            if typemap_path.exists():
-                self.sumo_status_label.setText("SUMO found (netconvert + typemap)")
-                self.sumo_status_label.setStyleSheet("color: #4CAF50; font-size: 10px;")
-            else:
-                self.sumo_status_label.setText("SUMO found (typemap missing)")
-                self.sumo_status_label.setStyleSheet("color: #FF9800; font-size: 10px;")
-            return True
-        else:
-            self.sumo_status_label.setText(f"netconvert not found in {sumo_home}/bin/")
-            self.sumo_status_label.setStyleSheet("color: #FF9800; font-size: 10px;")
-            return False
-    
-    def on_sumo_home_changed(self, path: str):
-        """Handle SUMO_HOME path change."""
-        self.verify_sumo_installation()
-        self._schedule_save_settings()
+        """Verify SUMO via auto-detect ($SUMO_HOME, eclipse-sumo, PATH, …)."""
+        eh = effective_sumo_home(self._sumo_home_override)
+        if eh:
+            sumo_path = Path(eh)
+            netconvert_path = sumo_path / "bin" / "netconvert"
+            typemap_path = sumo_path / "data" / "typemap" / "osmNetconvert.typ.xml"
+            if netconvert_path.exists():
+                if typemap_path.exists():
+                    self.sumo_status_label.setText(
+                        "SUMO found (netconvert + typemap)"
+                    )
+                else:
+                    self.sumo_status_label.setText(
+                        "SUMO found (netconvert; typemap missing)"
+                    )
+                self.sumo_status_label.setStyleSheet(
+                    "color: #4CAF50; font-size: 10px;"
+                )
+                return True
+
+        self.sumo_status_label.setText(
+            "SUMO not found — uv pip install -r requirements.txt or set SUMO_HOME"
+        )
+        self.sumo_status_label.setStyleSheet("color: #f44336; font-size: 10px;")
+        return False
     
     def on_train_path_changed(self, path: str):
         """Handle main CSV path change."""
@@ -2540,35 +2469,32 @@ class DatasetConversionPage(QWidget):
         legacy_main = legacy_dataset_dir / 'train.csv'
 
         if main_file.exists() and not self.main_csv_input.text().strip():
-            self.main_csv_input.setText(str(main_file))
-            self.log(f"Main dataset found: {main_file}")
+            disp = to_display_path(main_file.resolve(), self.project_path)
+            self.main_csv_input.setText(disp)
+            self.log(f"Main dataset found: {disp}")
         elif legacy_main.exists() and not self.main_csv_input.text().strip():
-            self.main_csv_input.setText(str(legacy_main))
-            self.log(f"Main dataset found: {legacy_main}")
+            disp = to_display_path(legacy_main.resolve(), self.project_path)
+            self.main_csv_input.setText(disp)
+            self.log(f"Main dataset found: {disp}")
         elif not self.main_csv_input.text().strip():
             self.main_status.setText("Select a main CSV file (required)")
             self.main_status.setStyleSheet("color: #666; font-size: 9px;")
     
     def browse_dataset_file(self, input_field: QLineEdit):
         """Open file dialog and set selected CSV path into input_field."""
-        
-        # Determine start directory
+
         current_path = input_field.text().strip()
-        
         if current_path:
-            path_obj = Path(current_path)
-            if path_obj.exists():
-                start_dir = str(path_obj.parent)
-            else:
-                start_dir = self.project_path
+            path_obj = resolve_path(current_path, self.project_path)
+            start_dir = str(path_obj.parent) if path_obj.exists() else self.project_path
         else:
             main_path = self.main_csv_input.text().strip()
-            if main_path and Path(main_path).exists():
-                start_dir = str(Path(main_path).parent)
+            if main_path:
+                mp = resolve_path(main_path, self.project_path)
+                start_dir = str(mp.parent) if mp.exists() else self.project_path
             else:
                 start_dir = self.project_path
-        
-        # Use non-native dialog for faster response
+
         file_path, _ = QFileDialog.getOpenFileName(
             self,
             "Select CSV File",
@@ -2576,10 +2502,11 @@ class DatasetConversionPage(QWidget):
             "CSV Files (*.csv);;All Files (*)",
             options=QFileDialog.DontUseNativeDialog
         )
-        
+
         if file_path:
-            input_field.setText(file_path)
-            self.log(f"Dataset path set to: {file_path}")
+            disp = to_display_path(file_path, self.project_path)
+            input_field.setText(disp)
+            self.log(f"Dataset path set to: {disp}")
 
     def _add_optional_csv_row(self, initial_path: str = ""):
         """Add an optional CSV path row."""
@@ -2676,7 +2603,11 @@ class DatasetConversionPage(QWidget):
     def _browse_dataset_output_folder(self):
         """Open folder dialog to select output directory for dataset generation."""
         current = self.dataset_output_path.text().strip()
-        start_dir = current if current and Path(current).exists() else self.project_path
+        start_dir = self.project_path
+        if current:
+            rp = resolve_path(current, self.project_path)
+            if rp.exists():
+                start_dir = str(rp)
         folder = QFileDialog.getExistingDirectory(
             self,
             "Select Output Folder for Dataset",
@@ -2684,15 +2615,16 @@ class DatasetConversionPage(QWidget):
             options=QFileDialog.DontUseNativeDialog
         )
         if folder:
-            self.dataset_output_path.setText(folder)
-            self.log(f"Dataset output folder set to: {folder}")
+            disp = to_display_path(folder, self.project_path)
+            self.dataset_output_path.setText(disp)
+            self.log(f"Dataset output folder set to: {disp}")
 
     def _browse_save_sorted_path(self):
         """Browse for save-sorted CSV path."""
         train_path = self.train_path_input.text().strip()
         default_name = "train_sorted.csv"
         if train_path:
-            p = Path(train_path)
+            p = resolve_path(train_path, self.project_path)
             default_dir = str(p.parent)
             default_name = f"{p.stem}_sorted{p.suffix}"
         else:
@@ -2701,17 +2633,21 @@ class DatasetConversionPage(QWidget):
             self, "Save Sorted CSV", f"{default_dir}/{default_name}", "CSV (*.csv)"
         )
         if path:
-            self.dataset_save_sorted_input.setText(path)
+            self.dataset_save_sorted_input.setText(
+                to_display_path(path, self.project_path)
+            )
 
     def _on_dataset_start_clicked(self):
         """Start dataset generation."""
-        train_path = self.main_csv_input.text().strip()
+        train_path = str(resolve_path(self.main_csv_input.text().strip(), self.project_path))
         if not train_path or not Path(train_path).exists():
             self.log("Main CSV not found - select a valid main dataset first")
             QMessageBox.warning(self, "Dataset Error", "Please select a valid main CSV file first.")
             return
-        output_path = self.dataset_output_path.text().strip()
-        if not output_path:
+        output_path = str(
+            resolve_path(self.dataset_output_path.text().strip(), self.project_path)
+        )
+        if not self.dataset_output_path.text().strip():
             self.log("❌ Select an output folder first")
             QMessageBox.warning(self, "Dataset Error", "Please select an output folder.")
             return
@@ -2743,14 +2679,17 @@ class DatasetConversionPage(QWidget):
             workers = 4
 
         is_sorted = self.dataset_sorted_check.isChecked()
-        save_sorted = self.dataset_save_sorted_input.text().strip() or None
+        save_raw = self.dataset_save_sorted_input.text().strip()
+        save_sorted = (
+            str(resolve_path(save_raw, self.project_path)) if save_raw else None
+        )
         try:
             sampling_period = int(self.dataset_sampling_spin.text().strip() or "30")
             sampling_period = max(1, min(sampling_period, 300))
         except ValueError:
             sampling_period = 30
         compress = self.dataset_compress_check.isChecked()
-        sumo_home = self.sumo_home_input.text().strip() or None
+        eh = effective_sumo_home(self._sumo_home_override)
 
         self._dataset_gen_cancelled = False
         self._dataset_gen_worker = StepGenerationWorker(
@@ -2763,7 +2702,7 @@ class DatasetConversionPage(QWidget):
             save_sorted_path=save_sorted,
             sampling_period=sampling_period,
             compress=compress,
-            sumo_home=sumo_home,
+            sumo_home=eh if eh else None,
             use_parallel=(workers > 1),
             workers=workers,
             cancelled_callback=lambda: self._dataset_gen_cancelled,
@@ -2839,7 +2778,7 @@ class DatasetConversionPage(QWidget):
             status_label.setStyleSheet("color: #666; font-size: 9px;")
             return
 
-        file_path = Path(path)
+        file_path = resolve_path(path, self.project_path)
 
         if not file_path.exists():
             valid_label.setText("✗")
@@ -3164,10 +3103,11 @@ class DatasetConversionPage(QWidget):
         # Verify SUMO installation first
         if not self.verify_sumo_installation():
             QMessageBox.warning(
-                self, 
+                self,
                 "SUMO Not Found",
-                "SUMO installation not found at the specified path.\n\n"
-                "Please verify SUMO_HOME path is correct before downloading."
+                "SUMO was not found (netconvert missing).\n\n"
+                "Install for this environment: uv pip install -r requirements.txt\n"
+                "Or set SUMO_HOME to your SUMO installation root.",
             )
             return
         
@@ -3175,9 +3115,8 @@ class DatasetConversionPage(QWidget):
         project_path = Path(self.project_path)
         config_dir = project_path / 'config'
         config_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Get SUMO_HOME from input
-        sumo_home = self.sumo_home_input.text().strip()
+
+        eh = effective_sumo_home(self._sumo_home_override)
         map_basename = self._get_map_basename()
 
         # Validate map basename
@@ -3211,7 +3150,7 @@ class DatasetConversionPage(QWidget):
         self.log(
             f"Starting map download '{map_basename}' "
             f"(bbox: {bbox['south']},{bbox['west']},{bbox['north']},{bbox['east']}; "
-            f"SUMO_HOME: {sumo_home})..."
+            f"SUMO: {eh})..."
         )
         self.map_download_stack.setCurrentIndex(1)
         self.map_download_progress_bar.setValue(0)
@@ -3221,7 +3160,7 @@ class DatasetConversionPage(QWidget):
         self.download_worker = DownloadWorker(
             "map",
             str(config_dir),
-            sumo_home=sumo_home,
+            sumo_home=self._sumo_home_override,
             bbox=bbox,
             map_basename=map_basename,
         )
@@ -3360,16 +3299,20 @@ class DatasetConversionPage(QWidget):
         if self._loading_settings:
             return  # Don't save while loading
         
+        main_txt = self.main_csv_input.text().strip()
+        out_folder = self.dataset_output_path.text().strip()
+        sorted_txt = self.dataset_save_sorted_input.text().strip()
         settings = {
-            'sumo_home': self.sumo_home_input.text().strip(),
             'map_basename': self._get_map_basename(),
             'map_bbox_south': self.bbox_south_input.text().strip(),
             'map_bbox_west': self.bbox_west_input.text().strip(),
             'map_bbox_north': self.bbox_north_input.text().strip(),
             'map_bbox_east': self.bbox_east_input.text().strip(),
-            'main_csv_path': self.main_csv_input.text().strip(),
-            'optional_csv_paths': self._get_optional_csv_paths(),
-            'train_csv_path': self.main_csv_input.text().strip(),  # legacy compatibility
+            'main_csv_path': compact_path(main_txt, self.project_path) if main_txt else '',
+            'optional_csv_paths': [
+                compact_path(p, self.project_path) for p in self._get_optional_csv_paths()
+            ],
+            'train_csv_path': compact_path(main_txt, self.project_path) if main_txt else '',
             'num_zones': self.zones_slider.value(),
             'train_trip_count': getattr(self, '_train_trip_count', None),
             'trip_count_cache': self._trip_count_cache,
@@ -3381,9 +3324,9 @@ class DatasetConversionPage(QWidget):
             'fix_invalid_segments': self.fix_invalid_segments_checkbox.isChecked(),
             'show_polygon': self.show_polygon_checkbox.isChecked(),
             'draw_gps_points_path': self.draw_gps_points_path_checkbox.isChecked(),
-            'dataset_output_folder': self.dataset_output_path.text().strip(),
+            'dataset_output_folder': compact_path(out_folder, self.project_path) if out_folder else '',
             'dataset_sorted': self.dataset_sorted_check.isChecked(),
-            'dataset_save_sorted': self.dataset_save_sorted_input.text().strip(),
+            'dataset_save_sorted': compact_path(sorted_txt, self.project_path) if sorted_txt else '',
             'dataset_sampling_period': self.dataset_sampling_spin.text().strip(),
             'dataset_compress': self.dataset_compress_check.isChecked(),
             'dataset_workers': self.dataset_workers_spin.text().strip(),
@@ -3405,14 +3348,17 @@ class DatasetConversionPage(QWidget):
             settings_path = self.get_settings_path()
             legacy_settings_file = settings_path.parent / "porto_settings.json"
             active_settings_path = settings_path if settings_path.exists() else legacy_settings_file
-            
+
+            self._sumo_home_override = ""
             if active_settings_path.exists():
                 with open(active_settings_path, 'r', encoding='utf-8') as f:
                     settings = json.load(f)
                 
-                # Apply settings
-                if 'sumo_home' in settings and settings['sumo_home']:
-                    self.sumo_home_input.setText(settings['sumo_home'])
+                # Legacy sumo_home in JSON: optional override only (not written on save)
+                if "sumo_home" in settings and settings["sumo_home"]:
+                    self._sumo_home_override = str(
+                        resolve_path(settings["sumo_home"], self.project_path)
+                    )
 
                 if 'map_basename' in settings and settings['map_basename']:
                     self.map_name_input.setText(settings['map_basename'])
@@ -3437,15 +3383,25 @@ class DatasetConversionPage(QWidget):
                 main_csv = settings.get('main_csv_path') or settings.get('train_csv_path')
                 if main_csv:
                     self.main_csv_input.blockSignals(True)
-                    self.main_csv_input.setText(main_csv)
+                    self.main_csv_input.setText(
+                        to_display_path(
+                            resolve_path(str(main_csv), self.project_path),
+                            self.project_path,
+                        )
+                    )
                     self.main_csv_input.blockSignals(False)
-                    self.validate_dataset_path(main_csv, "main")
+                    self.validate_dataset_path(self.main_csv_input.text(), "main")
 
                 optional_paths = settings.get('optional_csv_paths', [])
                 if not optional_paths and settings.get('test_csv_path'):
                     optional_paths = [settings['test_csv_path']]
                 for path in optional_paths:
-                    self._add_optional_csv_row(path)
+                    self._add_optional_csv_row(
+                        to_display_path(
+                            resolve_path(str(path), self.project_path),
+                            self.project_path,
+                        )
+                    )
                 
                 if 'num_zones' in settings:
                     self.zones_slider.setValue(settings['num_zones'])
@@ -3498,12 +3454,26 @@ class DatasetConversionPage(QWidget):
                 
                 if 'dataset_output_folder' in settings and settings['dataset_output_folder']:
                     self.dataset_output_path.blockSignals(True)
-                    self.dataset_output_path.setText(settings['dataset_output_folder'])
+                    self.dataset_output_path.setText(
+                        to_display_path(
+                            resolve_path(
+                                str(settings['dataset_output_folder']), self.project_path
+                            ),
+                            self.project_path,
+                        )
+                    )
                     self.dataset_output_path.blockSignals(False)
                 if 'dataset_sorted' in settings:
                     self.dataset_sorted_check.setChecked(settings['dataset_sorted'])
                 if 'dataset_save_sorted' in settings and settings['dataset_save_sorted']:
-                    self.dataset_save_sorted_input.setText(settings['dataset_save_sorted'])
+                    self.dataset_save_sorted_input.setText(
+                        to_display_path(
+                            resolve_path(
+                                str(settings['dataset_save_sorted']), self.project_path
+                            ),
+                            self.project_path,
+                        )
+                    )
                 if 'dataset_sampling_period' in settings and settings['dataset_sampling_period']:
                     self.dataset_sampling_spin.setText(settings['dataset_sampling_period'])
                 if 'dataset_compress' in settings:
@@ -3521,7 +3491,9 @@ class DatasetConversionPage(QWidget):
     
     def load_trip_count(self):
         """Load or count the number of trips in the main dataset CSV."""
-        train_path = self.main_csv_input.text().strip()
+        train_path = str(
+            resolve_path(self.main_csv_input.text().strip(), self.project_path)
+        )
         if not train_path or not Path(train_path).exists():
             self.trips_count_label.setText("N/A")
             return
@@ -3809,7 +3781,8 @@ class DatasetConversionPage(QWidget):
     def show_selected_route(self):
         """Display the selected route on the map."""
         route_num = self.route_spinbox.value()
-        train_path = self.train_path_input.text().strip()
+        train_path_ui = self.train_path_input.text().strip()
+        train_path = str(resolve_path(train_path_ui, self.project_path))
         # region agent log
         self._agent_debug_log(
             "H8",
@@ -3818,7 +3791,7 @@ class DatasetConversionPage(QWidget):
             {
                 "projectPath": str(getattr(self, "project_path", "")),
                 "routeNum": int(route_num),
-                "trainPath": train_path,
+                "trainPath": train_path_ui,
                 "cachedRouteNum": int(self._cached_route_num) if self._cached_route_num is not None else None,
                 "hasCachedData": bool(self._cached_route_data is not None),
                 "cachedTrainPath": getattr(self, "_cached_route_train_path", None),
@@ -3834,8 +3807,12 @@ class DatasetConversionPage(QWidget):
             QMessageBox.warning(self, "Error", "Map not loaded.")
             return
         
-        # Check if we have cached data for this route number
-        if self._cached_route_num == route_num and self._cached_route_data is not None:
+        # Check if we have cached data for this route number and file
+        if (
+            self._cached_route_num == route_num
+            and self._cached_route_data is not None
+            and self._cached_route_train_path == train_path
+        ):
             # region agent log
             self._agent_debug_log(
                 "H9",
@@ -3844,7 +3821,7 @@ class DatasetConversionPage(QWidget):
                 {
                     "projectPath": str(getattr(self, "project_path", "")),
                     "routeNum": int(route_num),
-                    "trainPath": train_path,
+                    "trainPath": train_path_ui,
                     "cachedTrainPath": getattr(self, "_cached_route_train_path", None),
                     "cachedPolylinePoints": len(self._cached_original_polyline or []),
                 },
@@ -3895,7 +3872,9 @@ class DatasetConversionPage(QWidget):
             return
         original_polyline, invalid_segments, real_start_idx, real_end_idx, segment_trim_data = result
         self._cached_route_num = route_num
-        self._cached_route_train_path = self.train_path_input.text().strip()
+        self._cached_route_train_path = str(
+            resolve_path(self.train_path_input.text().strip(), self.project_path)
+        )
         self._cached_original_polyline = original_polyline
         self._cached_route_data = (invalid_segments, real_start_idx, real_end_idx, segment_trim_data)
         # region agent log

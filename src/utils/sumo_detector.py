@@ -23,8 +23,19 @@ def auto_detect_sumo_home() -> Optional[str]:
         bin_dir = Path(sumo_home) / 'bin'
         if bin_dir.exists():
             return str(Path(sumo_home).absolute())
+
+    # 2. Pip / uv: PyPI package "eclipse-sumo" installs the `sumo` module with SUMO_HOME set
+    try:
+        import sumo as sumo_dist  # provided by eclipse-sumo; not the TraCI "sumolib" helper
+        pip_home = getattr(sumo_dist, "SUMO_HOME", None)
+        if pip_home:
+            home = Path(str(pip_home))
+            if (home / "bin").exists():
+                return str(home.resolve())
+    except ImportError:
+        pass
     
-    # 2. Check installation directory (for bundled SUMO)
+    # 3. Check installation directory (for bundled SUMO)
     if getattr(sys, 'frozen', False):
         # Running as executable
         app_dir = Path(sys.executable).parent
@@ -32,7 +43,7 @@ def auto_detect_sumo_home() -> Optional[str]:
         if (sumo_dir / 'bin').exists():
             return str(sumo_dir.absolute())
     
-    # 3. Try to find SUMO binary and work backwards
+    # 4. Try to find SUMO binary and work backwards
     try:
         if os.name == 'nt':  # Windows
             result = subprocess.run(['where', 'sumo'], capture_output=True, text=True)
@@ -49,7 +60,7 @@ def auto_detect_sumo_home() -> Optional[str]:
     except Exception:
         pass
     
-    # 4. Check common installation paths
+    # 5. Check common installation paths
     common_paths = []
     
     if os.name == 'nt':  # Windows
@@ -73,6 +84,55 @@ def auto_detect_sumo_home() -> Optional[str]:
             return str(path.absolute())
     
     return None
+
+
+def sumo_root_has_cli(home: Optional[str]) -> bool:
+    """True if this SUMO root has the main sumo executable under bin/ (not only data/typemaps)."""
+    if not home or not str(home).strip():
+        return False
+    root = Path(str(home).strip())
+    if not root.is_dir():
+        return False
+    if os.name == "nt":
+        return (root / "bin" / "sumo.exe").is_file()
+    return (root / "bin" / "sumo").is_file()
+
+
+def effective_sumo_home(ui_value: Optional[str] = None) -> str:
+    """
+    SUMO_HOME for subprocesses and data files: try config/UI path, then $SUMO_HOME,
+    then auto_detect — but skip any candidate that has no bin/sumo (e.g. stale /usr/share/sumo).
+    """
+    seen = set()
+    candidates = []
+
+    if ui_value and str(ui_value).strip():
+        candidates.append(str(ui_value).strip())
+    env = os.environ.get("SUMO_HOME", "")
+    if env.strip():
+        candidates.append(env.strip())
+
+    found = auto_detect_sumo_home()
+    if found:
+        candidates.append(found)
+
+    try:
+        import sumo as sumo_dist
+
+        pip_home = getattr(sumo_dist, "SUMO_HOME", None)
+        if pip_home:
+            candidates.append(str(Path(str(pip_home)).resolve()))
+    except ImportError:
+        pass
+
+    for c in candidates:
+        if c in seen:
+            continue
+        seen.add(c)
+        if sumo_root_has_cli(c):
+            return c
+
+    return ""
 
 
 def find_sumo_binary(sumo_home: Optional[str] = None) -> Optional[str]:

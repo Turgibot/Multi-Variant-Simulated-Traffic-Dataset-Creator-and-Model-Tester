@@ -27,6 +27,7 @@ from src.gui.simulation_view import SimulationView
 from src.utils.network_parser import NetworkParser
 from src.utils.route_xml_generator import RouteXMLGenerator
 from src.utils.simulation_db_service import SimulationDBService
+from src.utils.project_paths import compact_path, resolve_path, to_display_path
 from src.utils.sumo_config_manager import SUMOConfigManager
 
 
@@ -651,7 +652,9 @@ class RouteGenerationPage(QWidget):
         core_form = QFormLayout()
 
         snapshot_row = QHBoxLayout()
-        self.snapshot_dir_input = QLineEdit(str((Path(self.project_path) / "snapshots").resolve()))
+        self.snapshot_dir_input = QLineEdit(
+            to_display_path(Path(self.project_path) / "snapshots", self.project_path)
+        )
         browse_snapshot_btn = QPushButton("Browse")
         browse_snapshot_btn.clicked.connect(self.browse_snapshot_dir)
         snapshot_row.addWidget(self.snapshot_dir_input)
@@ -796,13 +799,21 @@ class RouteGenerationPage(QWidget):
 
     def browse_snapshot_dir(self):
         """Select snapshot output directory."""
+        cur = self.snapshot_dir_input.text().strip()
+        start = self.project_path
+        if cur:
+            rp = resolve_path(cur, self.project_path)
+            if rp.exists():
+                start = str(rp)
         folder = QFileDialog.getExistingDirectory(
             self,
             "Select Snapshot Directory",
-            self.snapshot_dir_input.text().strip() or self.project_path
+            start,
         )
         if folder:
-            self.snapshot_dir_input.setText(folder)
+            self.snapshot_dir_input.setText(
+                to_display_path(folder, self.project_path)
+            )
             self._persist_current_config_safely()
 
     def _set_config_block_style(self, group: QGroupBox, background_hex: str):
@@ -950,7 +961,14 @@ class RouteGenerationPage(QWidget):
                 self.refresh_zone_allocation_section(preserve_existing=False)
                 return
 
-            self.snapshot_dir_input.setText(config.get("snapshot_dir", self.snapshot_dir_input.text()))
+            raw_snap = config.get("snapshot_dir", "").strip()
+            if raw_snap:
+                self.snapshot_dir_input.setText(
+                    to_display_path(
+                        resolve_path(raw_snap, self.project_path),
+                        self.project_path,
+                    )
+                )
             if "snapshot_interval_sec" in config:
                 self.snapshot_interval_spin.setValue(int(config.get("snapshot_interval_sec", 30)))
 
@@ -2198,8 +2216,9 @@ class RouteGenerationPage(QWidget):
         zone_allocation = self._collect_zone_allocation_from_cards()
         vehicle_types = self._collect_vehicle_types_from_cards()
 
+        snap = self.snapshot_dir_input.text().strip()
         config = {
-            "snapshot_dir": self.snapshot_dir_input.text().strip(),
+            "snapshot_dir": compact_path(snap, self.project_path) if snap else "",
             "snapshot_interval_sec": int(self.snapshot_interval_spin.value()),
             "vehicle_generation": {
                 "simulation_weeks": int(self.simulation_weeks_spin.value()),

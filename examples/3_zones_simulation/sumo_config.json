@@ -1,11 +1,11 @@
 {
-  "sumo_home": "/usr/share/sumo",
-  "sumocfg": "/home/guy/Projects/Traffic/Develop/Projects/3zones/config/urban_three_zones.sumocfg",
+  "sumo_home": "/home/guy/Projects/Multi-Variant-Simulated-Traffic-Dataset-Creator-and-Model-Tester/.venv/lib/python3.8/site-packages/sumo",
+  "sumocfg": "config/urban_three_zones.sumocfg",
   "parsed_files": {
-    "network": "/home/guy/Projects/Traffic/Develop/Projects/3zones/config/urban_three_zones.net.xml",
-    "additional": "/home/guy/Projects/Traffic/Develop/Projects/3zones/config/vehicle_types.add.xml"
+    "network": "config/urban_three_zones.net.xml",
+    "additional": "config/vehicle_types.add.xml"
   },
-  "dataset_output_folder": "/home/guy/Projects/Traffic/Develop/Projects/3zones/datasets",
+  "dataset_output_folder": "datasets",
   "zones": {
     "zone_1": {
       "name": "A",

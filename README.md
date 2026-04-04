@@ -76,10 +76,9 @@ python src/main.py
 
 ### SUMO
 
-Install SUMO separately:
+**Bundled with Python deps:** `requirements.txt` includes **`eclipse-sumo`** (full CLI tools under your venv). After `uv pip install -r requirements.txt`, the app auto-detects `SUMO_HOME` from that package.
 
-- Follow the [SUMO installation guide](https://sumo.dlr.de/docs/Installing/index.html)
-- Ensure SUMO binaries are on your `PATH`
+**Or use a system install:** follow the [SUMO installation guide](https://sumo.dlr.de/docs/Installing/index.html) and ensure binaries are on your `PATH` or set `SUMO_HOME`.
 
 ## Project Structure
 

@@ -1,6 +1,6 @@
 {
-  "name": "3zones",
-  "description": "",
+  "name": "3_zones_simulation",
+  "description": "Example three-zone SUMO simulation project",
   "type": "simulation",
   "created": "",
   "path": "examples/3_zones_simulation"

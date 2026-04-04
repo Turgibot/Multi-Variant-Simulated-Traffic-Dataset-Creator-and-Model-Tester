@@ -10,8 +10,9 @@ from PySide6.QtWidgets import (QFileDialog, QFrame, QGroupBox, QHBoxLayout,
                                QLabel, QLineEdit, QMessageBox, QPushButton,
                                QScrollArea, QTextEdit, QVBoxLayout, QWidget)
 
+from src.utils.project_paths import resolve_path, to_display_path
 from src.utils.sumo_config_manager import SUMOConfigManager
-from src.utils.sumo_detector import auto_detect_sumo_home
+from src.utils.sumo_detector import effective_sumo_home
 
 
 class DatasetGenerationPage(QWidget):
@@ -234,69 +235,23 @@ class DatasetGenerationPage(QWidget):
         sumo_config_layout = QVBoxLayout()
         sumo_config_layout.setSpacing(15)
         
-        # SUMO_HOME path selection
-        sumo_home_label = QLabel("SUMO_HOME Path:")
-        sumo_config_layout.addWidget(sumo_home_label)
-        
-        sumo_home_layout = QHBoxLayout()
-        sumo_home_layout.setSpacing(10)
-        
-        self.sumo_home_input = QLineEdit()
-        self.sumo_home_input.setPlaceholderText("Enter path to SUMO installation directory or use Browse...")
-        self.sumo_home_input.textChanged.connect(self.validate_sumo_home)
-        sumo_home_layout.addWidget(self.sumo_home_input)
-        
-        # Validation check mark
-        self.sumo_home_check = QLabel("✓")
-        self.sumo_home_check.setStyleSheet("color: #4CAF50; font-size: 18px; font-weight: bold;")
-        self.sumo_home_check.setVisible(False)
-        sumo_home_layout.addWidget(self.sumo_home_check)
-        
-        # Browse button
-        browse_sumo_home_btn = QPushButton("Browse...")
-        browse_sumo_home_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #2196F3;
-                color: white;
-                border: none;
-                padding: 8px 15px;
-                border-radius: 5px;
-            }
-            QPushButton:hover {
-                background-color: #1976D2;
-            }
-        """)
-        browse_sumo_home_btn.clicked.connect(self.browse_sumo_home)
-        sumo_home_layout.addWidget(browse_sumo_home_btn)
-        
-        # Set button
-        set_sumo_home_btn = QPushButton("Set")
-        set_sumo_home_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #4CAF50;
-                color: white;
-                border: none;
-                padding: 8px 20px;
-                border-radius: 5px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #45a049;
-            }
-        """)
-        set_sumo_home_btn.clicked.connect(self.set_sumo_home)
-        sumo_home_layout.addWidget(set_sumo_home_btn)
-        
-        sumo_config_layout.addLayout(sumo_home_layout)
-        
-        # Info label
-        info_label = QLabel(
-            "Set the path to your SUMO installation directory (SUMO_HOME). "
-            "This is required for running SUMO simulations."
+        self.sumo_status_label = QLabel("")
+        self.sumo_status_label.setWordWrap(True)
+        self.sumo_status_label.setStyleSheet(
+            "color: #666; padding: 10px; font-size: 11px;"
         )
-        info_label.setWordWrap(True)
-        info_label.setStyleSheet("color: #666; padding: 10px; font-size: 11px;")
-        sumo_config_layout.addWidget(info_label)
+        sumo_config_layout.addWidget(self.sumo_status_label)
+
+        hint_label = QLabel(
+            "SUMO is located automatically (this environment's <b>eclipse-sumo</b> package, "
+            "<tt>SUMO_HOME</tt>, <tt>sumo</tt> on <tt>PATH</tt>, or common install paths). "
+            "Install for this project: <tt>uv pip install -r requirements.txt</tt> "
+            "(includes <tt>eclipse-sumo</tt>)."
+        )
+        hint_label.setWordWrap(True)
+        hint_label.setTextFormat(Qt.RichText)
+        hint_label.setStyleSheet("color: #666; padding: 0 10px 10px; font-size: 11px;")
+        sumo_config_layout.addWidget(hint_label)
         
         sumo_config_group.setLayout(sumo_config_layout)
         main_layout.addWidget(sumo_config_group)
@@ -310,65 +265,46 @@ class DatasetGenerationPage(QWidget):
     def load_all_settings(self):
         """Load all saved project settings."""
         # Check if widgets exist (safety check)
-        if not hasattr(self, 'sumocfg_input') or not hasattr(self, 'sumo_home_input'):
+        if not hasattr(self, 'sumocfg_input'):
             return
         
         # Temporarily block signals to avoid auto-save during loading
         self.sumocfg_input.blockSignals(True)
-        self.sumo_home_input.blockSignals(True)
         
         try:
             # Load SUMO config file path
             existing_sumocfg = self.config_manager.get_sumocfg_path()
             if existing_sumocfg:
-                self.sumocfg_input.setText(existing_sumocfg)
+                self.sumocfg_input.setText(
+                    to_display_path(existing_sumocfg, self.project_path)
+                )
                 self.validate_sumocfg_path()
                 self.display_sumocfg_contents(existing_sumocfg)
             
-            # Load SUMO_HOME
-            self.load_sumo_home()
+            self.refresh_sumo_status()
         finally:
             # Re-enable signals and connect auto-save handlers
             self.sumocfg_input.blockSignals(False)
-            self.sumo_home_input.blockSignals(False)
             
             # Connect auto-save handlers
             self.sumocfg_input.textChanged.connect(self.on_sumocfg_text_changed)
-            self.sumo_home_input.textChanged.connect(self.on_sumo_home_text_changed)
     
     def save_sumocfg_path(self, path_text: str):
         """Save SUMO config path to settings."""
         if path_text.strip():
             try:
-                path = Path(path_text.strip())
+                path = resolve_path(path_text.strip(), self.project_path)
                 if path.exists() and path.suffix == '.sumocfg':
                     self.config_manager.set_sumocfg(path_text.strip())
             except Exception:
                 pass  # Silently fail if path is invalid
-    
-    def save_sumo_home_path(self, path_text: str):
-        """Save SUMO_HOME path to settings."""
-        if path_text.strip():
-            try:
-                path = Path(path_text.strip())
-                if path.exists() and path.is_dir() and (path / 'bin').exists():
-                    self.config_manager.set_sumo_home(path_text.strip())
-            except Exception:
-                pass  # Silently fail if path is invalid
-    
+
     def on_sumocfg_text_changed(self):
         """Auto-save SUMO config path when text changes."""
         # Only save if validation passes (file exists and is valid)
         self.validate_sumocfg_path()
         if self.sumocfg_valid:
             self.save_sumocfg_path(self.sumocfg_input.text())
-    
-    def on_sumo_home_text_changed(self):
-        """Auto-save SUMO_HOME path when text changes."""
-        # Only save if validation passes (valid SUMO installation)
-        self.validate_sumo_home()
-        if self.sumo_home_valid:
-            self.save_sumo_home_path(self.sumo_home_input.text())
     
     def validate_sumocfg_path(self):
         """Validate the SUMO config file path."""
@@ -378,8 +314,8 @@ class DatasetGenerationPage(QWidget):
             self.sumocfg_valid = False
             self.update_run_button()
             return
-        
-        path = Path(path_text)
+
+        path = resolve_path(path_text, self.project_path)
         is_valid = path.exists() and path.is_file() and path.suffix == '.sumocfg'
         
         self.sumocfg_check.setVisible(is_valid)
@@ -397,15 +333,24 @@ class DatasetGenerationPage(QWidget):
     
     def browse_sumocfg(self):
         """Open file dialog to browse for SUMO config file."""
+        start = str(Path.home())
+        cur = self.sumocfg_input.text().strip()
+        if cur:
+            p = resolve_path(cur, self.project_path)
+            if p.exists():
+                start = str(p.parent)
+
         file_path, _ = QFileDialog.getOpenFileName(
             self,
             "Select SUMO Configuration File",
-            str(Path.home()),
+            start,
             "SUMO Config Files (*.sumocfg);;All Files (*)"
         )
-        
+
         if file_path:
-            self.sumocfg_input.setText(file_path)
+            self.sumocfg_input.setText(
+                to_display_path(file_path, self.project_path)
+            )
             self.validate_sumocfg_path()
     
     def set_sumocfg_path(self):
@@ -417,7 +362,9 @@ class DatasetGenerationPage(QWidget):
         
         try:
             self.config_manager.set_sumocfg(path_text)
-            self.display_sumocfg_contents(path_text)
+            abs_cfg = str(resolve_path(path_text, self.project_path))
+            self.display_sumocfg_contents(abs_cfg)
+            self.sumocfg_input.setText(to_display_path(abs_cfg, self.project_path))
             QMessageBox.information(
                 self,
                 "Success",
@@ -445,10 +392,10 @@ class DatasetGenerationPage(QWidget):
             import xml.etree.ElementTree as ET
             from pathlib import Path
             
-            sumocfg_file = Path(sumocfg_path)
+            sumocfg_file = resolve_path(sumocfg_path, self.project_path)
             if not sumocfg_file.exists():
                 return
-            
+
             sumocfg_dir = sumocfg_file.parent
             tree = ET.parse(sumocfg_file)
             root = tree.getroot()
@@ -593,76 +540,34 @@ class DatasetGenerationPage(QWidget):
             # If parsing fails, just hide the widget
             self.config_contents_widget.setVisible(False)
     
-    def load_sumo_home(self):
-        """Load the saved SUMO_HOME path or auto-detect."""
-        existing_sumo_home = self.config_manager.get_sumo_home()
-        if existing_sumo_home:
-            self.sumo_home_input.setText(existing_sumo_home)
-            self.validate_sumo_home()
-        else:
-            # Try to auto-detect SUMO_HOME
-            detected_sumo_home = auto_detect_sumo_home()
-            if detected_sumo_home:
-                self.sumo_home_input.setText(detected_sumo_home)
-                # Auto-save if detected
-                try:
-                    self.config_manager.set_sumo_home(detected_sumo_home)
-                except ValueError:
-                    pass  # If validation fails, don't save
-                self.validate_sumo_home()
-    
-    def validate_sumo_home(self):
-        """Validate the SUMO_HOME path."""
-        path_text = self.sumo_home_input.text().strip()
-        if not path_text:
-            self.sumo_home_check.setVisible(False)
+    def refresh_sumo_status(self):
+        """Update SUMO detection label and run-button gating from config + auto-detect."""
+        cfg = self.config_manager.get_sumo_home()
+        eh = effective_sumo_home(cfg or "")
+        if not eh:
+            self.sumo_status_label.setText(
+                "SUMO not found. Run: uv pip install -r requirements.txt "
+                "(installs eclipse-sumo), or set SUMO_HOME / install SUMO on PATH."
+            )
+            self.sumo_status_label.setStyleSheet(
+                "color: #f44336; padding: 10px; font-size: 11px;"
+            )
             self.sumo_home_valid = False
             self.update_run_button()
             return
-        
-        path = Path(path_text)
-        # Check if path exists, is a directory, and has bin subdirectory
-        is_valid = path.exists() and path.is_dir() and (path / 'bin').exists()
-        
-        self.sumo_home_check.setVisible(is_valid)
-        self.sumo_home_valid = is_valid
-        self.update_run_button()
-    
-    def browse_sumo_home(self):
-        """Open file dialog to browse for SUMO_HOME directory."""
-        folder_path = QFileDialog.getExistingDirectory(
-            self,
-            "Select SUMO Installation Directory (SUMO_HOME)",
-            str(Path.home()),
-            QFileDialog.ShowDirsOnly
+
+        self.sumo_status_label.setText(
+            f"SUMO ready: {to_display_path(eh, self.project_path)}"
         )
-        
-        if folder_path:
-            self.sumo_home_input.setText(folder_path)
-            self.validate_sumo_home()
-    
-    def set_sumo_home(self):
-        """Set the SUMO_HOME path from the input field."""
-        path_text = self.sumo_home_input.text().strip()
-        if not path_text:
-            QMessageBox.warning(self, "Error", "Please enter a path to the SUMO installation directory.")
-            return
-        
-        try:
-            # Save to JSON immediately
-            self.config_manager.set_sumo_home(path_text)
-            QMessageBox.information(
-                self,
-                "Success",
-                f"SUMO_HOME set to:\n{path_text}"
-            )
-        except ValueError as e:
-            QMessageBox.warning(self, "Error", str(e))
+        self.sumo_status_label.setStyleSheet(
+            "color: #4CAF50; padding: 10px; font-size: 11px;"
+        )
+        self.sumo_home_valid = True
+        self.update_run_button()
     
     def run_simulation(self):
         """Run SUMO simulation - navigate to simulation page."""
-        sumocfg_path = self.sumocfg_input.text().strip()
-        sumo_home = self.sumo_home_input.text().strip()
+        sumocfg_path = str(resolve_path(self.sumocfg_input.text().strip(), self.project_path))
         output_folder = self.config_manager.get_dataset_output_folder()
         if not output_folder:
             output_folder = str((Path(self.project_path) / "datasets").resolve())
@@ -671,12 +576,13 @@ class DatasetGenerationPage(QWidget):
                 self.config_manager.set_dataset_output_folder(output_folder)
             except Exception:
                 pass
-        
-        if not sumocfg_path or not sumo_home:
+
+        eh = effective_sumo_home(self.config_manager.get_sumo_home() or "")
+        if not sumocfg_path or not eh:
             QMessageBox.warning(
                 self,
                 "Error",
-                "Please set SUMO configuration file and SUMO_HOME before running simulation."
+                "Please set a valid .sumocfg file. SUMO could not be located automatically.",
             )
             return
         

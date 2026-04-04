@@ -6,8 +6,8 @@ import os
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QFont
+from PySide6.QtCore import QRect, Qt, Signal
+from PySide6.QtGui import QFont, QIcon, QPixmap
 from PySide6.QtWidgets import (QApplication, QDialog, QFrame, QHBoxLayout, QLabel,
                                QMainWindow, QMessageBox, QPushButton,
                                QScrollArea, QStackedWidget, QVBoxLayout,
@@ -19,8 +19,43 @@ from src.gui.debug_trajectory_page import DebugTrajectoryPage
 from src.gui.project_dialog import NewProjectDialog
 from src.gui.route_generation_page import RouteGenerationPage
 from src.gui.simulation_page import SimulationPage
-from src.utils.project_manager import ProjectManager
+from src.utils.project_paths import to_display_path
+from src.utils.project_manager import ProjectManager, _get_project_root
 from src.utils.sumo_config_manager import SUMOConfigManager
+
+_APP_ICON_PATH = (
+    Path(__file__).resolve().parent.parent.parent / "assets" / "traffic_app_icon.png"
+)
+
+
+def load_app_icon() -> QIcon:
+    """
+    Build a QIcon suitable for window and task/dock tiles.
+
+    The asset is widescreen (non-square); shells expect square icons and otherwise
+    squash or letterbox. We center-crop to a square, then register common px sizes.
+    """
+    if not _APP_ICON_PATH.is_file():
+        return QIcon()
+    pm = QPixmap(str(_APP_ICON_PATH))
+    if pm.isNull():
+        return QIcon()
+    w, h = pm.width(), pm.height()
+    if w > 0 and h > 0 and w != h:
+        side = min(w, h)
+        x = max(0, (w - side) // 2)
+        y = max(0, (h - side) // 2)
+        pm = pm.copy(QRect(x, y, side, side))
+    icon = QIcon()
+    for size in (16, 24, 32, 48, 64, 128, 256, 512):
+        scaled = pm.scaled(
+            size,
+            size,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        icon.addPixmap(scaled)
+    return icon
 
 
 class WelcomePage(QWidget):
@@ -317,11 +352,23 @@ class WelcomePage(QWidget):
         name_font.setPointSize(12)
         name_font.setBold(True)
         name_label.setFont(name_font)
+        name_label.setStyleSheet("color: #212121;")
         info_layout.addWidget(name_label)
+
+        _ws = _get_project_root()
+        loc_text = to_display_path(project["path"], _ws)
+        loc_label = QLabel(f"Location: {loc_text}")
+        loc_label.setStyleSheet("color: #666; font-size: 9px;")
+        loc_label.setToolTip(project.get("path") or "")
+        info_layout.addWidget(loc_label)
         
         if not project.get('exists', True):
-            status_label = QLabel("Warning: Folder not found")
+            status_label = QLabel(
+                "Folder not found — include examples/ in the repo, or hover for the resolved path."
+            )
+            status_label.setWordWrap(True)
             status_label.setStyleSheet("color: #f44336; font-size: 9px;")
+            status_label.setToolTip(project.get("path") or "")
             info_layout.addWidget(status_label)
         
         layout.addLayout(info_layout)
@@ -412,11 +459,23 @@ class WelcomePage(QWidget):
         name_font.setPointSize(12)
         name_font.setBold(True)
         name_label.setFont(name_font)
+        name_label.setStyleSheet("color: #212121;")
         info_layout.addWidget(name_label)
+
+        _ws = _get_project_root()
+        loc_text = to_display_path(project["path"], _ws)
+        loc_label = QLabel(f"Location: {loc_text}")
+        loc_label.setStyleSheet("color: #666; font-size: 9px;")
+        loc_label.setToolTip(project.get("path") or "")
+        info_layout.addWidget(loc_label)
         
         if not project.get('exists', True):
-            status_label = QLabel("Warning: Folder not found")
+            status_label = QLabel(
+                "Folder not found — include examples/ in the repo, or hover for the resolved path."
+            )
+            status_label.setWordWrap(True)
             status_label.setStyleSheet("color: #f44336; font-size: 9px;")
+            status_label.setToolTip(project.get("path") or "")
             info_layout.addWidget(status_label)
         
         layout.addLayout(info_layout)
@@ -468,7 +527,7 @@ class WelcomePage(QWidget):
                         self,
                         "Success",
                         f"Simulation project '{dialog.project_name}' created successfully!\n"
-                        f"Location: {project_path}"
+                        f"Location: {to_display_path(project_path, Path.cwd())}"
                     )
                     self.refresh_projects()
                     self.new_project_created.emit(dialog.project_name, "simulation")
@@ -497,7 +556,7 @@ class WelcomePage(QWidget):
                         self,
                         "Success",
                         f"Porto conversion project '{dialog.project_name}' created successfully!\n"
-                        f"Location: {project_path}"
+                        f"Location: {to_display_path(project_path, Path.cwd())}"
                     )
                     self.refresh_projects()
                     self.new_project_created.emit(dialog.project_name, "porto")
@@ -557,6 +616,7 @@ class MainWindow(QMainWindow):
     def init_ui(self):
         """Initialize the main window UI."""
         self.setWindowTitle("Graph Traffic Dataset Creator")
+        self.setWindowIcon(load_app_icon())
         self.setGeometry(100, 100, 1200, 800)
         
         # Set maximum size to screen size to prevent overflow

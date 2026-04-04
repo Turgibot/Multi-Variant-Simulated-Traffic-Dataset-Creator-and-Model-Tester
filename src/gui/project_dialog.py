@@ -9,6 +9,8 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt
 from pathlib import Path
 
+from src.utils.project_paths import resolve_path, to_display_path
+
 
 class NewProjectDialog(QDialog):
     """Dialog for creating a new project."""
@@ -42,7 +44,7 @@ class NewProjectDialog(QDialog):
         
         # Title
         title = QLabel(self.title_text)
-        title.setStyleSheet("font-size: 18px; font-weight: bold;")
+        title.setStyleSheet("font-size: 18px; font-weight: bold; color: #212121;")
         layout.addWidget(title)
         
         # Project type indicator
@@ -56,6 +58,7 @@ class NewProjectDialog(QDialog):
         
         # Project name
         name_label = QLabel("Project Name:")
+        name_label.setStyleSheet("color: #212121;")
         layout.addWidget(name_label)
         
         self.name_input = QLineEdit()
@@ -64,6 +67,8 @@ class NewProjectDialog(QDialog):
         
         # Project description
         desc_label = QLabel("Description (optional):")
+        if _tp:
+            desc_label.setStyleSheet(_tp)
         layout.addWidget(desc_label)
         
         self.desc_input = QTextEdit()
@@ -73,6 +78,7 @@ class NewProjectDialog(QDialog):
         
         # Project path
         path_label = QLabel("Project Location:")
+        path_label.setStyleSheet("color: #212121;")
         layout.addWidget(path_label)
         
         path_layout = QHBoxLayout()
@@ -139,9 +145,10 @@ class NewProjectDialog(QDialog):
         )
         
         if path:
-            self.path_input.setText(path)
-            self.project_path = path
-    
+            resolved = str(resolve_path(path, Path.cwd()))
+            self.path_input.setText(to_display_path(resolved, Path.cwd()))
+            self.project_path = resolved
+
     def create_project(self):
         """Validate and create project."""
         name = self.name_input.text().strip()
@@ -162,9 +169,8 @@ class NewProjectDialog(QDialog):
                 "Please select a location for the project."
             )
             return
-        
-        # Validate path exists
-        path_obj = Path(path)
+
+        path_obj = resolve_path(path, Path.cwd())
         if not path_obj.exists():
             QMessageBox.warning(
                 self,
@@ -183,6 +189,6 @@ class NewProjectDialog(QDialog):
         
         self.project_name = name
         self.project_description = self.desc_input.toPlainText().strip()
-        self.project_path = path
+        self.project_path = str(path_obj)
         self.accept()
 

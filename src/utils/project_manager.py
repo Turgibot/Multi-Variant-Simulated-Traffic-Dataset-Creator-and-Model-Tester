@@ -16,14 +16,27 @@ def _resolve_registry_path(path_str: str) -> Path:
     """Resolve a path from the registry; relative paths are anchored to the project root."""
     p = Path(path_str)
     if p.is_absolute():
-        return p
-    return _get_project_root() / p
+        out = p
+    else:
+        out = _get_project_root() / p
+    try:
+        return out.resolve()
+    except OSError:
+        return out
 
 
 def _get_project_root() -> Path:
     """Get the project root directory."""
-    # Try multiple strategies to find project root
-    
+    # Strategy 0: anchor to this source tree (stable when cwd is not the repo — e.g. IDE or desktop launcher).
+    # This file lives at <root>/src/utils/project_manager.py
+    here = Path(__file__).resolve()
+    try:
+        candidate = here.parents[2]
+        if (candidate / "src").is_dir() and (candidate / "src" / "utils" / "project_manager.py").exists():
+            return candidate
+    except (IndexError, OSError):
+        pass
+
     # Strategy 1: Look for directory with BOTH 'projects' AND 'src' (most reliable)
     current = Path.cwd()
     check_dir = current

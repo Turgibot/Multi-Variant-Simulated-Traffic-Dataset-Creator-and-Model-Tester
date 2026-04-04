@@ -4,11 +4,11 @@
 <neteditConfiguration xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/neteditConfiguration.xsd">
 
     <input>
-        <sumo-net-file value="/home/guy/Projects/Traffic/Traffic-DSTG-Gen/simulation/urban_three_zones.net.xml"/>
+        <sumo-net-file value="urban_three_zones.net.xml"/>
     </input>
 
     <output>
-        <output-file value="/home/guy/Projects/Traffic/Traffic-DSTG-Gen/simulation/urban_three_zones.net.xml"/>
+        <output-file value="urban_three_zones.net.xml"/>
     </output>
 
     <processing>

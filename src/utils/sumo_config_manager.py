@@ -6,7 +6,9 @@ Handles loading and saving SUMO configuration file paths.
 import json
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import Dict, Optional, List
+from typing import Dict, List, Optional, Union
+
+from src.utils.project_paths import compact_path, resolve_path
 
 
 class SUMOConfigManager:
@@ -22,7 +24,15 @@ class SUMOConfigManager:
         self.project_path = Path(project_path)
         self.config_file = self.project_path / 'sumo_config.json'
         self._ensure_config_file()
-    
+
+    def _abs_config_path(self, raw: Optional[str]) -> Optional[Path]:
+        if not raw or not str(raw).strip():
+            return None
+        return resolve_path(raw, self.project_path)
+
+    def _save_relative(self, path: Path) -> str:
+        return compact_path(path, self.project_path)
+
     def get_dataset_output_folder(self) -> Optional[str]:
         """
         Get the dataset output folder path.
@@ -31,8 +41,11 @@ class SUMOConfigManager:
             Path to dataset output folder or None if not set
         """
         config = self._load_config()
-        return config.get('dataset_output_folder')
-    
+        raw = config.get('dataset_output_folder')
+        if not raw:
+            return None
+        return str(self._abs_config_path(str(raw)))
+
     def set_dataset_output_folder(self, folder_path: str):
         """
         Set the dataset output folder path.
@@ -40,16 +53,14 @@ class SUMOConfigManager:
         Args:
             folder_path: Path to the output folder
         """
-        # Validate path exists and is a directory
-        path = Path(folder_path)
+        path = resolve_path(folder_path, self.project_path)
         if not path.exists():
             raise ValueError(f"Folder does not exist: {folder_path}")
         if not path.is_dir():
             raise ValueError(f"Path is not a directory: {folder_path}")
-        
-        # Store absolute path
+
         config = self._load_config()
-        config['dataset_output_folder'] = str(path.absolute())
+        config['dataset_output_folder'] = self._save_relative(path)
         self._save_config(config)
     
     def get_sumo_home(self) -> Optional[str]:
@@ -60,8 +71,11 @@ class SUMOConfigManager:
             Path to SUMO_HOME or None if not set
         """
         config = self._load_config()
-        return config.get('sumo_home')
-    
+        raw = config.get('sumo_home')
+        if not raw:
+            return None
+        return str(self._abs_config_path(str(raw)))
+
     def set_sumo_home(self, sumo_home_path: str):
         """
         Set the SUMO_HOME path.
@@ -69,21 +83,21 @@ class SUMOConfigManager:
         Args:
             sumo_home_path: Path to the SUMO installation directory
         """
-        # Validate path exists and is a directory
-        path = Path(sumo_home_path)
+        path_origin = sumo_home_path
+        path = resolve_path(sumo_home_path, self.project_path)
         if not path.exists():
-            raise ValueError(f"Path does not exist: {sumo_home_path}")
+            raise ValueError(f"Path does not exist: {path_origin}")
         if not path.is_dir():
-            raise ValueError(f"Path is not a directory: {sumo_home_path}")
-        
-        # Check if it looks like a SUMO installation (has bin directory)
+            raise ValueError(f"Path is not a directory: {path_origin}")
+
         bin_dir = path / 'bin'
         if not bin_dir.exists():
-            raise ValueError(f"Path does not appear to be a SUMO installation (missing bin directory): {sumo_home_path}")
-        
-        # Store absolute path
+            raise ValueError(
+                f"Path does not appear to be a SUMO installation (missing bin directory): {path_origin}"
+            )
+
         config = self._load_config()
-        config['sumo_home'] = str(path.absolute())
+        config['sumo_home'] = self._save_relative(path)
         self._save_config(config)
     
     def _ensure_config_file(self):
@@ -112,27 +126,33 @@ class SUMOConfigManager:
             Path to .sumocfg file or None if not set
         """
         config = self._load_config()
-        return config.get('sumocfg')
-    
-    def get_config_files(self) -> Dict[str, str]:
+        raw = config.get('sumocfg')
+        if not raw:
+            return None
+        return str(self._abs_config_path(str(raw)))
+
+    def get_config_files(self) -> Dict[str, Union[str, List[str]]]:
         """
         Get all SUMO configuration file paths (parsed from .sumocfg).
-        
+
         Returns:
-            Dictionary with file type as key and path as value
-            Keys: 'network', 'routes', 'additional', 'sumocfg', etc.
+            Dictionary keyed by file role; values are absolute path strings or lists of them.
         """
         config = self._load_config()
-        files = {}
-        
-        # Add main sumocfg file
-        if config.get('sumocfg'):
-            files['sumocfg'] = config['sumocfg']
-        
-        # Add parsed files from sumocfg
-        if 'parsed_files' in config:
-            files.update(config['parsed_files'])
-        
+        files: Dict[str, Union[str, List[str]]] = {}
+
+        raw_sc = config.get('sumocfg')
+        if raw_sc:
+            p = self._abs_config_path(str(raw_sc))
+            files['sumocfg'] = str(p)
+
+        parsed = config.get('parsed_files') or {}
+        for k, v in parsed.items():
+            if isinstance(v, list):
+                files[k] = [str(self._abs_config_path(str(x))) for x in v]
+            else:
+                files[k] = str(self._abs_config_path(str(v)))
+
         return files
     
     def set_sumocfg(self, sumocfg_path: str):
@@ -142,21 +162,25 @@ class SUMOConfigManager:
         Args:
             sumocfg_path: Path to the .sumocfg file
         """
-        # Validate file exists
-        path = Path(sumocfg_path)
+        path = resolve_path(sumocfg_path, self.project_path)
         if not path.exists():
             raise ValueError(f"File does not exist: {sumocfg_path}")
-        
+
         if not path.suffix == '.sumocfg' and not path.name.endswith('.sumocfg'):
             raise ValueError(f"File must be a .sumocfg file: {sumocfg_path}")
-        
-        # Parse the sumocfg file to extract referenced files
+
         parsed_files = self._parse_sumocfg(path)
-        
-        # Store configuration
+
+        compact_parsed: Dict[str, Union[str, List[str]]] = {}
+        for key, val in parsed_files.items():
+            if isinstance(val, list):
+                compact_parsed[key] = [self._save_relative(Path(p)) for p in val]
+            else:
+                compact_parsed[key] = self._save_relative(Path(val))
+
         config = self._load_config()
-        config['sumocfg'] = str(path.absolute())
-        config['parsed_files'] = parsed_files
+        config['sumocfg'] = self._save_relative(path)
+        config['parsed_files'] = compact_parsed
         self._save_config(config)
     
     def _parse_sumocfg(self, sumocfg_path: Path) -> Dict[str, str]:

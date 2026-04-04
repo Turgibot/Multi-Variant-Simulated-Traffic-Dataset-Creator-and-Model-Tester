@@ -273,8 +273,8 @@ def parse_args():
     parser.add_argument(
         "--network",
         type=Path,
-        default=Path("/home/guy/Projects/Traffic/Develop/Projects/PortoForSumo/config/porto.net.xml"),
-        help="Path to the SUMO network file (.net.xml)",
+        default=Path("examples/porto_conversion/config/porto.net.xml"),
+        help="Path to the SUMO network file (.net.xml); default is repo example (run from repository root)",
     )
     parser.add_argument(
         "--output",

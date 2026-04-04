@@ -47,7 +47,7 @@ def _parse_ww_dd_hh_mm_ss(s: str) -> int:
 from src.utils.simulation_db_service import SimulationDBService
 from src.utils.simulation_runner import SimulationRunner
 from src.utils.sumo_config_manager import SUMOConfigManager
-from src.utils.sumo_detector import auto_detect_sumo_home, setup_sumo_environment
+from src.utils.sumo_detector import auto_detect_sumo_home, effective_sumo_home, setup_sumo_environment
 
 
 class MappingExportWorker(QObject):
@@ -1042,26 +1042,23 @@ class SimulationPage(QWidget):
         self.log_text.append("")
         
         try:
-            # Import TraCI
-            import traci
             import os
             import sys
-            
-            # Get SUMO_HOME from project config or auto-detect
-            sumo_home = self.config_manager.get_sumo_home()
+
+            # TraCI ships under $SUMO_HOME/tools (including PyPI eclipse-sumo). Configure path first.
+            cfg_sumo_home = self.config_manager.get_sumo_home()
+            sumo_home = effective_sumo_home(cfg_sumo_home or "") or None
             if not sumo_home:
-                # Try auto-detection if not set
                 sumo_home = auto_detect_sumo_home()
-                if sumo_home:
-                    # Auto-save detected SUMO_HOME
+            if sumo_home:
+                setup_sumo_environment(sumo_home)
+                if not cfg_sumo_home:
                     try:
                         self.config_manager.set_sumo_home(sumo_home)
                     except ValueError:
                         pass
-            
-            if sumo_home:
-                # Set up SUMO environment (sets SUMO_HOME and adds tools to path)
-                setup_sumo_environment(sumo_home)
+
+            import traci
             
             # Try to import sumolib for binary checking
             try:

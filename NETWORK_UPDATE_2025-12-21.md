@@ -18,9 +18,8 @@ All Porto conversion projects have been updated to use the new SUMO network from
 
 The network file `porto.net.xml` has been copied to:
 
-1. **Porto Project (Porto)**: `/home/guy/Projects/Traffic/Develop/Projects/Porto/config/porto.net.xml`
-2. **Porto Project (PortoForSumo)**: `/home/guy/Projects/Traffic/Develop/Projects/PortoForSumo/config/porto.net.xml`
-3. **Repository Porto Folder**: `Porto/config/porto.net.xml` (fallback location)
+1. **`examples/porto_conversion/config/porto.net.xml`** (primary example; may be extracted from `porto.net.xml.zip`)
+2. **`Porto/config/porto.net.xml`** (optional fallback layout if present in your tree)
 
 ## Map Tile Alignment
 

@@ -146,7 +146,7 @@ def main():
     from PySide6.QtCore import qInstallMessageHandler
     from PySide6.QtWidgets import QApplication
 
-    from src.gui.main_window import MainWindow
+    from src.gui.main_window import MainWindow, load_app_icon
 
     # Suppress QPainter warnings (harmless but annoying)
     # These warnings come from Qt's internal rendering with cached graphics items
@@ -167,7 +167,14 @@ def main():
     app = QApplication.instance()
     if app is None:
         app = QApplication(sys.argv)
-    
+    # Ubuntu/GNOME dock uses the Freedesktop entry + _NET_WM_DESKTOP_FILE_NAME,
+    # not only setWindowIcon — pair this with scripts/install_linux_desktop_entry.sh.
+    app.setApplicationName("Graph Traffic Dataset Creator")
+    app.setDesktopFileName("graph-traffic-dataset-creator")
+    app_icon = load_app_icon()
+    if not app_icon.isNull():
+        app.setWindowIcon(app_icon)
+
     # Create and show main window
     window = MainWindow()
     window.show()

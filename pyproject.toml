@@ -4,6 +4,9 @@ version = "0.1.0"
 description = "Graph Traffic Dataset Creator — cross-platform GUI for SUMO simulations and graph traffic datasets."
 readme = "README.md"
 requires-python = ">=3.8"
+dependencies = [
+    "eclipse-sumo>=1.18.0",
+]
 
 [tool.black]
 line-length = 100
