@@ -1,0 +1,643 @@
+{
+  "snapshot_dir": "/home/guy/Projects/Traffic/Develop/Projects/3zones/snapshots",
+  "snapshot_interval_sec": 30,
+  "vehicle_generation": {
+    "simulation_weeks": 1,
+    "total_num_vehicles": 403848,
+    "dev_fraction": 0.1,
+    "zone_allocation": {
+      "A": {
+        "percentage": 40.0,
+        "vehicle_type_distribution": {
+          "passenger": 80.0,
+          "bus": 10.0,
+          "truck": 10.0
+        }
+      },
+      "B": {
+        "percentage": 10.0,
+        "vehicle_type_distribution": {
+          "passenger": 60.0,
+          "bus": 30.0,
+          "truck": 10.0
+        }
+      },
+      "C": {
+        "percentage": 30.0,
+        "vehicle_type_distribution": {
+          "passenger": 70.0,
+          "bus": 15.0,
+          "truck": 15.0
+        }
+      },
+      "H": {
+        "percentage": 0.0,
+        "vehicle_type_distribution": {
+          "passenger": 100.0,
+          "bus": 0.0,
+          "truck": 0.0
+        }
+      },
+      "noise": {
+        "percentage": 20.0
+      }
+    },
+    "vehicle_types": {
+      "passenger": {
+        "length": 4.5,
+        "width": 1.8,
+        "height": 1.5,
+        "max_speed": 33.33,
+        "color": "#0000ff"
+      },
+      "bus": {
+        "length": 12.0,
+        "width": 2.5,
+        "height": 3.2,
+        "max_speed": 22.22,
+        "color": "#ffff00"
+      },
+      "truck": {
+        "length": 8.0,
+        "width": 2.5,
+        "height": 3.0,
+        "max_speed": 25.0,
+        "color": "#ff0000"
+      }
+    }
+  },
+  "landmarks": {
+    "park1": [
+      "AA7AB7",
+      "AA8AB8",
+      "AA9AB9",
+      "AB10AB9",
+      "AB6AB7",
+      "AB7AA7",
+      "AB7AB6",
+      "AB7AB8",
+      "AB7AC7",
+      "AB8AA8",
+      "AB8AB7",
+      "AB8AB9",
+      "AB9AA9",
+      "AB9AB10",
+      "AB9AB8",
+      "AB9AC9",
+      "AC10AC9",
+      "AC6AC7",
+      "AC7AB7",
+      "AC7AC6",
+      "AC7AC8",
+      "AC7AD7",
+      "AC8AC7",
+      "AC8AC9",
+      "AC8AD8",
+      "AC9AB9",
+      "AC9AC10",
+      "AC9AC8",
+      "AC9AD9",
+      "AD7AC7",
+      "AD8AC8",
+      "AD9AC9"
+    ],
+    "park2": [
+      "AH7AI7",
+      "AH8AI8",
+      "AH9AI9",
+      "AI10AI9",
+      "AI6AI7",
+      "AI7AH7",
+      "AI7AI6",
+      "AI7AI8",
+      "AI7AJ7",
+      "AI8AH8",
+      "AI8AI7",
+      "AI8AI9",
+      "AI9AH9",
+      "AI9AI10",
+      "AI9AI8",
+      "AI9AJ9",
+      "AJ10AJ9",
+      "AJ6AJ7",
+      "AJ7AI7",
+      "AJ7AJ6",
+      "AJ7AJ8",
+      "AJ7AK7",
+      "AJ8AJ7",
+      "AJ8AJ9",
+      "AJ8AK8",
+      "AJ9AI9",
+      "AJ9AJ10",
+      "AJ9AJ8",
+      "AJ9AK9",
+      "AK7AJ7",
+      "AK8AJ8",
+      "AK9AJ9"
+    ],
+    "park3": [
+      "AA1AB1",
+      "AA2AB2",
+      "AA3AB3",
+      "AB0AB1",
+      "AB1AA1",
+      "AB1AB0",
+      "AB1AB2",
+      "AB1AC1",
+      "AB2AA2",
+      "AB2AB1",
+      "AB2AB3",
+      "AB3AA3",
+      "AB3AB2",
+      "AB3AB4",
+      "AB3AC3",
+      "AB4AB3",
+      "AC0AC1",
+      "AC1AB1",
+      "AC1AC0",
+      "AC1AC2",
+      "AC1AD1",
+      "AC2AC1",
+      "AC2AC3",
+      "AC2AD2",
+      "AC3AB3",
+      "AC3AC2",
+      "AC3AC4",
+      "AC3AD3",
+      "AC4AC3",
+      "AD1AC1",
+      "AD2AC2",
+      "AD3AC3"
+    ],
+    "park4": [
+      "AH1AI1",
+      "AH2AI2",
+      "AH3AI3",
+      "AI0AI1",
+      "AI1AH1",
+      "AI1AI0",
+      "AI1AI2",
+      "AI1AJ1",
+      "AI2AH2",
+      "AI2AI1",
+      "AI2AI3",
+      "AI3AH3",
+      "AI3AI2",
+      "AI3AI4",
+      "AI3AJ3",
+      "AI4AI3",
+      "AJ0AJ1",
+      "AJ1AI1",
+      "AJ1AJ0",
+      "AJ1AJ2",
+      "AJ1AK1",
+      "AJ2AJ1",
+      "AJ2AJ3",
+      "AJ2AK2",
+      "AJ3AI3",
+      "AJ3AJ2",
+      "AJ3AJ4",
+      "AJ3AK3",
+      "AJ4AJ3",
+      "AK1AJ1",
+      "AK2AJ2",
+      "AK3AJ3"
+    ],
+    "stadium1": [
+      "BC7BC8",
+      "BC7BD7",
+      "BC8BC7",
+      "BC8BC9",
+      "BC9BC8",
+      "BC9BD9",
+      "BD7BC7",
+      "BD7BE7",
+      "BD9BC9",
+      "BD9BE9",
+      "BE7BD7",
+      "BE7BE8",
+      "BE8BE7",
+      "BE8BE9",
+      "BE9BD9",
+      "BE9BE8"
+    ],
+    "stadium2": [
+      "BH1BH2",
+      "BH1BI1",
+      "BH2BH1",
+      "BH2BH3",
+      "BH3BH2",
+      "BH3BI3",
+      "BI1BH1",
+      "BI1BJ1",
+      "BI3BH3",
+      "BI3BJ3",
+      "BJ1BI1",
+      "BJ1BJ2",
+      "BJ2BJ1",
+      "BJ2BJ3",
+      "BJ3BI3",
+      "BJ3BJ2"
+    ],
+    "default_landmarks": {
+      "home_zones": [
+        "A",
+        "B",
+        "C"
+      ],
+      "work_zones": [
+        "B"
+      ],
+      "restaurants_zones": [
+        "A",
+        "B",
+        "C"
+      ],
+      "visit_count": 3
+    }
+  },
+  "weekday_schedule": [
+    {
+      "name": "Random Trips",
+      "start_time": "00:00",
+      "end_time": "23:59",
+      "repeat_on_days": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "vpm_rate": 1,
+      "source_zones": [
+        "A",
+        "B",
+        "C"
+      ],
+      "origin": [
+        "home",
+        "work"
+      ],
+      "destination": [
+        "park1",
+        "park2",
+        "park3",
+        "park4",
+        "restaurantA",
+        "restaurantB",
+        "restaurantC",
+        "stadium1",
+        "stadium2",
+        "visit1",
+        "visit2",
+        "visit3"
+      ]
+    },
+    {
+      "name": "Early Morning",
+      "start_time": "05:00",
+      "end_time": "06:30",
+      "repeat_on_days": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "vpm_rate": 7,
+      "source_zones": [
+        "A",
+        "B",
+        "C"
+      ],
+      "origin": [
+        "home"
+      ],
+      "destination": [
+        "work"
+      ]
+    },
+    {
+      "name": "Morning Rush",
+      "start_time": "06:30",
+      "end_time": "09:30",
+      "repeat_on_days": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "vpm_rate": 20,
+      "source_zones": [
+        "A",
+        "C"
+      ],
+      "origin": [
+        "home"
+      ],
+      "destination": [
+        "work"
+      ]
+    },
+    {
+      "name": "Midday Work",
+      "start_time": "09:30",
+      "end_time": "12:00",
+      "repeat_on_days": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "vpm_rate": 12,
+      "source_zones": [
+        "A",
+        "B",
+        "C"
+      ],
+      "origin": [
+        "home"
+      ],
+      "destination": [
+        "work"
+      ]
+    },
+    {
+      "name": "Lunch Break",
+      "start_time": "12:00",
+      "end_time": "13:30",
+      "repeat_on_days": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "vpm_rate": 8,
+      "source_zones": [
+        "A",
+        "B",
+        "C"
+      ],
+      "origin": [
+        "work"
+      ],
+      "destination": [
+        "restaurantA",
+        "restaurantB",
+        "restaurantC"
+      ]
+    },
+    {
+      "name": "Back from lunch",
+      "start_time": "13:30",
+      "end_time": "16:00",
+      "repeat_on_days": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "vpm_rate": 12,
+      "source_zones": [
+        "A",
+        "B",
+        "C"
+      ],
+      "origin": [
+        "restaurantA",
+        "restaurantB",
+        "restaurantC"
+      ],
+      "destination": [
+        "work"
+      ]
+    },
+    {
+      "name": "Evening Rush",
+      "start_time": "16:00",
+      "end_time": "19:00",
+      "repeat_on_days": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "vpm_rate": 20,
+      "source_zones": [
+        "A",
+        "B",
+        "C"
+      ],
+      "origin": [
+        "work"
+      ],
+      "destination": [
+        "home"
+      ]
+    },
+    {
+      "name": "Evening Social/Leisure",
+      "start_time": "19:00",
+      "end_time": "23:00",
+      "repeat_on_days": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "vpm_rate": 7,
+      "source_zones": [
+        "A",
+        "B",
+        "C"
+      ],
+      "origin": [
+        "home"
+      ],
+      "destination": [
+        "park1",
+        "park2",
+        "park3",
+        "park4",
+        "restaurantA",
+        "restaurantB",
+        "restaurantC",
+        "stadium1",
+        "stadium2",
+        "visit1",
+        "visit2",
+        "visit3"
+      ]
+    },
+    {
+      "name": "Stadium Events",
+      "start_time": "20:00",
+      "end_time": "22:00",
+      "repeat_on_days": [
+        6
+      ],
+      "vpm_rate": 17,
+      "source_zones": [
+        "A",
+        "B",
+        "C"
+      ],
+      "origin": [
+        "home"
+      ],
+      "destination": [
+        "stadium1",
+        "stadium2"
+      ]
+    },
+    {
+      "name": "Park Events",
+      "start_time": "16:00",
+      "end_time": "18:00",
+      "repeat_on_days": [
+        7
+      ],
+      "vpm_rate": 17,
+      "source_zones": [
+        "A",
+        "B",
+        "C"
+      ],
+      "origin": [
+        "home"
+      ],
+      "destination": [
+        "park1",
+        "park2",
+        "park3",
+        "park4"
+      ]
+    },
+    {
+      "name": "Quiet Night",
+      "start_time": "00:00",
+      "end_time": "06:00",
+      "repeat_on_days": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "vpm_rate": 22,
+      "source_zones": [
+        "A",
+        "B",
+        "C"
+      ],
+      "origin": [
+        "home",
+        "park1",
+        "park2",
+        "park3",
+        "park4",
+        "restaurantA",
+        "restaurantB",
+        "restaurantC",
+        "stadium1",
+        "stadium2",
+        "visit1",
+        "visit2",
+        "visit3",
+        "work"
+      ],
+      "destination": [
+        "home",
+        "park1",
+        "park2",
+        "park3",
+        "park4",
+        "restaurantA",
+        "restaurantB",
+        "restaurantC",
+        "stadium1",
+        "stadium2",
+        "visit1",
+        "visit2",
+        "visit3",
+        "work"
+      ]
+    },
+    {
+      "name": "Quiet Evening",
+      "start_time": "22:00",
+      "end_time": "23:59",
+      "repeat_on_days": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "vpm_rate": 1,
+      "source_zones": [
+        "A",
+        "B",
+        "C"
+      ],
+      "origin": [
+        "home"
+      ],
+      "destination": [
+        "park1",
+        "park2",
+        "park3",
+        "park4",
+        "restaurantA",
+        "restaurantB",
+        "restaurantC",
+        "stadium1",
+        "stadium2",
+        "visit1",
+        "visit2",
+        "visit3",
+        "work"
+      ]
+    },
+    {
+      "name": "Visiting mother",
+      "start_time": "08:00",
+      "end_time": "10:00",
+      "repeat_on_days": [
+        7
+      ],
+      "vpm_rate": 13,
+      "source_zones": [
+        "A",
+        "B"
+      ],
+      "origin": [
+        "home"
+      ],
+      "destination": [
+        "park1",
+        "park2",
+        "park3",
+        "park4",
+        "restaurantA",
+        "restaurantB",
+        "restaurantC",
+        "visit1",
+        "visit2",
+        "visit3"
+      ]
+    }
+  ]
+}

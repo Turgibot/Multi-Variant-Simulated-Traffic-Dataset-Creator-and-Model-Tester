@@ -10,6 +10,14 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 
+def _resolve_registry_path(path_str: str) -> Path:
+    """Resolve a path from the registry; relative paths are anchored to the project root."""
+    p = Path(path_str)
+    if p.is_absolute():
+        return p
+    return _get_project_root() / p
+
+
 def _get_project_root() -> Path:
     """Get the project root directory."""
     # Try multiple strategies to find project root
@@ -158,7 +166,7 @@ class ProjectManager:
             if project_type is not None and ptype != project_type:
                 continue
             
-            project_path = Path(path)
+            project_path = _resolve_registry_path(path)
             projects.append({
                 'name': name,
                 'path': str(project_path),
@@ -263,9 +271,9 @@ class ProjectManager:
         data = registry[name]
         # Handle both old format (string path) and new format (dict with path and type)
         if isinstance(data, str):
-            project_path = Path(data)
+            project_path = _resolve_registry_path(data)
         else:
-            project_path = Path(data.get('path', ''))
+            project_path = _resolve_registry_path(data.get('path', ''))
         
         # Remove from registry
         del registry[name]
@@ -295,10 +303,10 @@ class ProjectManager:
         data = registry[name]
         # Handle both old format (string path) and new format (dict with path and type)
         if isinstance(data, str):
-            project_path = Path(data)
+            project_path = _resolve_registry_path(data)
             project_type = 'simulation'
         else:
-            project_path = Path(data.get('path', ''))
+            project_path = _resolve_registry_path(data.get('path', ''))
             project_type = data.get('type', 'simulation')
         
         info_file = project_path / 'project_info.json'
@@ -310,6 +318,8 @@ class ProjectManager:
                     # Ensure type is included
                     if 'type' not in info:
                         info['type'] = project_type
+                    if 'path' in info:
+                        info['path'] = str(_resolve_registry_path(info['path']))
                     return info
             except (FileNotFoundError, json.JSONDecodeError):
                 pass

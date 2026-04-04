@@ -43,6 +43,10 @@ dmypy.json
 # Project specific
 # Local GUI project registries (machine-specific paths). Copy from projects_registry.json.example where provided.
 **/projects_registry.json
+# Generated dataset artifacts under each GUI project folder
+projects/**/datasets/
+examples/**/datasets/
+examples/porto_conversion/data/train_sorted.csv
 *.log
 *.db
 *.sqlite

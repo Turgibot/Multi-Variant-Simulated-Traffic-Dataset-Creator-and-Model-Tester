@@ -1,0 +1,33 @@
+{
+  "sumo_home": "/usr/share/sumo",
+  "map_basename": "porto",
+  "map_bbox_south": "41.081167",
+  "map_bbox_west": "-8.715283",
+  "map_bbox_north": "41.219752",
+  "map_bbox_east": "-8.481458",
+  "main_csv_path": "/home/guy/Projects/Traffic/Develop/Projects/Porto3/data/train.csv",
+  "optional_csv_paths": [],
+  "train_csv_path": "/home/guy/Projects/Traffic/Develop/Projects/Porto3/data/train.csv",
+  "num_zones": 10,
+  "train_trip_count": 1710670,
+  "trip_count_cache": {
+    "path": "/home/guy/Projects/Traffic/Develop/Projects/Porto3/data/train.csv",
+    "size": 1942848724,
+    "mtime": 1763709325,
+    "count": 1710670
+  },
+  "show_osm_map": false,
+  "show_network": true,
+  "map_offset_x": 20.0,
+  "map_offset_y": 30.0,
+  "fix_route": true,
+  "fix_invalid_segments": true,
+  "show_polygon": true,
+  "draw_gps_points_path": true,
+  "dataset_output_folder": "/home/guy/Projects/Traffic/Develop/Projects/porto4/datasets",
+  "dataset_sorted": false,
+  "dataset_save_sorted": "/home/guy/Projects/Traffic/Develop/Projects/porto4/data/train_sorted.csv",
+  "dataset_sampling_period": "",
+  "dataset_compress": false,
+  "dataset_workers": "4"
+}

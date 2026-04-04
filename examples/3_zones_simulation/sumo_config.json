@@ -1,0 +1,42 @@
+{
+  "sumo_home": "/usr/share/sumo",
+  "sumocfg": "/home/guy/Projects/Traffic/Develop/Projects/3zones/config/urban_three_zones.sumocfg",
+  "parsed_files": {
+    "network": "/home/guy/Projects/Traffic/Develop/Projects/3zones/config/urban_three_zones.net.xml",
+    "additional": "/home/guy/Projects/Traffic/Develop/Projects/3zones/config/vehicle_types.add.xml"
+  },
+  "dataset_output_folder": "/home/guy/Projects/Traffic/Develop/Projects/3zones/datasets",
+  "zones": {
+    "zone_1": {
+      "name": "A",
+      "color": [
+        255,
+        100,
+        100
+      ],
+      "areas": []
+    },
+    "zone_2": {
+      "name": "B",
+      "color": [
+        100,
+        255,
+        100
+      ],
+      "areas": [
+        {
+          "x": -1801.068,
+          "y": -7392.524,
+          "width": 21602.136,
+          "height": 13520.088000000002
+        }
+      ]
+    }
+  },
+  "route_generation_settings": {
+    "displayed_zones": [
+      "zone_2"
+    ],
+    "zones_locked": false
+  }
+}
