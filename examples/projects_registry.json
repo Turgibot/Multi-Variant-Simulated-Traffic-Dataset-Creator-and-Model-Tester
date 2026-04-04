@@ -1,0 +1,10 @@
+{
+  "porto_conversion": {
+    "path": "examples/porto_conversion",
+    "type": "porto"
+  },
+  "3_zones_simulation": {
+    "path": "examples/3_zones_simulation",
+    "type": "simulation"
+  }
+}

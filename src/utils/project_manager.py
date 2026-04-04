@@ -105,6 +105,8 @@ class ProjectManager:
         
         self.registry_file = self.projects_dir / registry_file
         self.projects_dir.mkdir(exist_ok=True, parents=True)
+
+        self._ensure_registry()
         
         # Debug output
         print(f"DEBUG ProjectManager: project_root={_get_project_root()}")
@@ -118,11 +120,27 @@ class ProjectManager:
 
         # Print a single trajectory in key-value format (key = CSV header)
         _print_sample_trajectory(_get_project_root())
-
-        self._ensure_registry()
+    
+    def _try_seed_registry_from_examples(self) -> None:
+        """If bundled example registry exists, copy it once (when projects registry is missing)."""
+        example = _get_project_root() / "examples" / "projects_registry.json"
+        if not example.is_file():
+            return
+        try:
+            with open(example, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if not isinstance(data, dict):
+                return
+            with open(self.registry_file, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+                f.write("\n")
+        except (OSError, json.JSONDecodeError):
+            pass
     
     def _ensure_registry(self):
-        """Ensure registry file exists."""
+        """Ensure registry file exists; on first run seed from examples/projects_registry.json if present."""
+        if not self.registry_file.exists():
+            self._try_seed_registry_from_examples()
         if not self.registry_file.exists():
             self._save_registry({})
     
