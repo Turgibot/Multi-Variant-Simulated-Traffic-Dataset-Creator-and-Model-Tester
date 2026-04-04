@@ -41,6 +41,8 @@ dmypy.json
 *.rpm
 
 # Project specific
+# Local GUI project registry (absolute paths); copy from projects_registry.json.example if missing
+projects/projects_registry.json
 *.log
 *.db
 *.sqlite
