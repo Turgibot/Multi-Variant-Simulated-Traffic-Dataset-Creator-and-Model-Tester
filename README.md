@@ -13,10 +13,11 @@ A cross-platform GUI application for SUMO-based traffic simulation and graph tra
 
 ## Requirements
 
-- Python 3.8+
-- [uv](https://docs.astral.sh/uv/) (recommended for installs), or `pip` with a virtual environment
+- Python **3.8** (see `.python-version`; slightly newer 3.8.x is fine)
+- **Linux (GUI):** system packages for Qt’s XCB plugin — at minimum **`libxcb-cursor0`** (PySide6 6.5+). See [`INSTALL_QT_DEPS.md`](INSTALL_QT_DEPS.md) for details and a fuller dependency list.
+- [uv](https://docs.astral.sh/uv/) (recommended for installs), or `pip` with a virtual environment. If you install uv with the Astral script, ensure **`~/.local/bin`** is on your `PATH` (or open a new shell after install).
 - SUMO (Simulation of Urban MObility) — [installation guide](https://sumo.dlr.de/docs/Installing/index.html)
-- Python packages are listed in `requirements.txt` (runtime) and `requirements-dev.txt` (development)
+- Python packages: **`requirements.txt`** (runtime) and **`requirements-dev.txt`** (development). You can also install from your own `pip freeze` output with **`uv pip install -r freeze.txt`** if you maintain one (watch for conflicting pins between heavy ML stacks and the rest of the app).
 
 ## Installation
 
@@ -30,12 +31,16 @@ cd graph-traffic-dataset-creator
 
 Install uv if you do not have it yet: see [Installing uv](https://docs.astral.sh/uv/getting-started/installation/).
 
+On **Linux**, install Qt XCB dependencies for the GUI before running the app (see [Requirements](#requirements) and [`INSTALL_QT_DEPS.md`](INSTALL_QT_DEPS.md)).
+
 From the project root:
 
 ```bash
-uv venv
+uv venv --python 3.8
 uv pip install -r requirements.txt
 ```
+
+If uv reports that Python 3.8 is missing, install it once with: `uv python install 3.8`.
 
 Optional development tools (formatting, linting, tests):
 
