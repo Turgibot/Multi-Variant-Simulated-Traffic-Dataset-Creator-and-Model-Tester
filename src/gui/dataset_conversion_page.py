@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (QCheckBox, QFileDialog, QFrame,
                                QTextEdit, QVBoxLayout, QWidget)
 
 from src.gui.simulation_view import SimulationView
+from src.utils.cursor_debug_log import cursor_debug_path
 from src.utils.network_parser import NetworkParser
 from src.utils.route_finding import (EdgeSpatialIndex, build_edges_data,
                                      build_node_positions,
@@ -3320,7 +3321,7 @@ class DatasetConversionPage(QWidget):
                 "timestamp": int(__import__("time").time() * 1000),
             }
             with open(
-                "/home/guy/Projects/Traffic/Multi-Variant-Simulated-Traffic-Dataset-Creator-and-Model-Tester/.cursor/debug-a91ee3.log",
+                cursor_debug_path("debug-a91ee3.log"),
                 "a",
                 encoding="utf-8",
             ) as f:
@@ -6617,7 +6618,7 @@ class DatasetConversionPage(QWidget):
         if len(sumo_points_original) < 2:
             return
         # #region agent log
-        _log_path = "/home/guy/Projects/Traffic/Multi-Variant-Simulated-Traffic-Dataset-Creator-and-Model-Tester/.cursor/debug.log"
+        _log_path = cursor_debug_path("debug.log")
         try:
             with open(_log_path, "a") as _f:
                 _f.write(json.dumps({"hypothesisId":"B","location":"dataset_conversion_page:_draw_route_polygon","message":"Point counts","data":{"route_num":route_num,"all_gps":len(all_gps),"sumo_converted":len(sumo_points_original),"dropped":len(all_gps)-len(sumo_points_original)},"timestamp":int(__import__('time').time()*1000)}) + '\n')
@@ -6775,7 +6776,7 @@ class DatasetConversionPage(QWidget):
         new_cy = center_y + center_rx * sin_neg + center_ry * cos_neg
         # #region agent log
         try:
-            with open("/home/guy/Projects/Traffic/Multi-Variant-Simulated-Traffic-Dataset-Creator-and-Model-Tester/.cursor/debug.log", "a") as _f:
+            with open(cursor_debug_path("debug.log"), "a") as _f:
                 _f.write(json.dumps({"hypothesisId":"A","location":"dataset_conversion_page:_expand_box","message":"Expand computation","data":{"min_rx":min_rx,"max_rx":max_rx,"min_ry":min_ry,"max_ry":max_ry,"req_w":req_w,"req_h":req_h,"center_rx":center_rx,"center_ry":center_ry,"new_cx":new_cx,"new_cy":new_cy,"old_cx":center_x,"old_cy":center_y,"angle_deg":math.degrees(angle)},"timestamp":int(__import__('time').time()*1000)}) + '\n')
         except Exception:
             pass

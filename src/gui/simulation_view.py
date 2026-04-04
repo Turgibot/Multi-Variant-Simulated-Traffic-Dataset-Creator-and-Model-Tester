@@ -7,6 +7,7 @@ import urllib.request
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+from src.utils.cursor_debug_log import cursor_debug_path
 from PySide6.QtCore import QPointF, QRectF, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import (QBrush, QColor, QImage, QPainter, QPen, QPixmap,
                            QPolygonF, QWheelEvent)
@@ -672,7 +673,7 @@ class SimulationView(QGraphicsView):
         
         # Get tile coordinates for the boundary
         # #region agent log - Check what bounds are being used
-        with open('/home/guy/Projects/Traffic/Multi-Variant-Simulated-Traffic-Dataset-Creator-and-Model-Tester/.cursor/debug.log', 'a') as f:
+        with open(cursor_debug_path("debug.log"), "a", encoding="utf-8") as f:
             import json
             f.write(json.dumps({"sessionId":"debug-session","runId":"post-fix6","hypothesisId":"H","location":"simulation_view.py:_load_osm_tiles","message":"Tile request bounds comparison","data":{"orig_boundary":orig_boundary,"network_bounds":bounds,"conv_boundary":conv_boundary,"network_gps_bounds":network_gps_bounds,"zoom":zoom},"timestamp":int(__import__('time').time()*1000)}) + '\n')
         # #endregion
@@ -688,7 +689,7 @@ class SimulationView(QGraphicsView):
         )
         
         # #region agent log
-        with open('/home/guy/Projects/Traffic/Multi-Variant-Simulated-Traffic-Dataset-Creator-and-Model-Tester/.cursor/debug.log', 'a') as f:
+        with open(cursor_debug_path("debug.log"), "a", encoding="utf-8") as f:
             import json
             f.write(json.dumps({"sessionId":"debug-session","runId":"post-fix6","hypothesisId":"H","location":"simulation_view.py:_load_osm_tiles","message":"Tile range","data":{"min_tile_x":min_tile_x,"max_tile_x":max_tile_x,"min_tile_y":min_tile_y,"max_tile_y":max_tile_y,"tile_count":(max_tile_x-min_tile_x+1)*(max_tile_y-min_tile_y+1)},"timestamp":int(__import__('time').time()*1000)}) + '\n')
         # #endregion

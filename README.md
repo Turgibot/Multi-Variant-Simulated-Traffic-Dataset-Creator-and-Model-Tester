@@ -1,6 +1,6 @@
-# Multi-Variant Simulated Traffic Dataset Creator
+# Graph Traffic Dataset Creator
 
-A comprehensive cross-platform GUI application for SUMO-based traffic simulation and dataset generation. This tool provides an integrated environment for creating diverse traffic datasets.
+A cross-platform GUI application for SUMO-based traffic simulation and graph traffic dataset generation—from simulated or real trajectories to graph-structured datasets.
 
 ## Features
 
@@ -19,10 +19,10 @@ A comprehensive cross-platform GUI application for SUMO-based traffic simulation
 
 ## Installation
 
-1. Clone the repository:
+1. Clone the repository (suggested directory name):
 ```bash
-git clone <repository-url>
-cd Multi-Variant-Simulated-Traffic-Dataset-Creator-and-Model-Tester
+git clone <repository-url> graph-traffic-dataset-creator
+cd graph-traffic-dataset-creator
 ```
 
 2. Create and activate a virtual environment:

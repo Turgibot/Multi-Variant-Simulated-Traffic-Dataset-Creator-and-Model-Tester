@@ -10,6 +10,8 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+from src.utils.cursor_debug_log import cursor_debug_path
+
 # Try to import pyproj for accurate coordinate conversion
 try:
     import pyproj
@@ -17,7 +19,6 @@ try:
 except ImportError:
     PYPROJ_AVAILABLE = False
 
-DEBUG_LOG_PATH = "/home/guy/Projects/Traffic/Multi-Variant-Simulated-Traffic-Dataset-Creator-and-Model-Tester/.cursor/debug-b2b643.log"
 DEBUG_SESSION_ID = "b2b643"
 
 
@@ -33,7 +34,7 @@ def _write_agent_debug_log(run_id: str, hypothesis_id: str, location: str, messa
             "data": data,
             "timestamp": int(time.time() * 1000),
         }
-        with open(DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
+        with open(cursor_debug_path("debug-b2b643.log"), "a", encoding="utf-8") as f:
             f.write(json.dumps(payload, ensure_ascii=True) + "\n")
     except Exception:
         pass
@@ -470,7 +471,7 @@ class NetworkParser:
                 # If transformation fails, fall back to linear interpolation
                 # #region agent log
                 try:
-                    with open('/home/guy/Projects/Traffic/Multi-Variant-Simulated-Traffic-Dataset-Creator-and-Model-Tester/.cursor/debug.log', 'a') as f:
+                    with open(cursor_debug_path("debug.log"), "a", encoding="utf-8") as f:
                         import json
                         f.write(json.dumps({"sessionId":"debug-session","runId":"proj-fix-v2","hypothesisId":"D","location":"network_parser.py:gps_to_sumo_coords","message":"Pyproj transformation failed, using fallback","data":{"error":str(e),"gps":(lon,lat)},"timestamp":int(__import__('time').time()*1000)}) + '\n')
                 except:
@@ -517,7 +518,7 @@ class NetworkParser:
         y = net_y_min + lat_norm * (net_y_max - net_y_min)
         
         # #region agent log
-        with open('/home/guy/Projects/Traffic/Multi-Variant-Simulated-Traffic-Dataset-Creator-and-Model-Tester/.cursor/debug.log', 'a') as f:
+        with open(cursor_debug_path("debug.log"), "a", encoding="utf-8") as f:
             import json
             f.write(json.dumps({"sessionId":"debug-session","runId":"proj-fix","hypothesisId":"C","location":"network_parser.py:gps_to_sumo_coords","message":"Using linear interpolation fallback","data":{"gps":(lon,lat),"sumo":(x,y),"orig_boundary":self.orig_boundary,"conv_boundary":self.conv_boundary,"bounds":self.bounds,"lon_norm":lon_norm,"lat_norm":lat_norm,"method":"linear","transformer_available":self.transformer is not None,"proj_parameter":self.proj_parameter},"timestamp":int(__import__('time').time()*1000)}) + '\n')
         # #endregion

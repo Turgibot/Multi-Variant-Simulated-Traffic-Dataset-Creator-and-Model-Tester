@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (QDoubleSpinBox, QGraphicsEllipseItem,
 
 from src.gui.simulation_view import SimulationView
 from src.utils.network_parser import NetworkParser
+from src.utils.cursor_debug_log import cursor_debug_path
 from src.utils.project_manager import _get_project_root
 from src.utils.route_finding import apply_trimming as route_apply_trimming
 from src.utils.route_finding import (build_edges_data, build_node_positions,
@@ -33,7 +34,6 @@ from src.utils.trip_validator import (DEFAULT_MAX_SEGMENT_DISTANCE,
                                       split_at_invalid_segments,
                                       validate_trip_segments)
 
-DEBUG_LOG_PATH = "/home/guy/Projects/Traffic/Multi-Variant-Simulated-Traffic-Dataset-Creator-and-Model-Tester/.cursor/debug-b2b643.log"
 DEBUG_SESSION_ID = "b2b643"
 
 
@@ -49,7 +49,7 @@ def _write_agent_debug_log(run_id: str, hypothesis_id: str, location: str, messa
             "data": data,
             "timestamp": int(time.time() * 1000),
         }
-        with open(DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
+        with open(cursor_debug_path("debug-b2b643.log"), "a", encoding="utf-8") as f:
             f.write(json.dumps(payload, ensure_ascii=True) + "\n")
     except Exception:
         pass

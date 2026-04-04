@@ -1,3 +1,10 @@
+[project]
+name = "graph-traffic-dataset-creator"
+version = "0.1.0"
+description = "Graph Traffic Dataset Creator — cross-platform GUI for SUMO simulations and graph traffic datasets."
+readme = "README.md"
+requires-python = ">=3.8"
+
 [tool.black]
 line-length = 100
 target-version = ['py38', 'py39', 'py310', 'py311']

@@ -45,7 +45,7 @@ class WelcomePage(QWidget):
         main_layout.setContentsMargins(30, 20, 30, 20)
         
         # Title section
-        title = QLabel("Traffic Graph Dataset Builder")
+        title = QLabel("Graph Traffic Dataset Creator")
         title_font = QFont()
         title_font.setPointSize(24)
         title_font.setBold(True)
@@ -556,7 +556,7 @@ class MainWindow(QMainWindow):
     
     def init_ui(self):
         """Initialize the main window UI."""
-        self.setWindowTitle("Traffic Graph Dataset Builder")
+        self.setWindowTitle("Graph Traffic Dataset Creator")
         self.setGeometry(100, 100, 1200, 800)
         
         # Set maximum size to screen size to prevent overflow

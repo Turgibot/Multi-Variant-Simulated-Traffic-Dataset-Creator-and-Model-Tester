@@ -1,8 +1,8 @@
-# Multi-Variant Simulated Traffic Dataset Creator and Model Tester
+# Graph Traffic Dataset Creator
 
 ## Project Overview
 
-This is a comprehensive cross-platform GUI application for SUMO-based traffic simulation, dataset generation, and model testing. The tool provides an integrated environment for creating diverse traffic datasets and evaluating prediction models.
+This is a cross-platform GUI application for SUMO-based traffic simulation and graph traffic dataset generation. The tool provides an integrated workflow for building graph-structured traffic datasets from simulations and trajectories (and optional downstream model experimentation).
 
 ## Core Features
 
