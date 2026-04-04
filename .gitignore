@@ -164,5 +164,5 @@ examples/**/*.db-wal
 examples/**/*.db-shm
 examples/**/*.sqlite
 examples/**/*.sqlite3
-# Too large for GitHub (>100 MB); keep locally or obtain separately
+# Generated from porto.net.xml.zip on first run (see ensure_porto_example_net_xml)
 examples/porto_conversion/config/porto.net.xml

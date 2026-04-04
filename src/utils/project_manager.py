@@ -6,6 +6,7 @@ Handles project creation, loading, and registry management.
 import json
 import os
 import sys
+import zipfile
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -59,6 +60,30 @@ def _get_project_root() -> Path:
     return current
 
 
+def ensure_porto_example_net_xml() -> None:
+    """
+    Extract examples/porto_conversion/config/porto.net.xml from the bundled zip if missing.
+    The raw network is large; the repo ships porto.net.xml.zip (~20 MB) instead.
+    """
+    root = _get_project_root()
+    config_dir = root / "examples" / "porto_conversion" / "config"
+    net = config_dir / "porto.net.xml"
+    if net.is_file():
+        return
+    zpath = config_dir / "porto.net.xml.zip"
+    if not zpath.is_file():
+        return
+    try:
+        config_dir.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(zpath, "r") as zf:
+            if "porto.net.xml" not in zf.namelist():
+                return
+            zf.extract("porto.net.xml", config_dir)
+        print(f"DEBUG: extracted {net} from {zpath.name}")
+    except (OSError, zipfile.BadZipFile, KeyError) as e:
+        print(f"DEBUG: could not extract porto.net.xml: {e}")
+
+
 def _print_sample_trajectory(project_root: Path) -> None:
     """Print a single trajectory from CSV in key-value format (key = CSV header)."""
     import csv
@@ -106,6 +131,7 @@ class ProjectManager:
         self.registry_file = self.projects_dir / registry_file
         self.projects_dir.mkdir(exist_ok=True, parents=True)
 
+        ensure_porto_example_net_xml()
         self._ensure_registry()
         
         # Debug output
