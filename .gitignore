@@ -17,6 +17,7 @@ ENV/
 *.virtualenv
 
 # IDE
+.cursor/
 .vscode/
 .idea/
 *.swp
@@ -117,6 +118,7 @@ Desktop.ini
 # Results and outputs
 results/
 outputs/
+step1_analysis_results/
 datasets/generated/
 *.out
 *.err
@@ -133,8 +135,6 @@ site/
 Porto/dataset/train.csv
 
 Porto/dataset/invalid_trips.csv
-2025-12-16-10-43-22/run.bat
-2025-12-16-10-43-22/osm.view.xml
 2025-12-21-10-08-57/osm_bbox.osm.xml.gz
 2025-12-21-10-08-57/osm.net.xml.gz
 2025-12-21-10-08-57/osm.netccfg
