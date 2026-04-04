@@ -5,6 +5,7 @@ Handles project creation, loading, and registry management.
 
 import json
 import os
+import shutil
 import sys
 import zipfile
 from pathlib import Path
@@ -84,6 +85,57 @@ def ensure_porto_example_net_xml() -> None:
         print(f"DEBUG: could not extract porto.net.xml: {e}")
 
 
+def ensure_porto_example_train_csv() -> None:
+    """
+    Extract examples/porto_conversion/data/train.csv from bundled zip (single file or split parts).
+    Large CSV is shipped as train.csv.zip split into ~95 MB parts for Git hosting limits.
+    """
+    root = _get_project_root()
+    data_dir = root / "examples" / "porto_conversion" / "data"
+    train = data_dir / "train.csv"
+    if train.is_file():
+        return
+
+    single = data_dir / "train.csv.zip"
+    parts = sorted(data_dir.glob("train.csv.zip.part*"))
+    temp_zip: Optional[Path] = None
+    zip_path: Optional[Path] = None
+    try:
+        if single.is_file():
+            zip_path = single
+        elif parts:
+            temp_zip = data_dir / ".train_csv_bundle.zip"
+            with open(temp_zip, "wb") as out:
+                for p in parts:
+                    with open(p, "rb") as inf:
+                        shutil.copyfileobj(inf, out)
+            zip_path = temp_zip
+        else:
+            return
+
+        data_dir.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            names = zf.namelist()
+            if "train.csv" not in names:
+                return
+            zf.extract("train.csv", data_dir)
+        print(f"DEBUG: extracted {train} from bundled train.csv.zip (parts)")
+    except (OSError, zipfile.BadZipFile, KeyError) as e:
+        print(f"DEBUG: could not extract train.csv: {e}")
+    finally:
+        if temp_zip is not None and temp_zip.is_file():
+            try:
+                temp_zip.unlink()
+            except OSError:
+                pass
+
+
+def ensure_porto_example_bundled_assets() -> None:
+    """Unpack shipped example artifacts (network, Porto CSVs) once if missing."""
+    ensure_porto_example_net_xml()
+    ensure_porto_example_train_csv()
+
+
 def _print_sample_trajectory(project_root: Path) -> None:
     """Print a single trajectory from CSV in key-value format (key = CSV header)."""
     import csv
@@ -131,7 +183,7 @@ class ProjectManager:
         self.registry_file = self.projects_dir / registry_file
         self.projects_dir.mkdir(exist_ok=True, parents=True)
 
-        ensure_porto_example_net_xml()
+        ensure_porto_example_bundled_assets()
         self._ensure_registry()
         
         # Debug output
