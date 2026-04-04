@@ -532,10 +532,21 @@ class SimulationPage(QWidget):
         
         # Load network if sumocfg is available (after UI is complete)
         self.load_network()
-        self.prepare_simulation_for_start()
 
     def prepare_simulation_for_start(self):
         """Validate DB readiness and clear roads/zones before allowing play."""
+        if self.simulation_running:
+            try:
+                service = SimulationDBService(self.project_name, self.project_path)
+                ready, reason = service.validate_db_readiness_for_current_config()
+                if not ready:
+                    self.log_text.append(f"Simulation DB not ready (during run): {reason}")
+                else:
+                    self.log_text.append("Simulation DB OK (run in progress; skipped clearing roads/zones).")
+            except Exception as exc:
+                self.log_text.append(f"DB readiness check failed (during run): {exc}")
+            return
+
         self.start_btn.setEnabled(False)
         self.status_label.setText("Status: Preparing")
         self.status_label.setStyleSheet("color: #666; padding: 5px 15px; font-size: 14px; font-weight: bold;")

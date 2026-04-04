@@ -869,9 +869,19 @@ class MainWindow(QMainWindow):
             )
             self.simulation_page.back_clicked.connect(self.show_dataset_generation)
             self.central_widget.addWidget(self.simulation_page)
-        
-        # Show simulation page
+        else:
+            # Same project: refresh paths and network so DB readiness matches current files
+            self.simulation_page.project_path = project_path
+            self.simulation_page.sumocfg_path = sumocfg_path
+            self.simulation_page.output_folder = output_folder
+            self.simulation_page.config_manager = SUMOConfigManager(project_path)
+            if not self.simulation_page.simulation_running:
+                self.simulation_page.load_network()
+
+        self.current_project_name = project_name
+        self.current_project_path = project_path
         self.central_widget.setCurrentWidget(self.simulation_page)
+        self.simulation_page.prepare_simulation_for_start()
     
     def show_dataset_generation(self):
         """Show the dataset generation page for the current project."""
