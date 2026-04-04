@@ -4,7 +4,7 @@
   "vehicle_generation": {
     "simulation_weeks": 1,
     "total_num_vehicles": 403848,
-    "dev_fraction": 0.1,
+    "dev_fraction": 1.0,
     "zone_allocation": {
       "A": {
         "percentage": 40.0,
