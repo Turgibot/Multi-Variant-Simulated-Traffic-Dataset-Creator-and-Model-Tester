@@ -14,8 +14,9 @@ A cross-platform GUI application for SUMO-based traffic simulation and graph tra
 ## Requirements
 
 - Python 3.8+
-- SUMO (Simulation of Urban MObility) - [Installation Guide](https://sumo.dlr.de/docs/Installing/index.html)
-- See `requirements.txt` for Python dependencies
+- [uv](https://docs.astral.sh/uv/) (recommended for installs), or `pip` with a virtual environment
+- SUMO (Simulation of Urban MObility) — [installation guide](https://sumo.dlr.de/docs/Installing/index.html)
+- Python packages are listed in `requirements.txt` (runtime) and `requirements-dev.txt` (development)
 
 ## Installation
 
@@ -25,25 +26,55 @@ git clone <repository-url> graph-traffic-dataset-creator
 cd graph-traffic-dataset-creator
 ```
 
-2. Create and activate a virtual environment:
+### Using uv (recommended)
+
+Install uv if you do not have it yet: see [Installing uv](https://docs.astral.sh/uv/getting-started/installation/).
+
+From the project root:
+
+```bash
+uv venv
+uv pip install -r requirements.txt
+```
+
+Optional development tools (formatting, linting, tests):
+
+```bash
+uv pip install -r requirements-dev.txt
+```
+
+`uv venv` creates `.venv` in the project directory. If the repo includes a `.python-version` file, uv uses that Python version when creating the environment.
+
+Run the GUI without activating the venv:
+
+```bash
+uv run python src/main.py
+```
+
+Or activate the environment and run with plain `python`:
+
+```bash
+source .venv/bin/activate   # Linux and macOS
+# .venv\Scripts\activate    # Windows cmd
+python src/main.py
+```
+
+### Using pip (alternative)
+
 ```bash
 python3 -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-```
-
-3. Install dependencies:
-```bash
+source venv/bin/activate   # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
+pip install -r requirements-dev.txt   # optional
+python src/main.py
 ```
 
-4. Install development dependencies (optional):
-```bash
-pip install -r requirements-dev.txt
-```
+### SUMO
 
-5. Install SUMO separately:
-   - Follow the [SUMO installation guide](https://sumo.dlr.de/docs/Installing/index.html)
-   - Ensure SUMO binaries are in your PATH
+Install SUMO separately:
+
+- Follow the [SUMO installation guide](https://sumo.dlr.de/docs/Installing/index.html)
+- Ensure SUMO binaries are on your `PATH`
 
 ## Project Structure
 
@@ -64,26 +95,32 @@ project-root/
 
 ## Development
 
+Install dev dependencies first (`uv pip install -r requirements-dev.txt` or the pip equivalent).
+
 ### Code Formatting
 
 The project uses `black` for code formatting:
+
 ```bash
-black src/ tests/
+uv run black src/ tests/
+# or: black src/ tests/
 ```
 
 ### Linting
 
 Linting is configured with `pylint` and `flake8`:
+
 ```bash
-pylint src/
-flake8 src/
+uv run pylint src/
+uv run flake8 src/
 ```
 
 ### Testing
 
 Run tests with pytest:
+
 ```bash
-pytest
+uv run pytest
 ```
 
 ## Usage
