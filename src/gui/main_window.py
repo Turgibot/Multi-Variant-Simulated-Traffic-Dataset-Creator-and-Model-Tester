@@ -6,7 +6,7 @@ import os
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QRect, Qt, Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont, QIcon, QPixmap
 from PySide6.QtWidgets import (QApplication, QDialog, QFrame, QHBoxLayout, QLabel,
                                QMainWindow, QMessageBox, QPushButton,
@@ -20,32 +20,20 @@ from src.gui.project_dialog import NewProjectDialog
 from src.gui.route_generation_page import RouteGenerationPage
 from src.gui.simulation_page import SimulationPage
 from src.utils.project_paths import to_display_path
-from src.utils.project_manager import ProjectManager, _get_project_root
+from src.utils.project_manager import ProjectManager, _get_project_root, get_app_icon_png_path
 from src.utils.sumo_config_manager import SUMOConfigManager
-
-_APP_ICON_PATH = (
-    Path(__file__).resolve().parent.parent.parent / "assets" / "traffic_app_icon.png"
-)
 
 
 def load_app_icon() -> QIcon:
     """
-    Build a QIcon suitable for window and task/dock tiles.
-
-    The asset is widescreen (non-square); shells expect square icons and otherwise
-    squash or letterbox. We center-crop to a square, then register common px sizes.
+    Build a QIcon from assets/icon.png when present, else assets/app_icon_square_rgba.png.
     """
-    if not _APP_ICON_PATH.is_file():
+    path = get_app_icon_png_path()
+    if not path.is_file():
         return QIcon()
-    pm = QPixmap(str(_APP_ICON_PATH))
+    pm = QPixmap(str(path))
     if pm.isNull():
         return QIcon()
-    w, h = pm.width(), pm.height()
-    if w > 0 and h > 0 and w != h:
-        side = min(w, h)
-        x = max(0, (w - side) // 2)
-        y = max(0, (h - side) // 2)
-        pm = pm.copy(QRect(x, y, side, side))
     icon = QIcon()
     for size in (16, 24, 32, 48, 64, 128, 256, 512):
         scaled = pm.scaled(
@@ -64,7 +52,7 @@ class WelcomePage(QWidget):
     # Signals
     dataset_generation_clicked = Signal(str)  # Emits project name
     new_project_created = Signal(str, str)  # Emits project name and type
-    porto_conversion_clicked = Signal(str)  # Emits project name for Porto conversion
+    porto_conversion_clicked = Signal(str)  # Emits project name for trajectory conversion
     debug_trajectory_clicked = Signal(str)  # Emits project name for debug trajectory page
     
     def __init__(self, parent=None):
@@ -79,23 +67,52 @@ class WelcomePage(QWidget):
         main_layout.setSpacing(15)
         main_layout.setContentsMargins(30, 20, 30, 20)
         
-        # Title section
+        # Title section: app icon top-left (128px); title + subtitle stay visually centered
         title = QLabel("Graph Traffic Dataset Creator")
         title_font = QFont()
         title_font.setPointSize(24)
         title_font.setBold(True)
         title.setFont(title_font)
         title.setAlignment(Qt.AlignCenter)
-        main_layout.addWidget(title)
         
-        # Subtitle
         subtitle = QLabel("Build Graph Traffic Datasets from Simulated or Real Trajectories.")
         subtitle_font = QFont()
         subtitle_font.setPointSize(14)
         subtitle.setFont(subtitle_font)
         subtitle.setAlignment(Qt.AlignCenter)
         subtitle.setStyleSheet("color: #666;")
-        main_layout.addWidget(subtitle)
+        subtitle.setWordWrap(True)
+
+        _icon_sz = 128
+        _icon_px = load_app_icon().pixmap(_icon_sz, _icon_sz)
+
+        title_header = QHBoxLayout()
+        title_header.setSpacing(16)
+
+        title_text_col = QVBoxLayout()
+        title_text_col.setSpacing(4)
+        title_text_col.addWidget(title)
+        title_text_col.addWidget(subtitle)
+        title_center = QWidget()
+        title_center.setLayout(title_text_col)
+
+        if not _icon_px.isNull():
+            icon_lbl = QLabel()
+            icon_lbl.setPixmap(_icon_px)
+            icon_lbl.setFixedSize(_icon_px.size())
+            title_header.addWidget(icon_lbl, 0, Qt.AlignLeft | Qt.AlignTop)
+            title_header.addStretch(1)
+            title_header.addWidget(title_center, 0, Qt.AlignTop)
+            title_header.addStretch(1)
+            balance = QWidget()
+            balance.setFixedWidth(_icon_px.width())
+            title_header.addWidget(balance, 0, Qt.AlignTop)
+        else:
+            title_header.addStretch(1)
+            title_header.addWidget(title_center, 0, Qt.AlignTop)
+            title_header.addStretch(1)
+
+        main_layout.addLayout(title_header)
         
         # Two-column layout for project sections
         projects_columns = QHBoxLayout()
@@ -157,11 +174,11 @@ class WelcomePage(QWidget):
         
         projects_columns.addLayout(sim_section)
         
-        # ========== RIGHT COLUMN: Porto Conversion Projects ==========
+        # ========== RIGHT COLUMN: Trajectory conversion projects ==========
         porto_section = QVBoxLayout()
         porto_section.setSpacing(10)
         
-        # Porto projects header
+        # Trajectory conversion projects header
         porto_header = QHBoxLayout()
         porto_label = QLabel("Trajectory Dataset Conversion Projects")
         porto_label_font = QFont()
@@ -172,7 +189,7 @@ class WelcomePage(QWidget):
         porto_header.addWidget(porto_label)
         porto_header.addStretch()
         
-        # Create Porto project button
+        # Create trajectory conversion project button
         new_porto_btn = QPushButton("+ Create")
         new_porto_btn.setStyleSheet("""
             QPushButton {
@@ -192,7 +209,7 @@ class WelcomePage(QWidget):
         porto_header.addWidget(new_porto_btn)
         porto_section.addLayout(porto_header)
         
-        # Porto projects scroll area
+        # Trajectory conversion projects scroll area
         porto_scroll = QScrollArea()
         porto_scroll.setWidgetResizable(True)
         porto_scroll.setStyleSheet("""
@@ -266,7 +283,7 @@ class WelcomePage(QWidget):
             print(f"ERROR in refresh_simulation_projects: {e}")
     
     def refresh_porto_projects(self):
-        """Refresh the Porto projects list."""
+        """Refresh the trajectory conversion projects list."""
         try:
             if not hasattr(self, 'porto_projects_layout'):
                 return
@@ -277,11 +294,13 @@ class WelcomePage(QWidget):
                 if item.widget():
                     item.widget().deleteLater()
             
-            # Get Porto projects
+            # Get trajectory conversion projects
             projects = self.project_manager.get_all_projects(project_type='porto')
             
             if not projects:
-                empty_label = QLabel("No Porto conversion projects yet.\nClick '+ Create' to get started!")
+                empty_label = QLabel(
+                    "No trajectory conversion projects yet.\nClick '+ Create' to get started!"
+                )
                 empty_label.setAlignment(Qt.AlignCenter)
                 empty_label.setStyleSheet("color: #999; padding: 20px;")
                 self.porto_projects_layout.addWidget(empty_label)
@@ -405,7 +424,7 @@ class WelcomePage(QWidget):
         return card
     
     def create_porto_project_card(self, project: dict) -> QWidget:
-        """Create a Porto conversion project card widget."""
+        """Create a trajectory conversion project card widget."""
         card = QFrame()
         card.setStyleSheet("""
             QFrame {
@@ -541,7 +560,7 @@ class WelcomePage(QWidget):
                 QMessageBox.warning(self, "Error", str(e))
     
     def show_new_porto_project_dialog(self):
-        """Show dialog to create a new Porto conversion project."""
+        """Show dialog to create a new trajectory conversion project."""
         dialog = NewProjectDialog(self, project_type="porto")
         if dialog.exec() == QDialog.Accepted:
             try:
@@ -555,7 +574,7 @@ class WelcomePage(QWidget):
                     QMessageBox.information(
                         self,
                         "Success",
-                        f"Porto conversion project '{dialog.project_name}' created successfully!\n"
+                        f"Trajectory conversion project '{dialog.project_name}' created successfully!\n"
                         f"Location: {to_display_path(project_path, Path.cwd())}"
                     )
                     self.refresh_projects()
@@ -571,7 +590,7 @@ class WelcomePage(QWidget):
     
     def delete_project(self, project_name: str, project_type: str = "simulation"):
         """Delete a project."""
-        type_label = "simulation" if project_type == "simulation" else "Porto conversion"
+        type_label = "simulation" if project_type == "simulation" else "trajectory conversion"
         reply = QMessageBox.question(
             self,
             "Delete Project",
@@ -639,7 +658,7 @@ class MainWindow(QMainWindow):
         self.welcome_page.debug_trajectory_clicked.connect(self.open_debug_trajectory)
         self.central_widget.addWidget(self.welcome_page)
         
-        # Porto conversion page (will be created when needed)
+        # Trajectory conversion page (will be created when needed)
         self.porto_page = None
         
         # Debug trajectory page (will be created when needed)
@@ -900,7 +919,7 @@ class MainWindow(QMainWindow):
             self.open_porto_conversion(project_name)
     
     def open_porto_conversion(self, project_name: str):
-        """Open Porto taxi dataset conversion page for a project."""
+        """Open trajectory dataset conversion page for a project."""
         # Get project info
         project_info = self.welcome_page.project_manager.get_project_info(project_name)
         if not project_info:
@@ -922,12 +941,12 @@ class MainWindow(QMainWindow):
             )
             return
         
-        # Check if we need to recreate the porto page for the current project
+        # Check if we need to recreate the conversion page for the current project
         porto_page_project = None
         if self.porto_page is not None:
             porto_page_project = getattr(self.porto_page, 'project_name', None)
         
-        # Create or reuse Porto conversion page
+        # Create or reuse trajectory conversion page
         if (self.porto_page is None or porto_page_project != project_name):
             # Remove old page if exists
             if self.porto_page is not None:
@@ -940,7 +959,7 @@ class MainWindow(QMainWindow):
             self.porto_page.back_clicked.connect(self.show_welcome)
             self.central_widget.addWidget(self.porto_page)
         
-        # Show Porto conversion page
+        # Show trajectory conversion page
         self.central_widget.setCurrentWidget(self.porto_page)
     
     def open_debug_trajectory(self, project_name: str):

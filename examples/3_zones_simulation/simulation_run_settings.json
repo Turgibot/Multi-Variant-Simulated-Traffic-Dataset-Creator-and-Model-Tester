@@ -1,6 +1,6 @@
 {
   "start_time": "00:00:06:30:00",
-  "end_time": "00:01:06:40:00",
+  "end_time": "00:00:23:50:00",
   "run_in_background": false,
-  "compress_dataset_output": false
+  "compress_dataset_output": true
 }

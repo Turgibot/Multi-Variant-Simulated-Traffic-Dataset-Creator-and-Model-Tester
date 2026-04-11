@@ -1,6 +1,6 @@
 {
-  "name": "porto_conversion",
-  "description": "Example Porto trajectory → graph dataset conversion project",
+  "name": "trajectory_conversion_example",
+  "description": "Example trajectory → graph dataset conversion project",
   "type": "porto",
   "created": "",
   "path": "examples/porto_conversion"

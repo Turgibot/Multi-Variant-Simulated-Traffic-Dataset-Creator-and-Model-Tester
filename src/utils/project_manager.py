@@ -25,8 +25,34 @@ def _resolve_registry_path(path_str: str) -> Path:
         return out
 
 
+def _get_resource_root() -> Path:
+    """
+    Read-only bundle root: PyInstaller extract dir when frozen, else repo root.
+    Use for assets, examples/, and other shipped data. Writable data lives under
+    _get_project_root() when frozen (directory of the executable).
+    """
+    if getattr(sys, "frozen", False):
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            return Path(meipass)
+        return Path(sys.executable).resolve().parent
+    return _get_project_root()
+
+
+def get_app_icon_png_path() -> Path:
+    """Absolute path to the app icon (prefers assets/icon.png, else generated app_icon_square_rgba.png)."""
+    root = _get_resource_root()
+    primary = root / "assets" / "icon.png"
+    if primary.is_file():
+        return primary
+    return root / "assets" / "app_icon_square_rgba.png"
+
+
 def _get_project_root() -> Path:
     """Get the project root directory."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+
     # Strategy 0: anchor to this source tree (stable when cwd is not the repo — e.g. IDE or desktop launcher).
     # This file lives at <root>/src/utils/project_manager.py
     here = Path(__file__).resolve()
@@ -48,7 +74,6 @@ def _get_project_root() -> Path:
         check_dir = check_dir.parent
     
     # Strategy 2: Use sys.path to find where 'src' module is located
-    import sys
     for path_str in sys.path:
         try:
             path = Path(path_str).resolve()
@@ -79,7 +104,7 @@ def ensure_porto_example_net_xml() -> None:
     Extract examples/porto_conversion/config/porto.net.xml from the bundled zip if missing.
     The raw network is large; the repo ships porto.net.xml.zip (~20 MB) instead.
     """
-    root = _get_project_root()
+    root = _get_resource_root()
     config_dir = root / "examples" / "porto_conversion" / "config"
     net = config_dir / "porto.net.xml"
     if net.is_file():
@@ -103,7 +128,7 @@ def ensure_porto_example_train_csv() -> None:
     Extract examples/porto_conversion/data/train.csv from bundled zip (single file or split parts).
     Large CSV is shipped as train.csv.zip split into ~95 MB parts for Git hosting limits.
     """
-    root = _get_project_root()
+    root = _get_resource_root()
     data_dir = root / "examples" / "porto_conversion" / "data"
     train = data_dir / "train.csv"
     if train.is_file():
@@ -210,11 +235,11 @@ class ProjectManager:
             print(f"DEBUG ProjectManager: registry has {len(registry)} projects: {list(registry.keys())}")
 
         # Print a single trajectory in key-value format (key = CSV header)
-        _print_sample_trajectory(_get_project_root())
+        _print_sample_trajectory(_get_resource_root())
     
     def _try_seed_registry_from_examples(self) -> None:
         """If bundled example registry exists, copy it once (when projects registry is missing)."""
-        example = _get_project_root() / "examples" / "projects_registry.json"
+        example = _get_resource_root() / "examples" / "projects_registry.json"
         if not example.is_file():
             return
         try:

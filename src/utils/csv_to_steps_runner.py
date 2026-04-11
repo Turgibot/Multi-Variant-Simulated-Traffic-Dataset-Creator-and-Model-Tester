@@ -154,6 +154,111 @@ def _stream_csv_rows(
                 yield i, polyline, timestamp
 
 
+def _read_csv_header_row(csv_path: Path) -> Tuple[Optional[List[str]], Optional[int]]:
+    """Read header and index of TIMESTAMP column. Returns (None, None) if missing."""
+    with open(csv_path, "r", encoding="utf-8", newline="") as f:
+        reader = csv.reader(f)
+        header = next(reader, None)
+    if not header:
+        return None, None
+    ts_idx = None
+    for i, h in enumerate(header):
+        if str(h).strip('"') == "TIMESTAMP":
+            ts_idx = i
+            break
+    return header, ts_idx
+
+
+def presorted_timestamp_order_error(
+    csv_path: Path,
+    start_traj: int,
+    last_traj: Optional[int],
+    cancelled_callback: Optional[Callable[[], bool]] = None,
+) -> Optional[str]:
+    """
+    When using pre-sorted (file-order) streaming, every data row in range must have
+    non-decreasing TIMESTAMP. Otherwise conversion stops partway without a clear reason.
+    Returns a user-facing message if that fails; None if ok or TIMESTAMP column missing.
+    """
+    _header, ts_idx = _read_csv_header_row(csv_path)
+    if ts_idx is None:
+        return None
+    last_ts_val: Optional[int] = None
+    line_num = 0
+    try:
+        with open(csv_path, "r", encoding="utf-8", newline="") as f:
+            reader = csv.reader(f)
+            next(reader, None)
+            for row in reader:
+                if cancelled_callback and cancelled_callback():
+                    return "Cancelled"
+                line_num += 1
+                if line_num < start_traj:
+                    continue
+                if last_traj is not None and line_num > last_traj:
+                    break
+                if ts_idx >= len(row):
+                    continue
+                try:
+                    ts = int(str(row[ts_idx]).strip('"'))
+                except (ValueError, TypeError):
+                    continue
+                if last_ts_val is not None and ts < last_ts_val:
+                    return (
+                        "CSV rows are not in TIMESTAMP order on disk (required when "
+                        "'Pre-sorted by timestamp' is checked). Times go backward around "
+                        f"data row {line_num}. Uncheck that option to sort first, or use a "
+                        "file already sorted by TIMESTAMP in row order."
+                    )
+                last_ts_val = ts
+    except (OSError, csv.Error) as exc:
+        return f"Could not verify TIMESTAMP order: {exc}"
+    return None
+
+
+def _scan_csv_sort_index(
+    csv_path: Path,
+    start_traj: int,
+    last_traj: Optional[int],
+    ts_idx: Optional[int],
+    total: int,
+    progress_callback: Optional[Callable[[int, int, str], None]],
+    cancelled_callback: Optional[Callable[[], bool]],
+) -> Tuple[List[Tuple[int, int, int]], int]:
+    """
+    First pass: collect sort keys and byte offsets (no full row storage).
+    Each entry is (timestamp_sort_key, source_line_1based, byte_offset_of_line).
+    Returns (entries, last_read_progress) for progress bar continuity.
+    """
+    sort_entries: List[Tuple[int, int, int]] = []
+    current = 0
+    with open(csv_path, "rb") as f:
+        f.readline()  # skip header — offsets must point at data rows only
+        line_num = 0
+        while True:
+            if cancelled_callback and cancelled_callback():
+                return [], current
+            offset = f.tell()
+            line = f.readline()
+            if not line:
+                break
+            line_num += 1
+            if line_num < start_traj:
+                continue
+            if last_traj is not None and line_num > last_traj:
+                break
+            current += 1
+            line_str = line.decode("utf-8", errors="replace")
+            row = next(csv.reader([line_str]))
+            polyline, timestamp = _parse_csv_row(row, ts_idx)
+            if polyline:
+                ts_key = timestamp if timestamp is not None else 0
+                sort_entries.append((ts_key, line_num, offset))
+            if progress_callback and total and current % 100 == 0:
+                progress_callback(min(current, total), total, f"Reading CSV... {current}/{total}")
+    return sort_entries, current
+
+
 def load_and_sort_csv(
     csv_path: Path,
     start_traj: int,
@@ -166,58 +271,60 @@ def load_and_sort_csv(
     """
     Sort CSV by timestamp, then return an iterator that streams one row at a time.
     progress_callback(current, total, message) - total may be 0 when unknown.
-    """
-    rows_with_raw: List[Tuple[List[str], int, Optional[int]]] = []
-    header = None
-    ts_idx = None
 
-    with open(csv_path, "r", encoding="utf-8") as f:
-        reader = csv.reader(f)
-        header = next(reader, None)
-        if not header:
-            return iter([])
-        for i, h in enumerate(header):
-            if str(h).strip('"') == "TIMESTAMP":
-                ts_idx = i
-                break
+    When not pre-sorted, uses a two-pass approach (sort keys + file offsets) so large
+    files do not require holding every row list in memory (avoids multi-GB RAM use).
+    """
+    header, ts_idx = _read_csv_header_row(csv_path)
+    if not header:
+        return iter([])
 
     if is_sorted:
         return _stream_csv_rows(csv_path, start_traj, last_traj, ts_idx)
 
     total = count_csv_rows(csv_path, start_traj, last_traj) or 0
-    with open(csv_path, "r", encoding="utf-8") as f:
-        reader = csv.reader(f)
-        next(reader, None)
-        current = 0
-        for i, row in enumerate(reader, 1):
-            if cancelled_callback and cancelled_callback():
-                return iter([])
-            if i > (last_traj or float("inf")):
-                break
-            if i < start_traj:
-                continue
-            polyline, timestamp = _parse_csv_row(row, ts_idx)
-            if polyline:
-                rows_with_raw.append((row, i, timestamp))
-            current += 1
-            if progress_callback and total and current % 100 == 0:
-                progress_callback(min(current, total), total, f"Reading CSV... {current}/{total}")
+    sort_entries, read_progress = _scan_csv_sort_index(
+        csv_path,
+        start_traj,
+        last_traj,
+        ts_idx,
+        total,
+        progress_callback,
+        cancelled_callback,
+    )
+    if cancelled_callback and cancelled_callback():
+        return iter([])
 
-    if progress_callback:
-        progress_callback(1, 1, "Sorting by timestamp...")
-    rows_with_raw.sort(key=lambda x: (x[2] if x[2] is not None else 0, x[1]))
+    if progress_callback and total:
+        progress_callback(
+            min(read_progress, total),
+            total,
+            "Sorting by timestamp...",
+        )
+    sort_entries.sort(key=lambda x: (x[0], x[1]))
 
     if save_sorted_path is None:
         raise ValueError("save_sorted_path required when sorting")
 
+    n_saved = len(sort_entries)
     save_sorted_path.parent.mkdir(parents=True, exist_ok=True)
     with open(save_sorted_path, "w", encoding="utf-8", newline="") as out:
         writer = csv.writer(out)
         writer.writerow(header)
-        for idx, (raw_row, _, _) in enumerate(rows_with_raw):
-            if progress_callback and total and idx % 100 == 0:
-                progress_callback(min(idx, total), total, f"Saving sorted... {idx}/{len(rows_with_raw)}")
-            writer.writerow(raw_row)
+        with open(csv_path, "rb") as binf:
+            for idx, (_, _, offset) in enumerate(sort_entries):
+                if cancelled_callback and cancelled_callback():
+                    return iter([])
+                binf.seek(offset)
+                raw = binf.readline()
+                row = next(csv.reader([raw.decode("utf-8", errors="replace")]))
+                writer.writerow(row)
+                if progress_callback and n_saved and idx % 100 == 0:
+                    progress_callback(
+                        min(idx, total),
+                        total,
+                        f"Saving sorted... {idx}/{n_saved}",
+                    )
 
     return _stream_sorted_rows(save_sorted_path, ts_idx)
 
@@ -789,6 +896,15 @@ def run_csv_to_steps(
         if progress_callback:
             progress_callback(c, t, m)
 
+    if is_sorted:
+        order_err = presorted_timestamp_order_error(
+            csv_path, start_traj, last_traj, cancelled_callback
+        )
+        if order_err:
+            return 0, 0, order_err
+
+    stream_order_error: List[Optional[str]] = [None]
+
     sorted_rows = load_and_sort_csv(
         csv_path=csv_path,
         start_traj=start_traj,
@@ -859,7 +975,7 @@ def run_csv_to_steps(
 
     def _pop_first() -> Tuple[int, List[Dict[str, Any]]]:
         if _USE_SORTED_DICT:
-            k, v = timestamp_to_vehicles.popitem(last=False)
+            k, v = timestamp_to_vehicles.popitem(0)
             return k, v
         first_ts = min(timestamp_to_vehicles.keys())
         return first_ts, timestamp_to_vehicles.pop(first_ts)
@@ -940,6 +1056,10 @@ def run_csv_to_steps(
                     continue
                 trip_num, polyline, ts, rec = item
                 if last_ts is not None and ts < last_ts:
+                    stream_order_error[0] = (
+                        "Conversion halted: trajectory timestamps went backward (stream no longer "
+                        "time-ordered). With 'Pre-sorted' off, sorting fixes this."
+                    )
                     return None
                 last_ts = ts
                 traj_processed[0] += 1
@@ -954,6 +1074,10 @@ def run_csv_to_steps(
             if ts is None:
                 continue
             if last_ts is not None and ts < last_ts:
+                stream_order_error[0] = (
+                    "Conversion halted: trajectory timestamps went backward (stream no longer "
+                    "time-ordered). With 'Pre-sorted' off, sorting fixes this."
+                )
                 return None
             last_ts = ts
             if network_parser and edges_data:
@@ -1090,5 +1214,10 @@ def run_csv_to_steps(
         _mp_pool.close()
         _mp_pool.join()
 
-    err = "Cancelled" if (cancelled_callback and cancelled_callback()) else ""
+    if stream_order_error[0]:
+        err = stream_order_error[0]
+    elif cancelled_callback and cancelled_callback():
+        err = "Cancelled"
+    else:
+        err = ""
     return steps_emitted[0], traj_processed[0], err

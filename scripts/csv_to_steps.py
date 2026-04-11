@@ -973,6 +973,14 @@ def main():
     if not args.is_sorted and save_sorted_path is None:
         save_sorted_path = args.csv.parent / f"{args.csv.stem}_sorted{args.csv.suffix}"
 
+    if args.is_sorted:
+        from src.utils.csv_to_steps_runner import presorted_timestamp_order_error
+
+        oerr = presorted_timestamp_order_error(args.csv, args.start, args.last, None)
+        if oerr:
+            print(oerr, file=sys.stderr)
+            sys.exit(1)
+
     sorted_rows = load_and_sort_csv(
         csv_path=args.csv,
         start_traj=args.start,
@@ -1043,7 +1051,7 @@ def main():
 
     def _pop_first() -> Tuple[int, List[Dict[str, Any]]]:
         if _USE_SORTED_DICT:
-            k, v = timestamp_to_vehicles.popitem(last=False)
+            k, v = timestamp_to_vehicles.popitem(0)
             return k, v
         first_ts = min(timestamp_to_vehicles.keys())
         return first_ts, timestamp_to_vehicles.pop(first_ts)

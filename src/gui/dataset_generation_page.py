@@ -406,11 +406,12 @@ class DatasetGenerationPage(QWidget):
                 self.config_contents_widget.setVisible(False)
                 return
             
-            # Title
+            # Title (explicit dark text so theme palette does not wash it out)
             title_label = QLabel("Referenced Files:")
             title_font = QFont()
             title_font.setBold(True)
             title_label.setFont(title_font)
+            title_label.setStyleSheet("color: #212121;")
             self.config_contents_layout.addWidget(title_label)
             
             # Display each file type
@@ -444,12 +445,14 @@ class DatasetGenerationPage(QWidget):
                             
                             # File type label
                             type_label = QLabel(f"{display_name}:")
-                            type_label.setStyleSheet("font-weight: bold; min-width: 120px;")
+                            type_label.setStyleSheet(
+                                "font-weight: bold; min-width: 120px; color: #212121;"
+                            )
                             file_layout.addWidget(type_label)
                             
                             # File name
                             name_label = QLabel(file_name)
-                            name_label.setStyleSheet("color: #666;")
+                            name_label.setStyleSheet("color: #212121;")
                             file_layout.addWidget(name_label)
                             
                             file_layout.addStretch()
@@ -497,12 +500,14 @@ class DatasetGenerationPage(QWidget):
                             
                             # File type label
                             type_label = QLabel(f"{display_name}:")
-                            type_label.setStyleSheet("font-weight: bold; min-width: 120px;")
+                            type_label.setStyleSheet(
+                                "font-weight: bold; min-width: 120px; color: #212121;"
+                            )
                             file_layout.addWidget(type_label)
                             
                             # File name
                             name_label = QLabel(file_name)
-                            name_label.setStyleSheet("color: #666;")
+                            name_label.setStyleSheet("color: #212121;")
                             file_layout.addWidget(name_label)
                             
                             file_layout.addStretch()

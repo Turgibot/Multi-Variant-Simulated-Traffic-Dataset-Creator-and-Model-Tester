@@ -370,8 +370,8 @@ class RouteGenerationPage(QWidget):
         self.init_ui()
         self.load_simulation_config_from_project()
         self.load_network()
-        # Load saved zones after network is loaded (but before Porto neighborhoods)
-        # This ensures saved zones are loaded first, then Porto neighborhoods are added if needed
+        # Load saved zones after network is loaded (before any bundled neighborhood presets)
+        # This ensures saved zones are loaded first, then presets are added if needed
         if hasattr(self, 'zones_container'):
             self.load_saved_zones()
             self._restore_route_generation_state()
@@ -560,8 +560,8 @@ class RouteGenerationPage(QWidget):
         self.add_vehicle_type_card("bus", 12.0, 2.5, 3.2, 22.22, "yellow")
         self.add_vehicle_type_card("truck", 8.0, 2.5, 3.0, 25.0, "red")
 
-        # Zone vehicle allocation block (JSON-structured UI)
-        zone_alloc_group = QGroupBox("Zone Vehicle Allocation")
+        # Zone trips allocation block (JSON-structured UI)
+        zone_alloc_group = QGroupBox("Zone Trips Allocation")
         self._set_config_block_style(zone_alloc_group, "#ffe9cc")
         zone_alloc_layout = QVBoxLayout()
         zone_alloc_layout.setSpacing(8)
@@ -3163,7 +3163,7 @@ class RouteGenerationPage(QWidget):
         saved_zones = self.config_manager.load_zones()
         
         for zone_id, zone_data in saved_zones.items():
-            # Skip if already loaded (e.g., Porto neighborhoods)
+            # Skip if already loaded (e.g., neighborhood presets)
             if zone_id in self.zones:
                 # Update areas if they exist
                 if zone_data.get('areas'):

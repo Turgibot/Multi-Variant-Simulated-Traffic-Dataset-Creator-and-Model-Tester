@@ -663,7 +663,7 @@ class SimulationView(QGraphicsView):
         lat_range = network_gps_bounds['lat_max'] - network_gps_bounds['lat_min']
         
         # Choose zoom level (higher = more detail, more tiles)
-        # For Porto area (~0.5 degrees), zoom 13-14 works well
+        # For ~0.5° bbox areas, zoom 13–14 often works well
         if lon_range > 0.3 or lat_range > 0.3:
             zoom = 13
         elif lon_range > 0.1 or lat_range > 0.1:

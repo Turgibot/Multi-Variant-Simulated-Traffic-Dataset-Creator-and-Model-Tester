@@ -47,6 +47,11 @@ DEFAULT_SUMO_HOME = ""
 # Settings file name
 SETTINGS_FILE = "dataset_conversion_settings.json"
 
+# When the map base name field is empty, use this for new downloads/output prefixes.
+DEFAULT_MAP_BASENAME = "map"
+# Bundled / legacy example networks may still use this basename on disk (paths only).
+LEGACY_MAP_BASENAME = "porto"
+
 # Default bounding box coordinates (example area)
 DEFAULT_BBOX = {
     'north': 41.271161,   # max_lat
@@ -196,7 +201,7 @@ class DownloadWorker(QThread):
         output_path: str,
         sumo_home: str = None,
         bbox: dict = None,
-        map_basename: str = "porto",
+        map_basename: Optional[str] = None,
         parent=None,
     ):
         super().__init__(parent)
@@ -204,7 +209,7 @@ class DownloadWorker(QThread):
         self.output_path = output_path
         self.sumo_home = (sumo_home or DEFAULT_SUMO_HOME).strip()
         self.bbox = bbox or dict(DEFAULT_BBOX)
-        self.map_basename = (map_basename or "porto").strip()
+        self.map_basename = (map_basename or DEFAULT_MAP_BASENAME).strip()
         self._is_cancelled = False
     
     def cancel(self):
@@ -737,7 +742,7 @@ class DatasetConversionPage(QWidget):
         
         header_layout.addStretch()
         
-        title = QLabel(f"Trajectory to Graph dataset converstion - {self.project_name}")
+        title = QLabel(f"Trajectory to graph dataset conversion — {self.project_name}")
         title_font = QFont()
         title_font.setPointSize(20)
         title_font.setBold(True)
@@ -1278,8 +1283,8 @@ class DatasetConversionPage(QWidget):
         map_name_layout = QHBoxLayout()
         map_name_layout.addWidget(QLabel("Map file base name:"))
         self.map_name_input = QLineEdit()
-        self.map_name_input.setText("porto")
-        self.map_name_input.setPlaceholderText("e.g., porto, nyc, berlin")
+        self.map_name_input.setText("")
+        self.map_name_input.setPlaceholderText("e.g., berlin, nyc, downtown_a")
         self.map_name_input.setToolTip("Output files will be named <name>.osm/.net.xml/.rou.xml/.sumocfg")
         map_name_layout.addWidget(self.map_name_input, stretch=1)
         map_group_layout.addLayout(map_name_layout)
@@ -1938,8 +1943,12 @@ class DatasetConversionPage(QWidget):
         step_opts_layout = QVBoxLayout()
         step_row1 = QHBoxLayout()
         self.dataset_sorted_check = QCheckBox("Pre-sorted by timestamp")
-        self.dataset_sorted_check.setChecked(True)
-        self.dataset_sorted_check.setToolTip("Assume CSV is already sorted by timestamp. Uncheck to sort before processing.")
+        self.dataset_sorted_check.setChecked(False)
+        self.dataset_sorted_check.setToolTip(
+            "Only if data rows are already ordered by TIMESTAMP ascending in the file "
+            "(line 1 after header ≤ line 2 ≤ …). Most raw trajectory exports are not; leave "
+            "unchecked to sort by time before processing."
+        )
         step_row1.addWidget(self.dataset_sorted_check)
         step_row1.addWidget(QLabel("Sampling (sec):"))
         self.dataset_sampling_spin = QLineEdit()
@@ -2329,7 +2338,7 @@ class DatasetConversionPage(QWidget):
     def _get_map_basename(self) -> str:
         """Get user-selected map base filename."""
         name = self.map_name_input.text().strip() if hasattr(self, "map_name_input") else ""
-        return name or "porto"
+        return name or DEFAULT_MAP_BASENAME
 
     def _get_map_bbox_from_inputs(self) -> dict:
         """Parse bbox inputs and return numeric bbox dictionary."""
@@ -2346,7 +2355,7 @@ class DatasetConversionPage(QWidget):
         config_dir = project_path / "config"
         map_basename = self._get_map_basename()
         configured_net = config_dir / f"{map_basename}.net.xml"
-        legacy_default_net = config_dir / "porto.net.xml"
+        legacy_default_net = config_dir / f"{LEGACY_MAP_BASENAME}.net.xml"
         if configured_net.exists():
             return configured_net
         if legacy_default_net.exists():
@@ -2356,7 +2365,7 @@ class DatasetConversionPage(QWidget):
     def _collect_map_files_to_remove(self) -> List[Path]:
         """Collect generated map files for current/active basenames."""
         config_dir = Path(self.project_path) / "config"
-        basenames = {self._get_map_basename(), "porto"}
+        basenames = {self._get_map_basename(), LEGACY_MAP_BASENAME}
         if self.network_file_path:
             loaded_name = Path(self.network_file_path).name
             if loaded_name.endswith(".net.xml"):
@@ -5867,7 +5876,7 @@ class DatasetConversionPage(QWidget):
         """
         Detect real start and end points by finding where static points end.
         
-        For taxi datasets:
+        For dispatch-style trajectory datasets (e.g. taxi / ride-hail logs):
         - Real start: The last point before movement begins (after static pickup points)
         - Real end: The first point at destination (before static dropoff points)
         

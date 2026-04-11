@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (QDoubleSpinBox, QGraphicsEllipseItem,
 from src.gui.simulation_view import SimulationView
 from src.utils.network_parser import NetworkParser
 from src.utils.cursor_debug_log import cursor_debug_path
-from src.utils.project_manager import _get_project_root
+from src.utils.project_manager import _get_project_root, _get_resource_root
 from src.utils.route_finding import apply_trimming as route_apply_trimming
 from src.utils.route_finding import (build_edges_data, build_node_positions,
                                      compute_green_orange_edges,
@@ -500,7 +500,10 @@ class DebugTrajectoryPage(QWidget):
         
         if not network_file or not network_file.exists():
             self.log("❌ No network file found (.net.xml)")
-            self.log("  Checked: project_info.json, settings.json, config/porto.net.xml, and **/*.net.xml")
+            self.log(
+                "  Checked: project_info.json, settings.json, config/*.net.xml (incl. legacy names), "
+                "and **/*.net.xml"
+            )
             return
         
         self.log(f"Found network: {network_file}")
@@ -548,19 +551,21 @@ class DebugTrajectoryPage(QWidget):
             if not train_csv.exists():
                 train_csv = project_path / "dataset" / "train.csv"
             
-            # Try Porto/dataset/train.csv (use workspace root)
+            # Try Porto/dataset/train.csv (bundled / repo layout)
             if not train_csv.exists():
-                workspace_root = _get_project_root()
+                workspace_root = _get_resource_root()
                 porto_train = workspace_root / 'Porto' / 'dataset' / 'train.csv'
                 if porto_train.exists():
                     train_csv = porto_train
-                    self.log(f"Found train.csv in Porto/dataset: {train_csv}")
+                    self.log(f"Found train.csv in workspace legacy dataset folder: {train_csv}")
                 else:
                     # Also try parent.parent in case project is in a subdirectory
                     porto_train = project_path.parent.parent / 'Porto' / 'dataset' / 'train.csv'
                     if porto_train.exists():
                         train_csv = porto_train
-                        self.log(f"Found train.csv in Porto/dataset (via parent.parent): {train_csv}")
+                        self.log(
+                            f"Found train.csv in legacy dataset folder (via parent.parent): {train_csv}"
+                        )
         
         # Store train_csv path for later use
         self.train_csv_path = train_csv
@@ -1303,9 +1308,9 @@ class DebugTrajectoryPage(QWidget):
             if not train_csv.exists():
                 train_csv = project_path / "dataset" / "train.csv"
             
-            # Try Porto/dataset/train.csv (use workspace root)
+            # Try Porto/dataset/train.csv (bundled / repo layout)
             if not train_csv.exists():
-                workspace_root = _get_project_root()
+                workspace_root = _get_resource_root()
                 porto_train = workspace_root / 'Porto' / 'dataset' / 'train.csv'
                 if porto_train.exists():
                     train_csv = porto_train
@@ -1317,7 +1322,10 @@ class DebugTrajectoryPage(QWidget):
         
         if not train_csv or not train_csv.exists():
             self.log("❌ train.csv not found")
-            self.log("  Checked: project_info.json, settings.json, train.csv, dataset/train.csv, Porto/dataset/train.csv")
+            self.log(
+                "  Checked: project_info.json, settings.json, train.csv, dataset/train.csv, "
+                "and workspace legacy dataset folders"
+            )
             return
         
         # Validate trajectory number against available trajectories
@@ -2303,7 +2311,7 @@ class DebugTrajectoryPage(QWidget):
                 # If distance is reasonable (not too small), use it
                 # Otherwise assume 1:1 mapping
                 if sumo_dist > 10:  # If distance is more than 10 SUMO units
-                    # Estimate: for Porto area, typical GPS-to-SUMO conversion
+                    # Typical urban network: GPS-to-SUMO units often ~meters (1:1)
                     # is approximately 1:1 (meters), but can vary
                     # Use a conservative estimate
                     meters_per_sumo_unit = 1.0

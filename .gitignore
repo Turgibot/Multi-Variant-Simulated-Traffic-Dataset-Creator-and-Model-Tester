@@ -135,6 +135,9 @@ docs/_build/
 docs/.doctrees/
 site/
 
+# LaTeX (Academia/)
+Academia/
+
 # Profiling data
 *.prof
 *.lprof

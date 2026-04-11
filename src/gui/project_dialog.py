@@ -21,9 +21,12 @@ class NewProjectDialog(QDialog):
         
         # Set title based on project type
         if project_type == "porto":
-            self.setWindowTitle("Create Porto Conversion Project")
-            self.title_text = "Create Porto Conversion Project"
-            self.description_hint = "Project for converting Porto taxi GPS data to traffic simulation..."
+            self.setWindowTitle("Create Trajectory Conversion Project")
+            self.title_text = "Create Trajectory Conversion Project"
+            self.description_hint = (
+                "Project for converting real-world GPS trajectories into graph-structured "
+                "datasets for traffic simulation..."
+            )
         else:
             self.setWindowTitle("Create Simulation Project")
             self.title_text = "Create Simulation Project"
@@ -49,7 +52,7 @@ class NewProjectDialog(QDialog):
         
         # Project type indicator
         if self.project_type == "porto":
-            type_label = QLabel("Porto Taxi Dataset Conversion")
+            type_label = QLabel("Real trajectory → graph dataset conversion")
             type_label.setStyleSheet("color: #FF9800; font-size: 12px; font-weight: bold; padding: 5px; background-color: #FFF3E0; border-radius: 3px;")
         else:
             type_label = QLabel("SUMO Traffic Simulation")
@@ -67,8 +70,7 @@ class NewProjectDialog(QDialog):
         
         # Project description
         desc_label = QLabel("Description (optional):")
-        if _tp:
-            desc_label.setStyleSheet(_tp)
+        desc_label.setStyleSheet("color: #212121;")
         layout.addWidget(desc_label)
         
         self.desc_input = QTextEdit()

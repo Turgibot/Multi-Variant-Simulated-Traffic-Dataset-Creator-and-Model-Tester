@@ -1,5 +1,5 @@
 {
-  "porto_conversion": {
+  "trajectory_conversion_example": {
     "path": "examples/porto_conversion",
     "type": "porto"
   },

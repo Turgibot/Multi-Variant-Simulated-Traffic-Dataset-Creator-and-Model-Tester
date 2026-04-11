@@ -167,9 +167,10 @@ def main():
     app = QApplication.instance()
     if app is None:
         app = QApplication(sys.argv)
-    # Ubuntu/GNOME dock uses the Freedesktop entry + _NET_WM_DESKTOP_FILE_NAME,
-    # not only setWindowIcon — pair this with scripts/install_linux_desktop_entry.sh.
-    app.setApplicationName("Graph Traffic Dataset Creator")
+    # Freedesktop: applicationName matches StartupWMClass in
+    # scripts/install_linux_desktop_entry.sh so the shell uses the right .desktop icon.
+    app.setApplicationName("graph-traffic-dataset-creator")
+    app.setApplicationDisplayName("Graph Traffic Dataset Creator")
     app.setDesktopFileName("graph-traffic-dataset-creator")
     app_icon = load_app_icon()
     if not app_icon.isNull():
