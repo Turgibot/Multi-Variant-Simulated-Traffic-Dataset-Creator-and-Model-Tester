@@ -1,0 +1,34 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# SUMO + deps (required: backend imports start simulation at startup)
+RUN apt-get update && apt-get install -y \
+    wget \
+    build-essential \
+    libxerces-c-dev \
+    libproj-dev \
+    libgdal-dev \
+    libfox-1.6-dev \
+    libgl1-mesa-dev \
+    libglu1-mesa-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN apt-get update && apt-get install -y sumo sumo-tools && \
+    rm -rf /var/lib/apt/lists/*
+
+ENV PATH="/usr/share/sumo/bin:${PATH}"
+ENV SUMO_HOME="/usr/share/sumo"
+
+ENV PIP_DEFAULT_TIMEOUT=1200
+COPY requirements.txt .
+RUN pip install --no-cache-dir --retries 10 \
+    torch==2.1.0 --index-url https://download.pytorch.org/whl/cpu \
+ && pip install --no-cache-dir --retries 10 -r requirements.txt \
+    -f https://data.pyg.org/whl/torch-2.1.0+cpu.html
+
+COPY . .
+
+EXPOSE 8000
+
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

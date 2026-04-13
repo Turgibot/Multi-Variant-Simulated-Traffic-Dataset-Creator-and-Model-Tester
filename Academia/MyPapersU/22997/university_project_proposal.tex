@@ -1,0 +1,517 @@
+\documentclass[12pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[english]{babel}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+\usepackage{cite}
+\usepackage{booktabs}
+\usepackage{siunitx}
+\usepackage{microtype}
+\usepackage{url}
+\usepackage[hidelinks]{hyperref}
+\usepackage{geometry}
+\usepackage{enumitem}
+\usepackage{tikz}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{fancyhdr}
+
+\geometry{margin=2.5cm}
+
+% Header and footer
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{The Open University - Advanced Project Proposal}
+\fancyhead[R]{Guy Tordjman}
+\fancyfoot[C]{\thepage}
+
+% Title and author information now handled by cover page
+
+\begin{document}
+
+% Include cover page
+\input{cover}
+
+\section{Project Information}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{|l|l|}
+\hline
+\textbf{Project Title} & Real-Time Web-Based Testing System for Dynamic Route-Aware Graph Neural Networks in Traffic Simulation \\
+\hline
+\textbf{Student Name} & Guy Tordjman \\
+\hline
+\textbf{Student ID} & [To be provided] \\
+\hline
+\textbf{Email} & turgibot@gmail.com \\
+\hline
+\textbf{Supervisor} & Dr. Yonatan Ofir \\
+\hline
+\textbf{Course Code} & 22997 - Advanced Project in Computer Science \\
+\hline
+\textbf{Project Duration} & 16 weeks (4 months) \\
+\hline
+\textbf{Start Date} & [To be determined] \\
+\hline
+\textbf{End Date} & [To be determined] \\
+\hline
+\textbf{Project Type} & Software Development and Research \\
+\hline
+\textbf{Human Subjects} & No \\
+\hline
+\textbf{Ethics Approval Required} & No \\
+\hline
+\end{tabular}
+\caption{Project Information}
+\label{tab:project_info}
+\end{table}
+
+\section{Abstract}
+
+This project aims to develop a comprehensive real-time web-based testing system for the Dynamic Route-Aware Graph Neural Networks (DSTRA-GNN) model, previously developed and published in IEEE Transactions on Intelligent Transportation Systems. The system will provide an interactive platform for users to test Estimated Time of Arrival (ETA) predictions in realistic traffic simulations, enabling real-time evaluation of the model's performance through a web browser interface.
+
+The proposed system will integrate SUMO traffic simulation with the DSTRA-GNN model, create dynamic graphs representing vehicle and junction relationships, and provide real-time ETA predictions. Users will be able to select routes through an interactive web interface, receive model predictions, and compare them with actual travel times from the simulation. The system will collect comprehensive data on prediction accuracy and provide real-time statistical analysis and visualization.
+
+The project addresses a critical gap in the practical application of graph neural networks for traffic prediction, providing a bridge between theoretical research and real-world implementation. The system will serve as a valuable tool for researchers and practitioners in intelligent transportation systems, enabling continuous evaluation and improvement of ETA prediction models.
+
+\section{Introduction and Background}
+
+\subsection{Context and Motivation}
+
+Accurate Estimated Time of Arrival (ETA) prediction is fundamental to modern navigation systems and intelligent transportation applications. The DSTRA-GNN model, developed in previous research, represents a significant advancement in this field by integrating vehicle-level dynamics, junction states, and explicit route intent within a unified Mixture-of-Experts framework.
+
+The model achieved remarkable performance improvements, reducing Mean Absolute Error (MAE) from 260 seconds to 46 seconds (82\% improvement) on large-scale simulated traffic datasets. However, while the model has demonstrated excellent performance in offline evaluation scenarios, there is a critical need for real-time testing capabilities that allow users to interact with the model and evaluate its performance in realistic traffic conditions.
+
+\subsection{Problem Statement}
+
+Current ETA prediction systems face several limitations:
+
+\begin{enumerate}
+    \item \textbf{Lack of Real-time Testing}: Most models are evaluated offline on historical data, limiting their practical applicability
+    \item \textbf{Insufficient User Interaction}: Users cannot interact with prediction models to test different scenarios
+    \item \textbf{Limited Real-world Validation}: Models are not tested in realistic, dynamic traffic environments
+    \item \textbf{Poor Accessibility}: Testing systems are not accessible to a broad range of users
+    \item \textbf{Inadequate Data Collection}: Limited collection of real-time performance data for model improvement
+\end{enumerate}
+
+\subsection{Research Questions}
+
+This project addresses the following key research questions:
+
+\begin{enumerate}
+    \item How can DSTRA-GNN models be effectively integrated into real-time web-based testing systems?
+    \item What is the optimal architecture for real-time traffic simulation and prediction integration?
+    \item How can user interaction be effectively incorporated into ETA prediction testing?
+    \item What are the performance characteristics of DSTRA-GNN models in real-time scenarios?
+    \item How can real-time data collection and analysis improve model performance?
+\end{enumerate}
+
+\section{Literature Review}
+
+\subsection{Graph Neural Networks in Traffic Prediction}
+
+Graph Neural Networks (GNNs) have emerged as powerful tools for traffic prediction due to their ability to model complex spatial and temporal relationships in transportation networks. Recent work has shown significant improvements over traditional methods:
+
+\begin{itemize}
+    \item \textbf{DCRNN} (Li et al., 2018): Introduced diffusion convolution for traffic prediction
+    \item \textbf{ST-GCN} (Yu et al., 2018): Applied graph convolution to spatio-temporal data
+    \item \textbf{Graph WaveNet} (Wu et al., 2019): Combined graph convolution with dilated convolution
+\end{itemize}
+
+\subsection{Real-time Traffic Simulation}
+
+SUMO (Simulation of Urban Mobility) has become the standard platform for traffic simulation research:
+
+\begin{itemize}
+    \item \textbf{SUMO} (Lopez et al., 2018): Comprehensive traffic simulation suite
+    \item \textbf{TraCI} (Wegener et al., 2008): Traffic Control Interface for real-time interaction
+    \item \textbf{Python-SUMO} (Behrisch et al., 2011): Python bindings for SUMO integration
+\end{itemize}
+
+\subsection{Web-based Traffic Systems}
+
+Recent developments in web-based traffic systems include:
+
+\begin{itemize}
+    \item \textbf{Google Maps} (Derrow, 2021): Real-time traffic visualization and routing
+    \item \textbf{Waze} (Hoseinzadeh et al., 2020): Community-based traffic information
+    \item \textbf{OpenStreetMap} (Haklay \& Weber, 2008): Open-source mapping platform
+\end{itemize}
+
+\subsection{Research Gap}
+
+While significant progress has been made in individual components, there is a lack of integrated systems that combine:
+\begin{itemize}
+    \item Real-time traffic simulation
+    \item Advanced GNN models
+    \item Web-based user interfaces
+    \item Comprehensive data collection and analysis
+\end{itemize}
+
+\section{Project Objectives}
+
+\subsection{Primary Objectives}
+
+\begin{enumerate}
+    \item \textbf{System Development}: Develop a comprehensive real-time web-based testing system for DSTRA-GNN models
+    \item \textbf{Integration}: Integrate SUMO traffic simulation with DSTRA-GNN model for realistic traffic scenarios
+    \item \textbf{User Interface}: Create an interactive web interface for user route planning and ETA prediction
+    \item \textbf{Data Collection}: Implement real-time data collection and statistical analysis capabilities
+    \item \textbf{Performance Evaluation}: Build a comprehensive database system for storing and analyzing prediction results
+\end{enumerate}
+
+\subsection{Secondary Objectives}
+
+\begin{enumerate}
+    \item \textbf{Visualization}: Develop visualization tools for real-time traffic monitoring and analysis
+    \item \textbf{Reporting}: Create automated reporting systems for model performance evaluation
+    \item \textbf{Accessibility}: Implement user authentication and session management
+    \item \textbf{Compatibility}: Design responsive web interface for multiple device compatibility
+    \item \textbf{Integration}: Establish API endpoints for potential integration with external systems
+\end{enumerate}
+
+\section{Methodology}
+
+\subsection{System Architecture}
+
+The proposed system follows a microservices architecture with the following main components:
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[node distance=1.5cm, auto]
+    % Frontend Layer
+    \node[draw, rectangle, fill=blue!20, minimum width=3cm, text width=2.8cm, align=center] (frontend) {Web Frontend\\Vue.js + TypeScript};
+    
+    % API Gateway
+    \node[draw, rectangle, fill=green!20, below of=frontend, minimum width=3cm, text width=2.8cm, align=center] (gateway) {API Gateway\\FastAPI + WebSocket};
+    
+    % Core Services
+    \node[draw, rectangle, fill=yellow!20, below left of=gateway, minimum width=2.5cm, text width=2.3cm, align=center] (sim) {SUMO Service\\Python + SUMO};
+    \node[draw, rectangle, fill=yellow!20, below of=gateway, minimum width=2.5cm, text width=2.3cm, align=center] (model) {Model Service\\PyTorch + DSTRA-GNN};
+    \node[draw, rectangle, fill=yellow!20, below right of=gateway, minimum width=2.5cm, text width=2.3cm, align=center] (analytics) {Analytics Service\\Python + Pandas};
+    
+    % Data Layer
+    \node[draw, rectangle, fill=red!20, below of=sim, minimum width=2cm, text width=1.8cm, align=center] (postgres) {PostgreSQL\\Structured Data};
+    \node[draw, rectangle, fill=red!20, below of=model, minimum width=2cm, text width=1.8cm, align=center] (influx) {InfluxDB\\Time Series};
+    \node[draw, rectangle, fill=red!20, below of=analytics, minimum width=2cm, text width=1.8cm, align=center] (redis) {Redis\\Cache};
+    
+    % Connections
+    \draw[<->] (frontend) -- (gateway);
+    \draw[<->] (gateway) -- (sim);
+    \draw[<->] (gateway) -- (model);
+    \draw[<->] (gateway) -- (analytics);
+    \draw[<->] (sim) -- (postgres);
+    \draw[<->] (model) -- (postgres);
+    \draw[<->] (analytics) -- (influx);
+    \draw[<->] (analytics) -- (redis);
+\end{tikzpicture}
+\caption{System Architecture Overview}
+\label{fig:architecture}
+\end{figure}
+
+\subsection{Technical Implementation}
+
+\subsubsection{Web Frontend}
+\begin{itemize}
+    \item \textbf{Technology}: Vue.js 18+ with TypeScript
+    \item \textbf{Features}: Interactive route selection, real-time traffic visualization, ETA prediction display
+    \item \textbf{Integration}: Mapbox GL JS for maps, Plotly.js for visualization
+\end{itemize}
+
+\subsubsection{Backend Services}
+\begin{itemize}
+    \item \textbf{API Server}: FastAPI with WebSocket support
+    \item \textbf{SUMO Integration}: Python-SUMO interface for traffic simulation
+    \item \textbf{Model Server}: PyTorch-based DSTRA-GNN inference engine
+\end{itemize}
+
+\subsubsection{Data Management}
+\begin{itemize}
+    \item \textbf{Database}: PostgreSQL for structured data, InfluxDB for time series
+    \item \textbf{Cache}: Redis for high-speed data access
+    \item \textbf{Storage}: MinIO for simulation data and model artifacts
+\end{itemize}
+
+\subsection{Development Methodology}
+
+The project follows an agile development methodology with four main phases:
+
+\begin{enumerate}
+    \item \textbf{Phase 1: Foundation} (Weeks 1-4): Environment setup, basic infrastructure
+    \item \textbf{Phase 2: Core Integration} (Weeks 5-8): SUMO integration, model deployment
+    \item \textbf{Phase 3: Advanced Features} (Weeks 9-12): Analytics, visualization, optimization
+    \item \textbf{Phase 4: Testing \& Deployment} (Weeks 13-16): Testing, deployment, documentation
+\end{enumerate}
+
+\section{Expected Outcomes and Deliverables}
+
+\subsection{Primary Deliverables}
+
+\begin{enumerate}
+    \item \textbf{Web-based Testing System}: Fully functional real-time testing platform
+    \item \textbf{SUMO Integration}: Complete integration with traffic simulation
+    \item \textbf{DSTRA-GNN Deployment}: Real-time model inference system
+    \item \textbf{Data Collection System}: Comprehensive data collection and storage
+    \item \textbf{Analytics Platform}: Real-time statistical analysis and visualization
+    \item \textbf{Documentation}: Complete technical and user documentation
+\end{enumerate}
+
+\subsection{Research Contributions}
+
+\begin{enumerate}
+    \item \textbf{Novel Architecture}: First real-time web-based testing system for DSTRA-GNN models
+    \item \textbf{Integration Framework}: Comprehensive framework for SUMO and deep learning integration
+    \item \textbf{User Interface}: Interactive platform for traffic analysis and prediction testing
+    \item \textbf{Evaluation Methodology}: New methodology for real-time model evaluation
+    \item \textbf{Open Source Tools}: Contribute to the research community
+\end{enumerate}
+
+\subsection{Expected Impact}
+
+\begin{enumerate}
+    \item \textbf{Research Community}: Provide tools for traffic prediction research
+    \item \textbf{Industry}: Enable practical application of GNN models
+    \item \textbf{Education}: Create learning resources for students and researchers
+    \item \textbf{Policy}: Support evidence-based transportation planning
+\end{enumerate}
+
+\section{Technical Requirements}
+
+\subsection{Hardware Requirements}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{|l|l|l|}
+\hline
+\textbf{Component} & \textbf{Minimum} & \textbf{Recommended} \\
+\hline
+CPU & 8 cores, 2.5GHz & 16 cores, 3.0GHz \\
+RAM & 32GB & 64GB \\
+GPU & RTX 3080 & RTX 4090 \\
+Storage & 500GB SSD & 1TB SSD + 2TB HDD \\
+Network & 100 Mbps & 1 Gbps \\
+\hline
+\end{tabular}
+\caption{Hardware Requirements}
+\label{tab:hardware}
+\end{table}
+
+\subsection{Software Requirements}
+
+\begin{itemize}
+    \item \textbf{Operating System}: Ubuntu 20.04 LTS or later
+    \item \textbf{Containerization}: Docker and Docker Compose
+    \item \textbf{Database}: PostgreSQL 13+, InfluxDB 2.0+, Redis 6+
+    \item \textbf{Simulation}: SUMO 1.15.0 or later
+    \item \textbf{ML Framework}: PyTorch 1.12+, CUDA 11.6+
+    \item \textbf{Web Technologies}: Node.js 18+, Vue 18+, TypeScript 4.8+
+\end{itemize}
+
+\section{Risk Assessment and Mitigation}
+
+\subsection{Technical Risks}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{|l|l|l|l|}
+\hline
+\textbf{Risk} & \textbf{Probability} & \textbf{Impact} & \textbf{Mitigation Strategy} \\
+\hline
+SUMO Integration Issues & Medium & High & Early prototyping, expert consultation \\
+Model Performance & Medium & High & Performance testing, optimization \\
+Real-time Latency & High & Medium & Caching, optimization, load balancing \\
+Database Performance & Medium & Medium & Query optimization, indexing \\
+WebSocket Scalability & Medium & Medium & Load testing, connection pooling \\
+\hline
+\end{tabular}
+\caption{Technical Risk Assessment}
+\label{tab:technical_risks}
+\end{table}
+
+\subsection{Project Risks}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{|l|l|l|l|}
+\hline
+\textbf{Risk} & \textbf{Probability} & \textbf{Impact} & \textbf{Mitigation Strategy} \\
+\hline
+Timeline Delays & Medium & High & Agile development, regular reviews \\
+Resource Availability & Low & High & Backup resources, cross-training \\
+Scope Creep & Medium & Medium & Clear requirements, change control \\
+Budget Overrun & Low & Medium & Regular monitoring, cost control \\
+\hline
+\end{tabular}
+\caption{Project Risk Assessment}
+\label{tab:project_risks}
+\end{table}
+
+\section{Timeline and Milestones}
+
+\subsection{Project Timeline}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{|l|l|l|l|}
+\hline
+\textbf{Phase} & \textbf{Duration} & \textbf{Key Milestones} & \textbf{Deliverables} \\
+\hline
+Phase 1: Foundation & 4 weeks & Basic system setup & Development environment \\
+Phase 2: Core Integration & 4 weeks & ETA prediction working & Core functionality \\
+Phase 3: Advanced Features & 4 weeks & Full system features & Complete system \\
+Phase 4: Testing \& Deployment & 4 weeks & Production ready & Deployed system \\
+\hline
+\end{tabular}
+\caption{Project Timeline}
+\label{tab:timeline}
+\end{table}
+
+\subsection{Key Milestones}
+
+\begin{enumerate}
+    \item \textbf{Week 4}: Basic system infrastructure and SUMO integration
+    \item \textbf{Week 8}: DSTRA-GNN model integration and ETA prediction
+    \item \textbf{Week 12}: Complete web interface and analytics system
+    \item \textbf{Week 16}: Production deployment and documentation
+\end{enumerate}
+
+\section{Resource Requirements}
+
+\subsection{Personnel}
+
+\begin{itemize}
+    \item \textbf{Student}: Guy Tordjman (Full-time, 16 weeks)
+    \item \textbf{Supervisor}: Dr. Yonatan Ofir (Guidance and review)
+    \item \textbf{External Consultant}: SUMO expert (10 hours)
+    \item \textbf{Technical Reviewer}: ML expert (5 hours)
+\end{itemize}
+
+\subsection{Infrastructure}
+
+\begin{itemize}
+    \item \textbf{Development Environment}: Cloud-based development servers
+    \item \textbf{Production Environment}: High-performance computing resources
+    \item \textbf{Database Services}: Managed database services
+    \item \textbf{Storage}: Cloud storage for data and models
+\end{itemize}
+
+\subsection{Budget Estimate}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{|l|l|l|}
+\hline
+\textbf{Category} & \textbf{Item} & \textbf{Cost} \\
+\hline
+Infrastructure & Cloud computing (16 weeks) & \$2,000 \\
+Software & Development tools and licenses & \$500 \\
+Hardware & GPU server rental & \$1,500 \\
+Consulting & External experts & \$1,000 \\
+Miscellaneous & Other expenses & \$500 \\
+\hline
+\textbf{Total} & & \textbf{\$5,500} \\
+\hline
+\end{tabular}
+\caption{Budget Estimate}
+\label{tab:budget}
+\end{table}
+
+\section{Evaluation Criteria}
+
+\subsection{Technical Success Criteria}
+
+\begin{enumerate}
+    \item System successfully integrates DSTRA-GNN model with SUMO simulation
+    \item Real-time ETA predictions with latency < 100ms
+    \item Web interface supports 100+ concurrent users
+    \item Database handles 10,000+ writes per second
+    \item System achieves 99.9\% uptime
+\end{enumerate}
+
+\subsection{Functional Success Criteria}
+
+\begin{enumerate}
+    \item Users can select routes and receive ETA predictions
+    \item Real-time traffic visualization works correctly
+    \item Statistical analysis provides meaningful insights
+    \item System collects and stores all prediction data
+    \item User interface is intuitive and responsive
+\end{enumerate}
+
+\subsection{Research Success Criteria}
+
+\begin{enumerate}
+    \item System enables real-time evaluation of GNN models
+    \item Data collection provides insights for model improvement
+    \item System serves as a platform for future research
+    \item Results contribute to the scientific community
+    \item System is adopted by other researchers
+\end{enumerate}
+
+\section{Ethics and Compliance}
+
+\subsection{Human Subjects}
+
+This project does not involve human subjects. All testing will be conducted using simulated traffic data and synthetic user interactions.
+
+\subsection{Data Privacy}
+
+\begin{itemize}
+    \item No personal data will be collected
+    \item All data will be anonymized
+    \item Data will be stored securely
+    \item Access will be restricted to authorized personnel
+\end{itemize}
+
+\subsection{Intellectual Property}
+
+\begin{itemize}
+    \item Project builds on existing DSTRA-GNN research
+    \item New contributions will be properly attributed
+    \item Open source components will be used where possible
+    \item Results will be published in academic venues
+\end{itemize}
+
+\section{Conclusion}
+
+This project represents a significant advancement in the practical application of graph neural networks for traffic prediction. By creating a real-time, web-based testing system, we will not only validate the effectiveness of the DSTRA-GNN model but also provide a valuable tool for researchers and practitioners in the field of intelligent transportation systems.
+
+The proposed system will bridge the gap between theoretical research and practical application, enabling real-world testing and continuous improvement of ETA prediction models. The comprehensive data collection and analysis capabilities will provide valuable insights for future research and development in this critical area of transportation technology.
+
+The project aligns with the Open University's mission of advancing knowledge through research and providing practical solutions to real-world problems. The expected outcomes will contribute to the scientific community while providing immediate practical value to the transportation industry.
+
+\section{References}
+
+\begin{enumerate}
+    \item Tordjman, G., \& Voloch, N. (2025). Dynamic Route-Aware Graph Neural Networks for Accurate ETA Prediction. \textit{IEEE Transactions on Intelligent Transportation Systems}.
+    \item Li, Y., Yu, R., Shahabi, C., \& Liu, Y. (2018). Diffusion convolutional recurrent neural network: Data-driven traffic forecasting. \textit{ICLR}.
+    \item Yu, B., Yin, H., \& Zhu, Z. (2018). Spatio-temporal graph convolutional networks: A deep learning framework for traffic forecasting. \textit{IJCAI}.
+    \item Wu, Z., Pan, S., Long, G., Jiang, J., \& Zhang, C. (2019). Graph wavenet for deep spatial-temporal graph modeling. \textit{IJCAI}.
+    \item Lopez, P. A., Behrisch, M., Bieker-Walz, L., Erdmann, J., Flötteröd, Y. P., Hilbrich, R., ... \& Wießner, E. (2018). Microscopic traffic simulation using sumo. \textit{ITSC}.
+    \item Wegener, A., Piórkowski, M., Raya, M., Füßler, H., Hellbrück, H., Fischer, S., \& Hubaux, J. P. (2008). TraCI: an interface for coupling road traffic and network simulators. \textit{Communication networks and distributed systems modeling and simulation}.
+    \item Behrisch, M., Bieker, L., Erdmann, J., \& Krajzewicz, D. (2011). SUMO–simulation of urban mobility: an overview. \textit{SIMUL}.
+    \item Derrow, M. (2021). Google Maps: The world's most detailed globe. \textit{Google Blog}.
+    \item Hoseinzadeh, N., Allen, J., \& Khosravi, A. (2020). Waze traffic prediction using machine learning algorithms. \textit{ITSC}.
+    \item Haklay, M., \& Weber, P. (2008). OpenStreetMap: User-generated street maps. \textit{IEEE Pervasive Computing}.
+\end{enumerate}
+
+\section{Appendices}
+
+\subsection{Appendix A: Technical Architecture Details}
+
+[Detailed technical specifications would be included here]
+
+\subsection{Appendix B: Database Schema}
+
+[Complete database schema would be included here]
+
+\subsection{Appendix C: API Documentation}
+
+[API endpoint documentation would be included here]
+
+\subsection{Appendix D: User Interface Mockups}
+
+[User interface designs would be included here]
+
+\end{document}

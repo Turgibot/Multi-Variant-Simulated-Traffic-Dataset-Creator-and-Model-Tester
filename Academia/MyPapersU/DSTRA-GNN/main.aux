@@ -1,0 +1,137 @@
+\relax 
+\providecommand\hyper@newdestlabel[2]{}
+\providecommand\HyperFirstAtBeginDocument{\AtBeginDocument}
+\HyperFirstAtBeginDocument{\ifx\hyper@anchor\@undefined
+\global\let\oldcontentsline\contentsline
+\gdef\contentsline#1#2#3#4{\oldcontentsline{#1}{#2}{#3}}
+\global\let\oldnewlabel\newlabel
+\gdef\newlabel#1#2{\newlabelxx{#1}#2}
+\gdef\newlabelxx#1#2#3#4#5#6{\oldnewlabel{#1}{{#2}{#3}}}
+\AtEndDocument{\ifx\hyper@anchor\@undefined
+\let\contentsline\oldcontentsline
+\let\newlabel\oldnewlabel
+\fi}
+\fi}
+\global\let\hyper@last\relax 
+\gdef\HyperFirstAtBeginDocument#1{#1}
+\providecommand\HyField@AuxAddToFields[1]{}
+\providecommand\HyField@AuxAddToCoFields[2]{}
+\citation{derrowpinion2021googlemaps,hoseinzadeh2020waze,amin-naseri2018waze}
+\citation{dijkstra1959}
+\citation{chen2016xgboost}
+\citation{nyc_tlc,moreira2013porto}
+\citation{deepTTE2018}
+\citation{xu2020tadnm}
+\citation{wang2022metatte}
+\citation{abbar2020stad}
+\citation{dcrnn2018,yu2018stgcn,wu2019graphwavenet}
+\citation{nyc_tlc,moreira2013porto,didi2016,zheng2012geolife}
+\citation{voloch2021,SmartSimulativeRoute2025}
+\@writefile{toc}{\contentsline {section}{\numberline {I}Introduction}{1}{section.1}\protected@file@percent }
+\citation{dijkstra1959}
+\citation{bellman1958routing}
+\citation{pohl1971bi}
+\citation{goldberg2005}
+\citation{geisberger2008}
+\citation{delling2011}
+\citation{chen2016xgboost}
+\citation{nyc_tlc,moreira2013porto}
+\citation{deepTTE2018}
+\citation{nyc_tlc}
+\citation{moreira2013porto}
+\citation{didi2016}
+\citation{wang2022metatte}
+\citation{abbar2020stad}
+\citation{stann2021}
+\citation{SmartSimulativeRoute2025}
+\citation{dcrnn2018}
+\citation{dueta2023}
+\citation{constgat2020}
+\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces Afternoon rush-hour snapshot spanning the network. Static junction nodes (light blue) and static road edges (gray) form the backbone; dynamic vehicle nodes (green) and traversal edges (orange arrows) reveal congestion corridors and high-flow funnels. Zones: A/B urban grids with dense signals and short links; C suburban ring with longer arterials and smoother flow; H connector hub that funnels inter-zone traffic and creates gateway bottlenecks.}}{2}{figure.1}\protected@file@percent }
+\newlabel{fig:rush-hour-intro}{{1}{2}{Afternoon rush-hour snapshot spanning the network. Static junction nodes (light blue) and static road edges (gray) form the backbone; dynamic vehicle nodes (green) and traversal edges (orange arrows) reveal congestion corridors and high-flow funnels. Zones: A/B urban grids with dense signals and short links; C suburban ring with longer arterials and smoother flow; H connector hub that funnels inter-zone traffic and creates gateway bottlenecks}{figure.1}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {II}Related Work}{2}{section.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {II-A}}Classical pathfinding and routing}{2}{subsection.2.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {II-B}}Learning-based ETA and traffic forecasting}{2}{subsection.2.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {II-C}}Spatio-temporal graph neural networks}{2}{subsection.2.3}\protected@file@percent }
+\citation{dueta2023}
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {II-D}}State-of-the-art production models}{3}{subsection.2.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {II-E}}Summary}{3}{subsection.2.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {III}Methodology}{3}{section.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {III-A}}Dynamic Graph Representation}{3}{subsection.3.1}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces Dynamic, multi-relational traffic graph: static junction nodes (labeled A--D) and road edges (solid gray) with dynamic vehicle nodes (hollow green circles) and interaction edges (blue dashed).}}{3}{figure.2}\protected@file@percent }
+\newlabel{fig:dyn-graph}{{2}{3}{Dynamic, multi-relational traffic graph: static junction nodes (labeled A--D) and road edges (solid gray) with dynamic vehicle nodes (hollow green circles) and interaction edges (blue dashed)}{figure.2}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {3}{\ignorespaces Key components: (a) two-layer GATv2 with edge features; (b) route intent via edge-ID embeddings and mean pooling; (c) sparse Top-$k=2$ routing over six experts with load balancing.}}{3}{figure.3}\protected@file@percent }
+\newlabel{fig:components}{{3}{3}{Key components: (a) two-layer GATv2 with edge features; (b) route intent via edge-ID embeddings and mean pooling; (c) sparse Top-$k=2$ routing over six experts with load balancing}{figure.3}{}}
+\@writefile{lof}{\contentsline {subfigure}{\numberline{(a)}{\ignorespaces {Graph encoder (last snapshot)}}}{3}{subfigure.3.1}\protected@file@percent }
+\@writefile{lof}{\contentsline {subfigure}{\numberline{(b)}{\ignorespaces {Route encoder (vehicle intent)}}}{3}{subfigure.3.2}\protected@file@percent }
+\@writefile{lof}{\contentsline {subfigure}{\numberline{(c)}{\ignorespaces {Router and Mixture-of-Experts}}}{3}{subfigure.3.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{\numberline {\mbox  {III-A}0a}Dynamic edge construction.}{3}{paragraph.3.1.0.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{\numberline {\mbox  {III-A}0b}Route intent.}{4}{paragraph.3.1.0.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {III-B}}Temporal Windowing}{4}{subsection.3.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {III-C}}Problem Statement}{4}{subsection.3.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {III-D}}Model Architecture}{4}{subsection.3.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {III-E}}Model Configuration}{4}{subsection.3.5}\protected@file@percent }
+\citation{SUMO2018}
+\@writefile{lof}{\contentsline {figure}{\numberline {4}{\ignorespaces DSTRA-GNN architecture. A window of $T{=}30$ dynamic graph snapshots (shown as an overlapped deck) is processed by a \emph  {shared} Graph Encoder; prediction is made at the last snapshot $t^*$. In the Full variant, a Route Encoder summarizes each vehicle's remaining path before Fusion and a Top-$k$ MoE head produces per-vehicle ETA.}}{5}{figure.4}\protected@file@percent }
+\newlabel{fig:temporal-moe-eta}{{4}{5}{DSTRA-GNN architecture. A window of $T{=}30$ dynamic graph snapshots (shown as an overlapped deck) is processed by a \emph {shared} Graph Encoder; prediction is made at the last snapshot $t^*$. In the Full variant, a Route Encoder summarizes each vehicle's remaining path before Fusion and a Top-$k$ MoE head produces per-vehicle ETA}{figure.4}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {5}{\ignorespaces Temporal Transformer detail: per-edge sequences across $H{-}1$ snapshots are projected, positionally encoded, encoded by a Transformer stack, reduced via last-token + norm, projected back to edge dimension, then pooled over edges.}}{5}{figure.5}\protected@file@percent }
+\newlabel{fig:transformer-detail}{{5}{5}{Temporal Transformer detail: per-edge sequences across $H{-}1$ snapshots are projected, positionally encoded, encoded by a Transformer stack, reduced via last-token + norm, projected back to edge dimension, then pooled over edges}{figure.5}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {III-F}}Loss Functions and Training Protocol}{5}{subsection.3.6}\protected@file@percent }
+\newlabel{sec:loss}{{\mbox  {III-F}}{5}{Loss Functions and Training Protocol}{subsection.3.6}{}}
+\@writefile{toc}{\contentsline {paragraph}{\numberline {\mbox  {III-F}0a}Complexity and inference.}{5}{paragraph.3.6.0.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {IV}Experimental Evaluation}{5}{section.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {IV-A}}Dataset}{5}{subsection.4.1}\protected@file@percent }
+\citation{SUMO2018,dijkstra1959}
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {IV-B}}Dataset Statistics}{6}{subsection.4.2}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {6}{\ignorespaces ETA distribution (seconds) with equal-thirds thresholds. Vertical dashed lines indicate short/medium ($\approx $277 s) and medium/long ($\approx $609 s) boundaries.}}{6}{figure.6}\protected@file@percent }
+\newlabel{fig:eta-dist}{{6}{6}{ETA distribution (seconds) with equal-thirds thresholds. Vertical dashed lines indicate short/medium ($\approx $277 s) and medium/long ($\approx $609 s) boundaries}{figure.6}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {7}{\ignorespaces ETA distribution by route-length category (short/medium/long). Boxes summarize medians and IQRs; whiskers capture spread and outliers.}}{6}{figure.7}\protected@file@percent }
+\newlabel{fig:eta-box}{{7}{6}{ETA distribution by route-length category (short/medium/long). Boxes summarize medians and IQRs; whiskers capture spread and outliers}{figure.7}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {IV-C}}Experimental Setup}{6}{subsection.4.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {IV-D}}Baselines and Ablations}{6}{subsection.4.4}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {8}{\ignorespaces ETA versus hour-of-day showing strong diurnal effects (morning and evening peaks), with occasional evening events/spikes.}}{7}{figure.8}\protected@file@percent }
+\newlabel{fig:eta-per-hour}{{8}{7}{ETA versus hour-of-day showing strong diurnal effects (morning and evening peaks), with occasional evening events/spikes}{figure.8}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {I}{\ignorespaces Ablation variants and enabled components. Temporal uses a Transformer with static-road context for the first $H{-}1$ snapshots.}}{7}{table.1}\protected@file@percent }
+\newlabel{tab:ablation_variants}{{I}{7}{Ablation variants and enabled components. Temporal uses a Transformer with static-road context for the first $H{-}1$ snapshots}{table.1}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {IV-E}}Evaluation Metrics}{7}{subsection.4.5}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {II}{\ignorespaces Overall and per-bin validation MAE (seconds) averaged over seeds 42--44 (best epoch per seed). Improvement is relative to the AVG baseline.}}{7}{table.2}\protected@file@percent }
+\newlabel{tab:results_overall_bins}{{II}{7}{Overall and per-bin validation MAE (seconds) averaged over seeds 42--44 (best epoch per seed). Improvement is relative to the AVG baseline}{table.2}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {V}Results and Analysis}{7}{section.5}\protected@file@percent }
+\citation{dueta2023}
+\citation{dcrnn2018,deepTTE2018,constgat2020}
+\@writefile{lot}{\contentsline {table}{\numberline {III}{\ignorespaces Duration binning used throughout (validation split). Thresholds from Fig.\nobreakspace  {}\ref  {fig:eta-dist}.}}{8}{table.3}\protected@file@percent }
+\newlabel{tab:binning}{{III}{8}{Duration binning used throughout (validation split). Thresholds from Fig.~\ref {fig:eta-dist}}{table.3}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {IV}{\ignorespaces Overall validation MAE and RMSE (seconds) and MAPE (\%). Best epoch per variant on validation; averaged over seeds 42--44 where available. MAPE values are estimated where missing in logs.}}{8}{table.4}\protected@file@percent }
+\newlabel{tab:mae_rmse_wape}{{IV}{8}{Overall validation MAE and RMSE (seconds) and MAPE (\%). Best epoch per variant on validation; averaged over seeds 42--44 where available. MAPE values are estimated where missing in logs}{table.4}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {VI}Discussion}{8}{section.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {VII}Conclusion}{8}{section.7}\protected@file@percent }
+\bibstyle{IEEEtran}
+\bibdata{references}
+\bibcite{derrowpinion2021googlemaps}{1}
+\bibcite{hoseinzadeh2020waze}{2}
+\bibcite{amin-naseri2018waze}{3}
+\bibcite{dijkstra1959}{4}
+\bibcite{chen2016xgboost}{5}
+\bibcite{nyc_tlc}{6}
+\bibcite{moreira2013porto}{7}
+\bibcite{deepTTE2018}{8}
+\bibcite{xu2020tadnm}{9}
+\bibcite{wang2022metatte}{10}
+\bibcite{abbar2020stad}{11}
+\bibcite{dcrnn2018}{12}
+\bibcite{yu2018stgcn}{13}
+\bibcite{wu2019graphwavenet}{14}
+\bibcite{didi2016}{15}
+\bibcite{zheng2012geolife}{16}
+\bibcite{voloch2021}{17}
+\bibcite{SmartSimulativeRoute2025}{18}
+\bibcite{bellman1958routing}{19}
+\bibcite{pohl1971bi}{20}
+\bibcite{goldberg2005}{21}
+\bibcite{geisberger2008}{22}
+\bibcite{delling2011}{23}
+\bibcite{stann2021}{24}
+\bibcite{dueta2023}{25}
+\bibcite{constgat2020}{26}
+\bibcite{SUMO2018}{27}
+\@writefile{toc}{\contentsline {section}{References}{9}{section*.2}\protected@file@percent }

@@ -1,0 +1,358 @@
+{
+  "_meta": {
+    "purpose": "Metadata for figures in this folder: keys must match filenames exactly.",
+    "applications": "Filenames starting with web_* → eta_web_simulator; others → dataset_creator. Standalone MAE/plot PNGs (mae_by_Time, Trip/trip_* vs MAE) are exports from the web Model Performance Analysis visualizations—tagged eta_web_simulator.",
+    "captions": "caption_article: concise \\caption{...} for the short paper. caption_report: fuller \\caption{...} or figure text for the long document (may repeat detail from the body). Replace placeholders when you annotate each screenshot."
+  },
+  "dataset_conversion_bounding_box.png": {
+    "application": "dataset_creator",
+    "application_label": "Graph traffic dataset creator",
+    "latex_label": "fig:dataset-conversion-bounding-box",
+    "caption_article": "Trajectory conversion: ``Network Map'' group with base name, bounding box (south, west, north, east), and ``Download and Render Map'' (OSM fetch + netconvert).",
+    "caption_report": "Upper portion of the Trajectory Dataset Conversion page: the ``Network Map'' group shows map status, optional ``Reset'', the ``Map file base name'' field (stem for .osm/.net.xml outputs), four latitude/longitude edits labeled ``Bounding box (south, west, north, east)'', and the primary green ``Download and Render Map'' action that swaps to a progress bar while Overpass/netconvert run. Values persist via project settings.",
+    "description": "Network Map: bbox inputs, map basename, download button or progress stack.",
+    "other_information": ""
+  },
+  "dataset_conversion_display_split.png": {
+    "application": "dataset_creator",
+    "application_label": "Graph traffic dataset creator",
+    "latex_label": "fig:dataset-conversion-display-split",
+    "caption_article": "Trajectory conversion layout: map canvas beside a scrollable control column (split-pane ``display'' of geographic context and form fields).",
+    "caption_report": "The conversion workspace uses a horizontal split: a large ``Network Map'' view (title bar with OSM/SUMO toggles, GPS offset spin boxes, zoom buttons) on one side and a ``QScrollArea'' of stacked groups---SUMO hints, Network Map download, Trajectory Dataset paths, Route Display, Dataset Generation, progress, and Activity Log---on the other. This figure documents the two-pane ergonomics for aligning GPS traces with the downloaded graph.",
+    "description": "Full window or cropped split: map viewport + controls sidebar.",
+    "other_information": ""
+  },
+  "dataset_conversion_split.png": {
+    "application": "dataset_creator",
+    "application_label": "Graph traffic dataset creator",
+    "latex_label": "fig:dataset-conversion-split",
+    "caption_article": "``Route Display'': trajectory repair and per-segment controls (invalid segment fix, trim start/end, polygon overlay, ``Trajectory subsets'').",
+    "caption_report": "The blue ``Route Display'' group appears once the SUMO network and validated main CSV are ready. It includes checkboxes such as ``Fix invalid segments'' and ``Trim Start/End'' (real pickup/dropoff labels), ``Show Polygon'' for hull visualization, and a ``Trajectory subsets'' section that expands one subsection per GPS segment after automatic splitting at discontinuities. Segment rows expose ``Show'' toggles for candidate GPS points versus ranked SUMO routes and status labels with similarity scores. Use this figure when explaining how raw trajectories are segmented before step conversion.",
+    "description": "Route Display: repair checkboxes, real start/dest labels, trajectory subset list.",
+    "other_information": ""
+  },
+  "dataset_converstion_create_settings.png": {
+    "application": "dataset_creator",
+    "application_label": "Graph traffic dataset creator",
+    "latex_label": "fig:dataset-converstion-create-settings",
+    "caption_article": "Trajectory conversion: SUMO resolution banner, ``Network Map'' download controls, and start of ``Trajectory Dataset'' CSV inputs (project ``create'' path configuration).",
+    "caption_report": "Composite of the top of the conversion column: ``SUMO Configuration'' explains automatic eclipse-sumo/SUMO_HOME detection; ``Network Map'' captures bbox/name/download; ``Trajectory Dataset'' begins with ``Main CSV file (required)'' plus validation glyph and optional additional CSV rows. Together these are the first settings a user configures after opening or creating a conversion project. Filename retains typo ``converstion''.",
+    "description": "Upper conversion stack: SUMO status, map download, main/optional CSV rows.",
+    "other_information": "Optional rename to dataset_conversion_create_settings.png; update JSON key if renamed."
+  },
+  "dataset_convertion_coords.png": {
+    "application": "dataset_creator",
+    "application_label": "Graph traffic dataset creator",
+    "latex_label": "fig:dataset-convertion-coords",
+    "caption_article": "Map chrome after load: ``Show OSM map'', ``Show SUMO network'', ``GPS offset'' X/Y in meters, ``Update'', and zoom buttons.",
+    "caption_report": "Once a network is rendered, the map header reveals ``Show OSM map'' (tile background with async loading indicator), ``Show SUMO network'' (edge geometry overlay, on by default), ``GPS offset'' spin boxes in meters (positive X east, positive Y north) with an ``Update'' button that reapplies offsets and clears stale route graphics, plus ``+''/``−'' zoom controls. These coordinate tweaks align exported GPS columns with the projected map without editing the CSV externally. Filename uses typo ``convertion''.",
+    "description": "Map toolbar: OSM checkbox, network checkbox, GPS offset fields, Update, zoom.",
+    "other_information": "Optional rename to dataset_conversion_coords.png."
+  },
+  "dataset_convertion_files.png": {
+    "application": "dataset_creator",
+    "application_label": "Graph traffic dataset creator",
+    "latex_label": "fig:dataset-convertion-files",
+    "caption_article": "``Trajectory Dataset'' paths: required main CSV, validation status, optional additional CSV rows with ``+''.",
+    "caption_report": "The ``Trajectory Dataset'' group lists ``Main CSV file (required)'' with browse (``...''), inline validation (checkmark when parsing succeeds), and a detail label for row/trip statistics. ``Additional CSV files (optional)'' supports multiple extra paths via a ``+'' row factory for auxiliary inputs. A ``?'' help button opens dataset acquisition guidance. Filename uses typo ``convertion''.",
+    "description": "CSV path rows: main required file + optional list; help button.",
+    "other_information": "Optional rename to dataset_conversion_files.png."
+  },
+  "dataset_convertion_main_with_map.png": {
+    "application": "dataset_creator",
+    "application_label": "Graph traffic dataset creator",
+    "latex_label": "fig:dataset-convertion-main-with-map",
+    "caption_article": "Conversion page with OpenStreetMap tiles under the viewport (``Show OSM map'') and trajectory/network context.",
+    "caption_report": "Wide shot of the trajectory conversion experience when OSM tiles are enabled: the map canvas shows raster imagery while GPS polylines and UI chrome remain interactive. Contrasts with dataset_convertion_main_with_network.png where vector SUMO geometry dominates. Filename uses typo ``convertion''.",
+    "description": "Main window: OSM basemap visible on the map pane.",
+    "other_information": "Optional rename to dataset_conversion_main_with_map.png."
+  },
+  "dataset_convertion_main_with_network.png": {
+    "application": "dataset_creator",
+    "application_label": "Graph traffic dataset creator",
+    "latex_label": "fig:dataset-convertion-main-with-network",
+    "caption_article": "Conversion page with SUMO edge/node geometry drawn on the map (``Show SUMO network'').",
+    "caption_report": "After netconvert produces ``*.net.xml'', the map view can render the discrete SUMO graph (typically green-tinted background + polylines) with optional GPS tracks and candidate-route overlays from the Route Display tools. Filename uses typo ``convertion''.",
+    "description": "Main window: SUMO network overlay on map canvas.",
+    "other_information": "Optional rename to dataset_conversion_main_with_network.png."
+  },
+  "dataset_convertion_route_display.png": {
+    "application": "dataset_creator",
+    "application_label": "Graph traffic dataset creator",
+    "latex_label": "fig:dataset-convertion-route-display",
+    "caption_article": "``Route Display'' region: map-side trajectory visualization with Show controls tying CSV segments to SUMO route candidates.",
+    "caption_report": "Screenshot emphasizing the interaction between the map and the ``Route Display'' panel: users toggle ``Show'' per segment to overlay GPS points, best-match SUMO paths, polygons, and logging in the Activity Log. Pair with dataset_conversion_split.png when the figure focuses on the map canvas rather than the full control stack. Filename uses typo ``convertion''.",
+    "description": "Map + Route Display: overlays for a selected trajectory segment.",
+    "other_information": "Optional rename to dataset_conversion_route_display.png."
+  },
+  "dataset_core_blocked.png": {
+    "application": "dataset_creator",
+    "application_label": "Graph traffic dataset creator",
+    "latex_label": "fig:dataset-core-blocked",
+    "caption_article": "Trajectory conversion: ``Dataset Generation'' panel before batch step export is actionable (Start/Stop hidden until output folder and trajectory range are set).",
+    "caption_report": "On the Trajectory Dataset Conversion page, the ``Dataset Generation'' group holds the batch step-conversion workflow: trajectory range (Start, Count, Last), Workers, options (Pre-sorted by timestamp, Sampling interval in seconds, Compress, Save sorted CSV path), Output folder with a browse control, and the green Start / red Stop buttons. The UI only shows Start and Stop once both a non-empty starting trajectory index and a non-empty output folder path are present; until then the buttons stay hidden, which is the usual ``blocked'' presentation for this panel. While a worker is running, Start is disabled and Stop is enabled, and the collapsible progress box retitles to ``Step Conversion'' with an orange progress bar. Pair with dataset_core_ready.png for before/after gating.",
+    "description": "Dataset Generation block: step options and output path visible; Start/Stop absent or conversion not startable.",
+    "other_information": "``Core'' here means the central Dataset Generation column on the conversion page, not the simulation runner."
+  },
+  "dataset_core_ready.png": {
+    "application": "dataset_creator",
+    "application_label": "Graph traffic dataset creator",
+    "latex_label": "fig:dataset-core-ready",
+    "caption_article": "Same ``Dataset Generation'' panel with Start/Stop visible and Start enabled so the user can launch parallel step conversion to the chosen output folder.",
+    "caption_report": "After the user sets an output directory and valid trajectory bounds, Start and Stop appear: Start kicks off StepGenerationWorker (SUMO-backed routing per trajectory), toggling the progress group to ``Step Conversion'' and wiring progress into the bar and status label. Stop requests cooperative cancellation. Additional checks (main CSV on disk, loaded network) apply when Start is pressed, but the primary UI gate for showing the buttons is the output path plus start trajectory field. Use this figure next to dataset_core_blocked.png to show how the tool avoids accidental runs without a declared export location.",
+    "description": "Dataset Generation block with green Start and red Stop visible; ready to run batch conversion.",
+    "other_information": ""
+  },
+  "dataset_create_simulation_project.png": {
+    "application": "dataset_creator",
+    "application_label": "Graph traffic dataset creator",
+    "latex_label": "fig:dataset-create-simulation-project",
+    "caption_article": "Modal ``Create Simulation Project'' dialog: SUMO Traffic Simulation tag, project name, optional description, folder picker (Browse), Cancel and Create.",
+    "caption_report": "Screenshot of the modal opened from ``+ Create'' under Simulation Projects. The window title and large heading read ``Create Simulation Project''; a green banner labels the workflow ``SUMO Traffic Simulation''. Fields are: Project Name (single-line, placeholder ``Enter project name...''), Description (optional, multi-line, default hint about SUMO-based traffic simulation), and Project Location (read-only path with placeholder ``Select folder...''). A blue ``Browse...'' button opens a directory chooser for the parent folder where the new project directory will be created. ``Cancel'' dismisses the dialog; ``Create'' validates input, registers the project, and materializes the on-disk project tree. This path is distinct from trajectory conversion project creation.",
+    "description": "Qt modal: green SUMO banner, three inputs, Browse, Cancel/Create.",
+    "other_information": "Exact window title may truncate ``Graph Traffic Dataset Creator'' in the OS title bar."
+  },
+  "dataset_create_trajectory_project.png": {
+    "application": "dataset_creator",
+    "application_label": "Graph traffic dataset creator",
+    "latex_label": "fig:dataset-create-trajectory-project",
+    "caption_article": "Modal ``Create Trajectory Conversion Project'' dialog: orange ``Real trajectory → graph dataset conversion'' banner, name, optional description, folder picker, Cancel and Create.",
+    "caption_report": "Screenshot of the modal opened from ``+ Create'' under Trajectory Dataset Conversion Projects. The window title and main heading read ``Create Trajectory Conversion Project''; an orange banner states ``Real trajectory → graph dataset conversion''. Fields mirror the simulation dialog: Project Name (placeholder ``Enter project name...''), Description (optional) with hint text about converting real-world GPS trajectories into graph-structured datasets for traffic simulation, and Project Location with read-only path plus a blue ``Browse...'' button to choose the parent directory. ``Cancel'' closes without changes; ``Create'' validates, registers a trajectory-type project in the workspace registry, and creates the project folder. The control layout parallels the simulation project dialog but uses orange affordances to signal the conversion workflow.",
+    "description": "Qt modal: orange conversion banner, three inputs, Browse, Cancel/Create.",
+    "other_information": "OS title bar may abbreviate ``Graph Traffic Dataset Creator''."
+  },
+  "dataset_general_setting.png": {
+    "application": "dataset_creator",
+    "application_label": "Graph traffic dataset creator",
+    "latex_label": "fig:dataset-generation-settings-sumo",
+    "caption_article": "Dataset Generation Settings: SUMO .sumocfg validation; ``Run Simulation'' skips to the live simulator only when the traffic database exists and is not stale; ``Define Simulation'' opens the behavior editor that builds the scheduler and entities database.",
+    "caption_report": "Simulation-project screen titled ``Dataset Generation Settings'' for the active project (example: 3_zones_simulation). ``Back to Projects'' (top left) returns to the home list. On the top right, ``Run Simulation'' shortcuts directly to the simulation page only if the project's traffic database has already been generated and is not stale (otherwise the user must refresh or rebuild data first). Below it, ``Define Simulation'' enters the traffic-behavior definition workflow---zones, schedules, vehicle mix, landmarks, and related controls---whose outputs materialize the demand scheduler and the entities database that back dataset generation. The ``SUMO Configuration Files'' block explains that loading a .sumocfg causes the tool to parse and resolve referenced assets (network, routes, additional files). A path field (example: config/urban_three_zones.sumocfg) is edited with Browse and Set; a checkmark indicates a valid configuration. ``Referenced Files'' lists derived entries such as the network XML and additional files (e.g. vehicle_types.add.xml) with validation indicators. The ``SUMO Configuration'' area shows a green readiness line when SUMO is found (e.g. eclipse-sumo in the active Python environment, SUMO_HOME, sumo on PATH, or common install paths) and notes installing via the project requirements when missing. Together, SUMO file confirmation plus these navigation buttons gate access to microsimulation and to the behavioral artifacts consumed by the graph dataset pipeline.",
+    "description": "SUMO load/validation: sumocfg + referenced files + SUMO status; Back left; Run/Define right (Run gated on traffic DB present and not stale).",
+    "other_information": "latex_label changed from fig:dataset-general-settings to fig:dataset-generation-settings-sumo; update TeX references if you used the old label."
+  },
+  "dataset_landmarks.png": {
+    "application": "dataset_creator",
+    "application_label": "Graph traffic dataset creator",
+    "latex_label": "fig:dataset-landmarks",
+    "caption_article": "Simulation Definition: ``Landmarks'' and ``Default Landmarks'' blocks—detect edge params from the net, then bind Home/Work/Restaurants to zones for schedule rules.",
+    "caption_report": "In ``Simulation Configuration'' on the route-generation page, the mint-styled ``Landmarks'' group includes ``Update Landmarks'', which rescans the loaded SUMO network for edges carrying a ``landmark'' parameter (SUMO edge param key/value). Detected names populate a scrollable list with per-row visibility and status text (``No landmarks detected yet'' until a scan). Nested ``Default Landmarks'' maps semantic roles—Home, Work, Restaurants—to multiselect lists of zone names (seeded defaults, persisted in simulation.config.json) plus a visit-count spinner so synthetic trips can reference human-readable origins and destinations in weekday schedule cards. Landmarks also feed the origin and destination multiselects on each schedule card, separate from ``source_zones''.",
+    "description": "Landmarks + Default Landmarks UI: Update Landmarks, detected list, Home/Work/Restaurants zone pickers.",
+    "other_information": "Tooltip documents the expected net.xml param: key landmark, value arbitrary label."
+  },
+  "dataset_log.png": {
+    "application": "dataset_creator",
+    "application_label": "Graph traffic dataset creator",
+    "latex_label": "fig:dataset-activity-log",
+    "caption_article": "Trajectory conversion: ``Activity Log'' console (monospace) recording map downloads, validation, routing scores, and step-conversion progress.",
+    "caption_report": "At the bottom of the conversion column, the ``Activity Log'' ``QTextEdit'' streams user-visible diagnostics: SUMO/OSM toggles, offset changes, dataset validation, per-segment similarity scores, download progress, and dataset-generation messages. It complements on-map feedback when auditing a long batch conversion. latex_label fig:dataset-activity-log preferred over fig:dataset-log for disambiguation.",
+    "description": "Dark terminal-style log panel beneath Dataset Generation.",
+    "other_information": ""
+  },
+  "dataset_projects.png": {
+    "application": "dataset_creator",
+    "application_label": "Graph traffic dataset creator",
+    "latex_label": "fig:dataset-projects-home",
+    "caption_article": "Landing page of the Graph Traffic Dataset Creator: two columns for Simulation Projects and Trajectory Dataset Conversion Projects, each with + Create, example cards, and per-project workflow buttons.",
+    "caption_report": "Initial view of the desktop application after launch. A header states the tool name and mission (building graph-structured traffic datasets from simulated or real trajectories). The main area is split vertically: on the left, Simulation Projects (green framing) list SUMO-oriented workspaces with a ``+ Create'' control; on the right, Trajectory Dataset Conversion Projects (orange framing) list GPS-to-graph conversion workspaces with the same pattern. Each row is a card showing the project name, resolved filesystem location, a delete control (``x'') that---after confirmation---removes the project from the registry and deletes its project folder on disk, and a primary action---``Dataset Generation'' for simulation projects or ``Dataset Conversion'' for trajectory projects---that opens the corresponding editor. New projects are created through a dialog where the user enters metadata and selects the parent directory under which project files will be stored. Bundled examples in the repository supply ready-made cards so users can explore workflows before creating their own.",
+    "description": "Two-column home: green simulation list, orange trajectory conversion list, version footer, app icon and title.",
+    "other_information": "Example project names on cards follow the repository layout at capture time; your install may show updated registry keys (e.g. trajectory_conversion_example)."
+  },
+  "dataset_schedule.png": {
+    "application": "dataset_creator",
+    "application_label": "Graph traffic dataset creator",
+    "latex_label": "fig:dataset-schedule",
+    "caption_article": "``Weekday Schedule'' editor: stacked ``Schedule'' cards with time window, repeat_on_days (1–7), vpm_rate, and zone/landmark OD pickers.",
+    "caption_report": "The ``Weekday Schedule'' group (``Simulation Configuration'') builds the ``weekday_schedule'' JSON array. A ``+'' button adds another card; each card is titled ``Schedule'' with a name field, ``x'' to remove, ``start_time'' and ``end_time'' as HH:mm time edits, ``repeat_on_days'' as checkboxes for days 1–7, ``vpm_rate'' as an integer spin box (1–100 vehicles per minute), ``source_zones'' restricted to zones with positive trip allocation, and ``origin'' / ``destination'' multiselects whose options combine detected landmarks with zone aliases. Cards use alternating background colors; changes persist into simulation.config.json and ultimately drive SimulationRunner dispatch during the microsimulation.",
+    "description": "Weekday Schedule stack: per-card name, times, repeat_on_days, vpm_rate, source_zones, origin, destination.",
+    "other_information": ""
+  },
+  "dataset_simulation_backgroung.png": {
+    "application": "dataset_creator",
+    "application_label": "Graph traffic dataset creator",
+    "latex_label": "fig:dataset-simulation-background",
+    "caption_article": "SUMO Simulation page before or between runs: ``Start Simulation'' disabled until the traffic DB validates; status may read Not Started, Blocked, Ready, or Stopped; map shows the network with no live TraCI updates yet.",
+    "caption_report": "The desktop ``SUMO Simulation'' view pairs a large ``SimulationView'' map (greenish background when rendering is active) with a top row of ``Start Simulation'', ``Pause'', and ``Stop'' plus a ``Step Interval (ms)'' slider (0–2000 ms, default Max) and a composite status label. On load, ``prepare_simulation_for_start'' checks SimulationDBService.validate_db_readiness_for_current_config; failure yields red ``Status: Blocked (DB not ready)'' and keeps Start disabled, while success clears stored road/zone rows, shows green ``Status: Ready'', and enables Start. After a run stops, status becomes ``Stopped'' (red) but Start can be pressed again. If ``Run in background'' is selected, the map container uses a greyed/reddish backdrop and skips per-frame vehicle painting—capture may show that idle chrome instead of moving glyphs. (Filename typo ``backgroung''.)",
+    "description": "Idle or blocked simulation UI: network map, controls, Ready/Blocked/Stopped status, no Running time line.",
+    "other_information": "Consider renaming file to dataset_simulation_background.png when convenient."
+  },
+  "dataset_simulation_playing.png": {
+    "application": "dataset_creator",
+    "application_label": "Graph traffic dataset creator",
+    "latex_label": "fig:dataset-simulation-playing",
+    "caption_article": "Live TraCI loop: status shows Running or Paused with WW:DD:HH:MM:SS time, vehicle count, and effective speed; Pause/Stop enabled; map glyphs update each timer tick.",
+    "caption_report": "Once ``Start Simulation'' launches SUMO with user begin/end (WW:DD:HH:MM:SS fields in the right-hand ``Simulation Controls'' panel), the timer drives ``update_simulation'': each tick calls traci.simulationStep (unless paused), syncs the SQLite simulation DB via SimulationRunner.update, dispatches scheduled vehicles, optionally writes periodic dataset snapshots, and refreshes vehicle positions on the map (skipped entirely for background runs). The status label expands to ``Status: Running | Time: … | Vehicles: … | Speed: Max|Nx'' where Speed derives from the step-interval slider and SUMO step length; Pause toggles orange ``Paused'' / ``Resume''. Reference this figure for TraCI integration, visual debugging, and throttled playback.",
+    "description": "Running simulation: moving vehicles on map, green Running status, time and vehicle count in status line.",
+    "other_information": ""
+  },
+  "dataset_zone_trip_allocation.png": {
+    "application": "dataset_creator",
+    "application_label": "Graph traffic dataset creator",
+    "latex_label": "fig:dataset-zone-trip-allocation",
+    "caption_article": "Zone Trips Allocation (Simulation Configuration): per-zone share of trips and passenger/bus/truck mix; zone percentages and each zone's vehicle mix total to 100 percent.",
+    "caption_report": "``Zone Trips Allocation'' panel: each zone card sets its percentage of overall generated trips (with a green total line enforcing 100 percent across zones) and a nested ``vehicle_type_distribution'' for passenger, bus, and truck shares that sum to 100 percent within the card. This ties geographic trip splitting to fleet mix before schedules and the entities database are built. The UI group title was renamed from ``Zone Vehicle Allocation'' to ``Zone Trips Allocation'' in the application code.",
+    "description": "Peach-themed block: zones A/B/C/H with trip share and vType distribution spinners.",
+    "other_information": "Supersedes deleted asset dataset_zone_vehicle_allocation.png; update LaTeX references from fig:dataset-zone-vehicle-allocation if you used the old label."
+  },
+  "dataset_zones.png": {
+    "application": "dataset_creator",
+    "application_label": "Graph traffic dataset creator",
+    "latex_label": "fig:dataset-zones",
+    "caption_article": "Simulation Definition: network map (left) and configuration (right). Top actions: Generate Simulation DB, Cancel, open simulation.config.json, and Run Simulation (enabled when the DB exists and is not stale). Zones are detected from SUMO zone attributes; Show/Hide tints edges and junctions per zone.",
+    "caption_report": "The ``Simulation Definition'' screen (example: 3_zones_simulation) is the first place the loaded SUMO network is drawn at scale: a ``Network Map'' canvas on the left and a ``Simulation Configuration'' stack on the right, with a ``Back'' control to return upstream. A right-aligned action row contains four buttons. ``Generate Simulation DB'' materializes or refreshes the simulation database from the current network, zone metadata, schedules, and vehicle definitions---prerequisite work before interactive runs. ``Cancel'' aborts long-running preparation when applicable (it may be disabled until a job is active). ``Open simulation.config.json'' launches the project's JSON configuration in the default editor for advanced edits. ``Run Simulation'' switches to the live simulation view when a ready database is present and the stored configuration hash still matches the form (not stale), mirroring the gating described on the Dataset Generation Settings page. Under ``Zones (Neighborhoods)'', ``Update Zones'' rescans the net file: zones are inferred from the zone attribute attached to both edges and junctions; each row lists the zone id, edge and node counts, and swatches. ``Show'' applies a distinct map color to every edge and node belonging to that zone (e.g. A in red, B in blue); ``Hide'' removes the overlay while keeping the detection list. Additional blocks (e.g. vehicle types with physical parameters) and a green status line such as ``Run ready: Simulation DB is ready'' close the feedback loop before demand scheduling and entity export.",
+    "description": "Simulation Definition: map + zones/vehicle types; Generate DB / Cancel / open JSON / Run Simulation; attribute-based zone Show/Hide.",
+    "other_information": "Also usable as the primary figure for ``Simulation Definition''; latex_label remains fig:dataset-zones for backward compatibility."
+  },
+  "datset_vehicle.png": {
+    "application": "dataset_creator",
+    "application_label": "Graph traffic dataset creator",
+    "latex_label": "fig:dataset-vehicle-types",
+    "caption_article": "Simulation Configuration: Vehicle Types editor---per-type name, dimensions, max speed, and color (hex + picker); add with +, remove with x; values map to SUMO vTypes for generated traffic.",
+    "caption_report": "Excerpt of the ``Simulation Configuration'' column showing the ``Vehicle Types'' block. Each type is edited in its own card with spinners for length, width, height, and max speed (SI-style units consistent with the SUMO network), a text id for the type name, and a color field with live swatch plus an ellipsis control for a color dialog. Default illustrative presets include passenger (e.g. 4.5 m length, 33.33 m/s cap, blue), bus (12 m, 22.22 m/s, yellow), and truck (8 m, 25 m/s, red). A ``+'' affordance appends another template; the ``x'' on a row deletes it. These definitions are serialized into the project's simulation configuration and ultimately into SUMO additional files (vehicle_types.add.xml or equivalent) so that scheduled demand and the entities database can reference consistent vType ids when spawning fleets.",
+    "description": "Scrollable Vehicle Types list: passenger, bus, truck cards with numeric fields and color swatches; add/remove controls.",
+    "other_information": "Filename typo ``datset_vehicle.png''; optional rename to dataset_vehicle.png."
+  },
+  "dynamic_static_nodes_and_edges.png": {
+    "application": "dataset_creator",
+    "application_label": "Graph traffic dataset creator",
+    "latex_label": "fig:dynamic-static-nodes-edges",
+    "caption_article": "Schematic: static junction nodes (A--D) and edges versus dynamic vehicle nodes (green rings) and dashed trajectory edges on a SUMO-style route.",
+    "caption_report": "Conceptual diagram for route-aware spatio-temporal graphs used with dynamic GNN ETA models. Large filled nodes denote fixed junctions (labels A--D); thick solid grey arrows are static infrastructure edges. Hollow green circles are dynamic nodes (e.g. vehicles or sample points along a route); thin dashed blue arrows are dynamic edges forming an alternating path from B through intermediates to C and a zigzag sequence from C toward D, alongside the direct static links. Pairs with graph_representation_of_traffic.png for toy vs. grid-scale views. Aligns with the static/dynamic node--edge decomposition described in integrated dataset-and-testing documentation.",
+    "description": "White background: black junction nodes, grey static arrows, green ring dynamic nodes, blue dashed dynamic path.",
+    "other_information": "Diagram figure (not a UI screenshot); suitable for methods / graph construction sections."
+  },
+  "graph_representation_of_traffic.png": {
+    "application": "dataset_creator",
+    "application_label": "Graph traffic dataset creator",
+    "latex_label": "fig:graph-representation-traffic",
+    "caption_article": "Grid-scale traffic graph: blue static junction nodes, grey bidirectional local edges, orange arterial connectors, green dots as vehicles on edges.",
+    "caption_report": "Visualization of a road network as a graph for GNN-style ETA: three dense grid regions (intersections as light-blue circular nodes) joined by longer orange bidirectional edges (arterials). Short grey double arrows model two-way links inside each zone; green dots mark dynamic entities (vehicles) positioned along edges, with higher density on major corridors---a readable abstraction of static topology plus time-varying occupancy from simulation. Use when explaining how microsimulation exports support graph learning pipelines; consistent with project reports on dynamic spatio-temporal graph datasets.",
+    "description": "Multi-zone grid graph, orange inter-zone links, green vehicle markers on edges.",
+    "other_information": "Concept figure; pair with dynamic_static_nodes_and_edges.png for legend-scale vs. network-scale."
+  },
+  "mae_by_Time.png": {
+    "application": "eta_web_simulator",
+    "application_label": "Web simulator and ETA model testing tool",
+    "latex_label": "fig:web-mae-by-time-of-day",
+    "caption_article": "Mean absolute ETA error (seconds) by time-of-day bucket from logged interactive journeys.",
+    "caption_report": "Bar chart exported from the web client's Model Performance Analysis workflow: each bar summarizes MAE for trips whose start or evaluation window falls in that time-of-day bin, using the same logged database as the dashboard summaries. Pair with web_static.png for where the chart is launched in the UI. Axis labels and counts reflect the cohort at export time.",
+    "description": "Bar chart: time-of-day categories vs MAE (typ. seconds).",
+    "other_information": "Filename uses capital T in Time; optional rename to mae_by_time.png for consistency."
+  },
+  "Trip Distance vs MAE Histogram-Long.png": {
+    "application": "eta_web_simulator",
+    "application_label": "Web simulator and ETA model testing tool",
+    "latex_label": "fig:web-hist-distance-mae-long",
+    "caption_article": "2D histogram (trip distance vs MAE) for long-distance journeys in the logged cohort.",
+    "caption_report": "Stratified visual analysis plot: long bin for trip distance (per the app's short/medium/long distance stratification). Density or frequency in cells shows how absolute ETA error varies with distance for longer trips. Use beside Trip Distance vs MAE Histogram-Medium.png and -Short.png for full stratification.",
+    "description": "Heatmap or grid: distance axis, MAE axis, long bin filter.",
+    "other_information": ""
+  },
+  "Trip Distance vs MAE Histogram-Medium.png": {
+    "application": "eta_web_simulator",
+    "application_label": "Web simulator and ETA model testing tool",
+    "latex_label": "fig:web-hist-distance-mae-medium",
+    "caption_article": "Distance vs MAE histogram for medium-length trips.",
+    "caption_report": "Medium distance bin counterpart to the long and short histograms; supports reading whether ETA error scales with trip length in the mid range.",
+    "description": "Histogram: medium trip-distance bin.",
+    "other_information": ""
+  },
+  "Trip Distance vs MAE Histogram-Short.png": {
+    "application": "eta_web_simulator",
+    "application_label": "Web simulator and ETA model testing tool",
+    "latex_label": "fig:web-hist-distance-mae-short",
+    "caption_article": "Distance vs MAE histogram for short trips.",
+    "caption_report": "Short-distance bin: often higher relative error sensitivity; compare to medium/long exports and to trip_distance_vs_mae_scatter.png for point-level spread.",
+    "description": "Histogram: short trip-distance bin.",
+    "other_information": ""
+  },
+  "Trip Duration vs MAE Histogram-Long.png": {
+    "application": "eta_web_simulator",
+    "application_label": "Web simulator and ETA model testing tool",
+    "latex_label": "fig:web-hist-duration-mae-long",
+    "caption_article": "2D histogram (trip duration vs MAE) for long-duration journeys.",
+    "caption_report": "Long bin for trip duration stratification from Model Performance Analysis. Shows how absolute prediction error distributes across longer simulated travel times.",
+    "description": "Heatmap or grid: duration vs MAE, long bin.",
+    "other_information": ""
+  },
+  "Trip Duration vs MAE Histogram-Medium.png": {
+    "application": "eta_web_simulator",
+    "application_label": "Web simulator and ETA model testing tool",
+    "latex_label": "fig:web-hist-duration-mae-medium",
+    "caption_article": "Duration vs MAE histogram for medium-duration trips.",
+    "caption_report": "Medium duration bin; complements long and SHORT exports for duration-based error profiling.",
+    "description": "Histogram: medium trip-duration bin.",
+    "other_information": ""
+  },
+  "Trip Duration vs MAE Histogram-SHORT.png": {
+    "application": "eta_web_simulator",
+    "application_label": "Web simulator and ETA model testing tool",
+    "latex_label": "fig:web-hist-duration-mae-short",
+    "caption_article": "Duration vs MAE histogram for short trips (short bin).",
+    "caption_report": "Short-duration stratification; filename uses capital SHORT while distance short plot uses Short—same semantic bin, inconsistent casing on export.",
+    "description": "Histogram: short trip-duration bin.",
+    "other_information": "Rename to Trip Duration vs MAE Histogram-Short.png for consistency with distance filenames if re-exporting."
+  },
+  "trip_distance_vs_mae_scatter.png": {
+    "application": "eta_web_simulator",
+    "application_label": "Web simulator and ETA model testing tool",
+    "latex_label": "fig:web-scatter-distance-mae",
+    "caption_article": "Scatter of trip distance vs per-journey MAE (seconds) across the logged cohort.",
+    "caption_report": "Each point is typically one completed journey: horizontal axis route or trip distance, vertical axis absolute ETA error in seconds (or the dashboard's primary error metric). Reveals outliers and trends without binning. Opened from the same Visual Analysis region as the histogram suite.",
+    "description": "Scatter plot: distance vs MAE.",
+    "other_information": ""
+  },
+  "trip_duration_vs_mae_scatter.png": {
+    "application": "eta_web_simulator",
+    "application_label": "Web simulator and ETA model testing tool",
+    "latex_label": "fig:web-scatter-duration-mae",
+    "caption_article": "Scatter of trip duration vs per-journey MAE for interactive test trips.",
+    "caption_report": "Companion to trip_distance_vs_mae_scatter.png: duration on one axis, MAE on the other, for diagnosing model behavior across short vs long trips in simulation time.",
+    "description": "Scatter plot: duration vs MAE.",
+    "other_information": ""
+  },
+  "web_legend.png": {
+    "application": "eta_web_simulator",
+    "application_label": "Web simulator and ETA model testing tool",
+    "latex_label": "fig:web-legend",
+    "caption_article": "Transient map legend: road styles (regular, expressway, route), S/D markers, and vehicle glyphs (cars, buses, trucks, user car icon, not tracked).",
+    "caption_report": "Modal legend panel (title ``Legend'', map icon, collapse control) opened from the map toolbar; it auto-dismisses after a few seconds in normal use. Roads: Regular = thin solid dark grey line; Expressways = thin light-blue dotted line; Route = thick solid green line (the active user path). Markers: Start = solid green circle (S); destination = solid red circle (D). Vehicles: Cars = filled blue circle with dark outline; Buses = orange circle with outline; Trucks = green circle with outline; Your vehicle = small side-view orange car figure (matches the highlighted trip on the map); Not tracked = hollow white circle with outline (background or non-subscribed vehicles). Together this key decodes the TraCI-backed SVG map without referring to application branding.",
+    "description": "White rounded legend card: Roads, Markers, Vehicles; user trip shown as orange car glyph, not a star.",
+    "other_information": "Legend and main map now use the same car-style glyph for the user-injected vehicle."
+  },
+  "web_recent.png": {
+    "application": "eta_web_simulator",
+    "application_label": "Web simulator and ETA model testing tool",
+    "latex_label": "fig:web-recent-journeys",
+    "caption_article": "Recent Journeys panel: numbered trips with Running or Completed status; start time, distance, predicted ETA and duration; completed trips add Results (actual arrival and duration, error in seconds, accuracy percent).",
+    "caption_report": "The Recent Journeys feed lists interactive test trips, each in a card with a journey number and a status badge. Running trips show start time, route distance, and a Prediction block (ETA and estimated duration). Completed trips add a Results block: actual arrival time, realized duration, error in seconds, and accuracy as a percentage. In the web client (SimDemoPage.vue, method updateVehicleResult), error is the absolute difference in seconds between predicted travel time and actual travel time. Accuracy is max(0, 100 - (error / actual_duration) * 100) when actual duration is positive: one hundred percent minus the relative absolute error, floored at zero. Icons and color (e.g., green vs. amber) emphasize low versus higher error. These per-trip rows align with data persisted for aggregate Model Performance Analysis and PDF export.",
+    "description": "Dark-theme Recent Journeys list: mix of running and completed cards with Prediction and Results sections.",
+    "other_information": "LaTeX: wrap UI labels in \\emph{} or \\textbf{} when pasting; formula can be set with display math if required."
+  },
+  "web_recent_running.png": {
+    "application": "eta_web_simulator",
+    "application_label": "Web simulator and ETA model testing tool",
+    "latex_label": "fig:web-recent-journey-running",
+    "caption_article": "Recent Journeys: a Running card with start time, distance, and Prediction only (ETA and estimated duration)—no Results until the trip completes.",
+    "caption_report": "Single journey card in the Running state: header with journey index and a blue Running badge plus elapsed timer; body with start timestamp, trip distance, and Prediction (target icon) listing ETA and estimated duration in HH:MM:SS. The Results subsection (actual arrival, duration, error, accuracy) is omitted until SUMO reports the vehicle finished and the UI receives completion data—use this figure beside web_recent.png to contrast in-flight versus completed presentation.",
+    "description": "Running journey card only: clock/distance row, prediction row, no arrival/error/accuracy.",
+    "other_information": "Pair with web_recent.png for running vs. completed UI."
+  },
+  "web_sim.png": {
+    "application": "eta_web_simulator",
+    "application_label": "Web simulator and ETA model testing tool",
+    "latex_label": "fig:web-simulation-map",
+    "caption_article": "Main evaluation view: Model Performance Analysis (left), live SUMO map with green route, S/D markers, and orange user vehicle (center), Recent Journeys (right); simulation clock above the map and a legend toggle on the map chrome.",
+    "caption_report": "Primary three-column screen for real-time ETA testing. The left rail reproduces the Model Performance Analysis workspace: cohort summaries (total journeys, mean duration and distance, MAE, RMSE, MAPE), short/medium/long MAE stratification by trip duration and distance, controls to open scatter plots, time-of-day bar chart, and stratified histograms, plus PDF export. The center pane renders the SUMO network: background traffic as small circular glyphs, the active user route as a green polyline, origin on a green circle labeled S and destination on a red circle labeled D, and the injected user vehicle as an orange car icon following the route; a lightweight banner may remind the user that their journey is in progress. The current simulation time is shown above the map; a compact icon at the top-left of the map frame opens a transient legend overlay that dismisses automatically after a few seconds. The right rail lists Recent Journeys with Running versus Completed cards (predictions and, when finished, error and accuracy), tying per-trip feedback to the aggregate metrics on the left.",
+    "description": "Full dashboard: analytics sidebar, map with S/D, green path, orange user vehicle, vehicle dots, time readout, legend control; recent trips sidebar.",
+    "other_information": "Screenshots may include legacy marketing header text; use neutral wording in the paper or crop for anonymized figures."
+  },
+  "web_static.png": {
+    "application": "eta_web_simulator",
+    "application_label": "Web simulator and ETA model testing tool",
+    "latex_label": "fig:web-model-performance-analysis",
+    "caption_article": "Model Performance Analysis dashboard: global journey statistics (MAE, RMSE, MAPE), MAE by trip duration and distance (short/medium/long bins), and controls to open scatter, time-of-day, and histogram plots.",
+    "caption_report": "The web application's ``Model Performance Analysis'' view aggregates all logged interactive journeys stored in the backend. A top row reports cohort size and mean trip duration and distance, together with overall prediction quality in seconds (MAE, RMSE) and as a percentage (MAPE). Two further panels stratify MAE by trip duration and by trip distance, each into short, medium, and long bins, showing both the mean absolute error and the number of trips in each bin so that reliability can be read alongside sample support. Below, a ``Visual Analysis'' area lets the analyst open dedicated figures: scatter plots of trip duration versus MAE and trip distance versus MAE, a bar chart of MAE by time of day, and two sets of two-dimensional histograms (duration versus MAE and distance versus MAE) with separate short, medium, and long breakdowns. An ``Export PDF'' control bundles the same summaries and plots for offline reporting.",
+    "description": "Dark-themed Model Performance Analysis UI: summary cards, stratified MAE by duration/distance, plot launchers, Export PDF.",
+    "other_information": "Example run shown: ~2700+ journeys, MAE ~24s, MAPE ~3%; exact numbers depend on the logged database at capture time."
+  }
+}

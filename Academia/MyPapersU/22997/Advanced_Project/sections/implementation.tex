@@ -1,0 +1,197 @@
+\section{Implementation}
+
+This project consists of two main components:
+
+\begin{enumerate}
+    \item \textbf{Traffic-DSTG-Gen}: Dataset generation system that creates dynamic spatio-temporal graph datasets from SUMO traffic simulations
+    \item \textbf{TrafficLab}: Web-based testing platform that provides real-time ETA predictions through an interactive interface
+\end{enumerate}
+
+\subsection{Development Environment}
+
+The project was developed in a Linux environment using Docker for containerization:
+
+\begin{itemize}
+    \item \textbf{Development Container}: Ubuntu 20.04 with Python 3.10, Node.js 18+
+    \item \textbf{Version Control}: Git with branching strategy for parallel development
+    \item \textbf{Dependency Management}: 
+    \begin{itemize}
+        \item Python dependencies managed with pip (requirements.txt)
+        \item JavaScript dependencies managed with npm
+    \end{itemize}
+    \item \textbf{Containerization}: Docker and Docker Compose for deployment
+\end{itemize}
+
+\subsection{Traffic-DSTG-Gen: Dataset Generation System}
+
+The dataset generation system is responsible for creating training data from SUMO simulations.
+
+\subsubsection{Architecture}
+
+The system follows a pipeline architecture with five main stages:
+
+\begin{enumerate}
+    \item \textbf{Simulation Stage}: Generate traffic snapshots using SUMO
+    \item \textbf{Labeling Stage}: Generate per-snapshot ETA labels
+    \item \textbf{EDA Stage}: Generate feature statistics and analysis
+    \item \textbf{Conversion Stage}: Convert to PyTorch Geometric format
+    \item \textbf{Validation Stage}: Verify dataset integrity
+\end{enumerate}
+
+\subsubsection{Key Components}
+
+\textbf{Graph Entities} (\texttt{graph/entities.py}):
+\begin{itemize}
+    \item \texttt{SimManager}: Main controller for simulation state
+    \item Junction and Vehicle node abstractions
+    \item Dynamic edge representations
+    \item Route-aware feature encoding
+\end{itemize}
+
+\textbf{Main Entry Point} (\texttt{main.py}):
+The main entry point orchestrates the entire simulation:
+\begin{itemize}
+    \item Loads SUMO network configuration
+    \item Initializes traffic simulation with vehicle schedules
+    \item Extracts dynamic graph snapshots at configurable intervals (default: 30 seconds)
+    \item Saves snapshots as JSON files for further processing
+\end{itemize}
+
+\textbf{Dataset Tools}:
+\begin{itemize}
+    \item \texttt{dataset\_creator.py}: Converts JSON snapshots to PyTorch Geometric .pt files
+    \item \texttt{create\_labels\_json.py}: Generates per-snapshot ETA labels
+    \item \texttt{EDA.py}: Comprehensive exploratory data analysis
+    \item \texttt{visualize\_graph.py}: Graph visualization utilities
+\end{itemize}
+
+\subsubsection{Dataset Features}
+
+The generated dataset includes:
+
+\textbf{Node Features (28 dimensions)}:
+\begin{itemize}
+    \item \textbf{Junction Nodes}: Zone, position, type, traffic state
+    \item \textbf{Vehicle Nodes}: Speed, acceleration, position, route progress, destination, route\_left information
+\end{itemize}
+
+\textbf{Edge Features (7 dimensions)}:
+\begin{itemize}
+    \item \textbf{Static Edges}: Length, lanes, speed limits
+    \item \textbf{Dynamic Edges}: Current speed, demand, occupancy
+\end{itemize}
+
+\textbf{Route Awareness}:
+\begin{itemize}
+    \item Explicit route encoding with complete remaining route per vehicle
+    \item Route-Left features: Discounted demand and occupancy along remaining path
+    \item Temporal consistency: Route information updates as vehicles progress
+\end{itemize}
+
+\subsection{SUMO Integration}
+
+The SUMO integration was implemented using the Python TraCI library to control running simulations in real-time. The integration provides:
+
+\begin{itemize}
+    \item Dynamic vehicle tracking and state extraction
+    \item Traffic light state monitoring
+    \item Network topology extraction
+    \item Real-time route planning using Dijkstra's algorithm
+    \item Graph structure generation for model input
+\end{itemize}
+
+\subsection{Model Inference Implementation}
+
+The model inference service loads pre-trained DSTRA-GNN models and performs real-time predictions. Key implementation details include:
+
+\begin{itemize}
+    \item Model loading from checkpoint files
+    \item Graph data transformation to PyTorch Geometric format
+    \item Batch processing for efficient inference
+    \item GPU acceleration support
+    \item Result caching for performance optimization
+\end{itemize}
+
+\subsection{TrafficLab: Web-Based Testing Platform}
+
+TrafficLab is a comprehensive web application that integrates SUMO simulation with DSTRA-GNN model inference.
+
+\subsubsection{Backend Architecture}
+
+\textbf{FastAPI Application} (\texttt{backend/main.py}):
+\begin{itemize}
+    \item RESTful API with 50+ endpoints for simulation control
+    \item SUMO integration via TraCI for real-time simulation control
+    \item Model inference service for ETA predictions
+    \item Journey tracking and analytics
+    \item CORS middleware for frontend communication
+\end{itemize}
+
+\textbf{SUMO Service} (\texttt{backend/services/sumo\_service.py}):
+\begin{itemize}
+    \item Manages SUMO simulation lifecycle (start, pause, stop)
+    \item Real-time vehicle tracking and position updates
+    \item Network topology management (junctions, edges, zones)
+    \item Route planning using SUMO's internal Dijkstra algorithm
+    \item Traffic state extraction for model input
+\end{itemize}
+
+\textbf{Model Inference} (\texttt{backend/models/}):
+\begin{itemize}
+    \item \texttt{eta\_inference.py}: Loads pre-trained DSTRA-GNN models
+    \item \texttt{real\_time\_inference.py}: Real-time prediction pipeline
+    \item \texttt{temporal\_dataset.py}: Handles temporal graph sequences
+    \item \texttt{model\_temporal\_moe.py}: Implements Mixture-of-Experts architecture
+    \item GPU acceleration support for low-latency inference
+\end{itemize}
+
+\subsubsection{Frontend Architecture}
+
+\textbf{Vue.js Application} (\texttt{frontend/src/}):
+\begin{itemize}
+    \item \textbf{App.vue}: Main application shell with routing
+    \item \textbf{HomePage.vue}: Landing page with research information
+    \item \textbf{DemoPage.vue}: Interactive simulation demo interface
+    \item \textbf{SimDemoPage.vue}: Full-featured simulation control panel
+    \item \textbf{DatasetCreator.vue}: Dataset generation interface
+\end{itemize}
+
+\textbf{Key Features}:
+\begin{itemize}
+    \item Interactive map-based route selection
+    \item Real-time traffic visualization with vehicle positions
+    \item ETA prediction display with accuracy metrics
+    \item Journey tracking with predicted vs actual travel times
+    \item Statistical analysis dashboard with performance metrics
+    \item Responsive design using Tailwind CSS
+\end{itemize}
+
+\subsubsection{Database Schema}
+
+\textbf{PostgreSQL Database} (\texttt{backend/models/database.py}):
+\begin{itemize}
+    \item \texttt{Journey} table: Stores completed trips with predictions and actual times
+    \item SQLAlchemy ORM for database operations
+    \item Automatic schema migration support
+    \item Session management with connection pooling
+\end{itemize}
+
+\subsubsection{Deployment}
+
+\textbf{Docker Compose Setup}:
+\begin{itemize}
+    \item Separate containers for frontend (Vue.js) and backend (FastAPI)
+    \item PostgreSQL database container with persistent storage
+    \item Nginx reverse proxy for production deployment
+    \item Environment-based configuration (development vs production)
+    \item Health checks and automatic restart on failure
+\end{itemize}
+
+\textbf{Development Workflow}:
+\begin{itemize}
+    \item Hot-reload for both frontend and backend during development
+    \item Shared volumes for code and data persistence
+    \item Network isolation with Docker networking
+    \item Log aggregation for debugging
+\end{itemize}
+

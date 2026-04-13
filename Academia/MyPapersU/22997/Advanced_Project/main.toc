@@ -1,0 +1,80 @@
+\babel@toc {english}{}
+\contentsline {section}{\numberline {1}Introduction}{4}{section.1}%
+\contentsline {subsection}{\numberline {1.1}Project Background}{4}{subsection.1.1}%
+\contentsline {subsection}{\numberline {1.2}Project Objectives}{4}{subsection.1.2}%
+\contentsline {subsubsection}{\numberline {1.2.1}Primary Objectives}{4}{subsubsection.1.2.1}%
+\contentsline {subsubsection}{\numberline {1.2.2}Secondary Objectives}{4}{subsubsection.1.2.2}%
+\contentsline {subsection}{\numberline {1.3}Project Scope}{4}{subsection.1.3}%
+\contentsline {subsection}{\numberline {1.4}Document Structure}{5}{subsection.1.4}%
+\contentsline {section}{\numberline {2}Literature Review}{5}{section.2}%
+\contentsline {subsection}{\numberline {2.1}Graph Neural Networks in Traffic Prediction}{5}{subsection.2.1}%
+\contentsline {subsection}{\numberline {2.2}Real-time Traffic Simulation}{6}{subsection.2.2}%
+\contentsline {subsection}{\numberline {2.3}Web-based Traffic Systems}{6}{subsection.2.3}%
+\contentsline {subsection}{\numberline {2.4}System Integration Challenges}{6}{subsection.2.4}%
+\contentsline {subsubsection}{\numberline {2.4.1}Data Plane Limitations}{6}{subsubsection.2.4.1}%
+\contentsline {subsubsection}{\numberline {2.4.2}Real-time Requirements}{7}{subsubsection.2.4.2}%
+\contentsline {subsection}{\numberline {2.5}Research Gap}{7}{subsection.2.5}%
+\contentsline {section}{\numberline {3}System Architecture and Design}{7}{section.3}%
+\contentsline {subsection}{\numberline {3.1}Overall Architecture}{7}{subsection.3.1}%
+\contentsline {subsection}{\numberline {3.2}Component Specifications}{8}{subsection.3.2}%
+\contentsline {subsubsection}{\numberline {3.2.1}Web Frontend}{8}{subsubsection.3.2.1}%
+\contentsline {subsubsection}{\numberline {3.2.2}API Gateway}{8}{subsubsection.3.2.2}%
+\contentsline {subsubsection}{\numberline {3.2.3}SUMO Service}{8}{subsubsection.3.2.3}%
+\contentsline {subsubsection}{\numberline {3.2.4}Model Service}{9}{subsubsection.3.2.4}%
+\contentsline {subsection}{\numberline {3.3}Data Management Architecture}{9}{subsection.3.3}%
+\contentsline {subsubsection}{\numberline {3.3.1}PostgreSQL Database}{9}{subsubsection.3.3.1}%
+\contentsline {subsubsection}{\numberline {3.3.2}InfluxDB Database}{9}{subsubsection.3.3.2}%
+\contentsline {subsubsection}{\numberline {3.3.3}Redis Cache}{9}{subsubsection.3.3.3}%
+\contentsline {section}{\numberline {4}Implementation}{10}{section.4}%
+\contentsline {subsection}{\numberline {4.1}Development Environment}{10}{subsection.4.1}%
+\contentsline {subsection}{\numberline {4.2}Traffic-DSTG-Gen: Dataset Generation System}{10}{subsection.4.2}%
+\contentsline {subsubsection}{\numberline {4.2.1}Architecture}{10}{subsubsection.4.2.1}%
+\contentsline {subsubsection}{\numberline {4.2.2}Key Components}{10}{subsubsection.4.2.2}%
+\contentsline {subsubsection}{\numberline {4.2.3}Dataset Features}{11}{subsubsection.4.2.3}%
+\contentsline {subsection}{\numberline {4.3}SUMO Integration}{11}{subsection.4.3}%
+\contentsline {subsection}{\numberline {4.4}Model Inference Implementation}{12}{subsection.4.4}%
+\contentsline {subsection}{\numberline {4.5}TrafficLab: Web-Based Testing Platform}{12}{subsection.4.5}%
+\contentsline {subsubsection}{\numberline {4.5.1}Backend Architecture}{12}{subsubsection.4.5.1}%
+\contentsline {subsubsection}{\numberline {4.5.2}Frontend Architecture}{13}{subsubsection.4.5.2}%
+\contentsline {subsubsection}{\numberline {4.5.3}Database Schema}{13}{subsubsection.4.5.3}%
+\contentsline {subsubsection}{\numberline {4.5.4}Deployment}{13}{subsubsection.4.5.4}%
+\contentsline {section}{\numberline {5}Testing and Validation}{14}{section.5}%
+\contentsline {subsection}{\numberline {5.1}Testing Methodology}{14}{subsection.5.1}%
+\contentsline {subsubsection}{\numberline {5.1.1}Unit Testing}{14}{subsubsection.5.1.1}%
+\contentsline {subsubsection}{\numberline {5.1.2}Integration Testing}{14}{subsubsection.5.1.2}%
+\contentsline {subsubsection}{\numberline {5.1.3}Performance Testing}{14}{subsubsection.5.1.3}%
+\contentsline {subsection}{\numberline {5.2}Validation Results}{14}{subsection.5.2}%
+\contentsline {subsection}{\numberline {5.3}Model Accuracy Testing}{14}{subsection.5.3}%
+\contentsline {subsection}{\numberline {5.4}User Testing}{15}{subsection.5.4}%
+\contentsline {subsection}{\numberline {5.5}Edge Cases and Error Handling}{15}{subsection.5.5}%
+\contentsline {section}{\numberline {6}Results and Achievements}{15}{section.6}%
+\contentsline {subsection}{\numberline {6.1}Primary Achievements}{15}{subsection.6.1}%
+\contentsline {subsubsection}{\numberline {6.1.1}System Development}{15}{subsubsection.6.1.1}%
+\contentsline {subsubsection}{\numberline {6.1.2}SUMO Integration}{16}{subsubsection.6.1.2}%
+\contentsline {subsubsection}{\numberline {6.1.3}Model Deployment}{16}{subsubsection.6.1.3}%
+\contentsline {subsubsection}{\numberline {6.1.4}Web Interface}{16}{subsubsection.6.1.4}%
+\contentsline {subsection}{\numberline {6.2}Technical Achievements}{16}{subsection.6.2}%
+\contentsline {subsubsection}{\numberline {6.2.1}Architecture}{16}{subsubsection.6.2.1}%
+\contentsline {subsubsection}{\numberline {6.2.2}Performance}{16}{subsubsection.6.2.2}%
+\contentsline {subsection}{\numberline {6.3}Research Contributions}{17}{subsection.6.3}%
+\contentsline {subsubsection}{\numberline {6.3.1}Novel Architecture}{17}{subsubsection.6.3.1}%
+\contentsline {subsubsection}{\numberline {6.3.2}Integration Framework}{17}{subsubsection.6.3.2}%
+\contentsline {subsubsection}{\numberline {6.3.3}Evaluation Methodology}{17}{subsubsection.6.3.3}%
+\contentsline {subsection}{\numberline {6.4}Challenges Overcome}{17}{subsection.6.4}%
+\contentsline {subsubsection}{\numberline {6.4.1}Real-time Latency}{17}{subsubsection.6.4.1}%
+\contentsline {subsubsection}{\numberline {6.4.2}SUMO Integration Complexity}{17}{subsubsection.6.4.2}%
+\contentsline {subsubsection}{\numberline {6.4.3}WebSocket Scalability}{17}{subsubsection.6.4.3}%
+\contentsline {subsection}{\numberline {6.5}Impact}{17}{subsection.6.5}%
+\contentsline {subsubsection}{\numberline {6.5.1}Research Community}{17}{subsubsection.6.5.1}%
+\contentsline {subsubsection}{\numberline {6.5.2}Industry Relevance}{17}{subsubsection.6.5.2}%
+\contentsline {subsubsection}{\numberline {6.5.3}Educational Value}{17}{subsubsection.6.5.3}%
+\contentsline {subsection}{\numberline {6.6}Performance Metrics}{18}{subsection.6.6}%
+\contentsline {section}{\numberline {7}Conclusion}{18}{section.7}%
+\contentsline {subsection}{\numberline {7.1}Project Summary}{18}{subsection.7.1}%
+\contentsline {subsection}{\numberline {7.2}Key Accomplishments}{18}{subsection.7.2}%
+\contentsline {subsection}{\numberline {7.3}Technical Contributions}{18}{subsection.7.3}%
+\contentsline {subsection}{\numberline {7.4}Impact and Future Work}{19}{subsection.7.4}%
+\contentsline {subsubsection}{\numberline {7.4.1}Immediate Impact}{19}{subsubsection.7.4.1}%
+\contentsline {subsubsection}{\numberline {7.4.2}Future Enhancements}{19}{subsubsection.7.4.2}%
+\contentsline {subsubsection}{\numberline {7.4.3}Research Directions}{19}{subsubsection.7.4.3}%
+\contentsline {subsection}{\numberline {7.5}Final Remarks}{19}{subsection.7.5}%

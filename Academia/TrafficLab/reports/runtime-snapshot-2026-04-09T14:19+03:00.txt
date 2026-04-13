@@ -1,0 +1,21 @@
+=== TrafficLab runtime snapshot 2026-04-09T14:19:48+03:00 ===
+--- Host ---
+Linux lab1 6.17.0-20-generic #20~24.04.1-Ubuntu SMP PREEMPT_DYNAMIC Thu Mar 19 01:28:37 UTC 2 x86_64 x86_64 x86_64 GNU/Linux
+CPUs: 32
+               total        used        free      shared  buff/cache   available
+Mem:            60Gi        16Gi        12Gi       352Mi        32Gi        43Gi
+Swap:          8.0Gi          0B       8.0Gi
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/nvme0n1p2  1.8T   52G  1.7T   3% /
+--- HTTP checks ---
+{"status":"healthy"}
+frontend :3000 HTTP 200
+--- Docker (if permitted) ---
+docker: not available (permission or not running)
+--- Key processes (rss) ---
+root      511612  0.0  0.0 104224 27656 ?        Ssl  14:13   0:00 /usr/local/bin/python3.11 /usr/local/bin/uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+root      511673  0.4  0.2 22415828 128608 ?     Sl   14:13   0:01 node /app/node_modules/.bin/vite --host 0.0.0.0
+root      511887  9.2  0.1 136008 71200 ?        S    14:13   0:36 sumo -c sumo/urban_three_zones.sumocfg --start --remote-port 56001
+70        512064  0.0  0.0 176648 14668 ?        Ss   14:14   0:00 postgres: user trafficlab 172.18.0.4(58534) idle
+70        512065  0.0  0.0 175988 12828 ?        Ss   14:14   0:00 postgres: user trafficlab 172.18.0.4(58550) idle
+guy       514952  0.0  0.0  17984  2492 pts/3    S+   14:19   0:00 grep -E [u]vicorn main|[s]umo -c|[n]ode.*vite|postgres: user trafficlab

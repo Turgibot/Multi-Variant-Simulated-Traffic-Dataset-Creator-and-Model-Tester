@@ -1,0 +1,47 @@
+% Minimal LaTeX smoke test. NiDS draft: nids2026_article/main.tex (make pdf from Academia/).
+% Build with: make pdf   or   ./compile.sh
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{hyperref}
+
+\title{Multi-Variant Simulated Traffic Dataset Creator:\\Sample Build}
+\author{Author Names}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This is a minimal sample document to verify that the \texttt{Academia/} folder
+builds correctly. Replace this file with your conference or journal template
+when ready.
+\end{abstract}
+
+\section{Introduction}
+The project provides tooling for simulated traffic datasets and model testing.
+This PDF was generated from \texttt{sample\_article.tex} using \texttt{make pdf}.
+
+\section{Build}
+Install a LaTeX engine if needed (Debian/Ubuntu example):
+\begin{verbatim}
+sudo apt install make texlive-latex-base \
+  texlive-latex-recommended texlive-fonts-recommended
+\end{verbatim}
+From the repository root:
+\begin{verbatim}
+make -C Academia pdf
+\end{verbatim}
+Or from \texttt{Academia/} (no \texttt{make} required):
+\begin{verbatim}
+chmod +x compile.sh   # once
+./compile.sh
+\end{verbatim}
+If \texttt{pdflatex} is not installed, \texttt{compile.sh} and \texttt{make pdf} will use
+\texttt{tectonic} when an executable is present at \texttt{Academia/tectonic} (gitignored;
+download from \href{https://tectonic-typesetting.org/}{tectonic-typesetting.org}).
+
+\end{document}

@@ -1,0 +1,61 @@
+services:
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.prod
+    expose:
+      - "80"
+    environment:
+      - NODE_ENV=production
+    depends_on:
+      backend:
+        condition: service_started
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.prod
+    expose:
+      - "8000"
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      - PYTHONPATH=/app
+      - "DATABASE_URL=${DATABASE_URL:-postgresql://user:password@db:5432/trafficlab}"
+      - CORS_EXTRA_ORIGINS=${CORS_EXTRA_ORIGINS:-}
+      - SUMO_HOME=/usr/share/sumo
+      - NODE_ENV=production
+      - TRAFFICLAB_DEBUG_DB=${TRAFFICLAB_DEBUG_DB:-}
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    image: postgres:15-alpine
+    environment:
+      - POSTGRES_DB=trafficlab
+      - POSTGRES_USER=user
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-password}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d trafficlab"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.prod.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - frontend
+      - backend
+
+volumes:
+  postgres_data:

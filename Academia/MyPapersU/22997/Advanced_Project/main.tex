@@ -1,0 +1,61 @@
+\documentclass[12pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[english]{babel}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+\usepackage{cite}
+\usepackage{booktabs}
+\usepackage{siunitx}
+\usepackage{microtype}
+\usepackage{url}
+\usepackage[hidelinks]{hyperref}
+\usepackage{geometry}
+\usepackage{enumitem}
+\usepackage{tikz}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{fancyhdr}
+\usepackage{array}
+
+\geometry{margin=2.5cm}
+
+% Header and footer
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{The Open University - Advanced Project Final Report}
+\fancyhead[R]{Guy Tordjman}
+\fancyfoot[C]{\thepage}
+
+% Title and author information now handled by cover page
+
+\begin{document}
+
+% Cover page
+\input{cover}
+
+\cleardoublepage
+
+% Abstract
+\input{sections/abstract}
+
+\cleardoublepage
+\tableofcontents
+\cleardoublepage
+
+\input{sections/introduction}
+\input{sections/literature_review}
+\input{sections/system_design}
+\input{sections/implementation}
+\input{sections/testing_validation}
+\input{sections/results_achievements}
+\input{sections/conclusion}
+
+\cleardoublepage
+\input{sections/acknowledgments}
+
+\cleardoublepage
+\bibliographystyle{ieeetr}
+\bibliography{references}
+
+\end{document}
+

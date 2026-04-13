@@ -1,0 +1,12 @@
+# PyTorch: install before this file (see backend/Dockerfile or README). Docker uses CPU wheels to avoid huge CUDA downloads.
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+sumolib==1.15.0
+traci==1.15.0
+torch-geometric==2.4.0
+numpy==1.24.3
+pandas==2.0.3
+psycopg2-binary==2.9.7
+sqlalchemy==2.0.23
+tqdm==4.66.1
+matplotlib==3.7.2

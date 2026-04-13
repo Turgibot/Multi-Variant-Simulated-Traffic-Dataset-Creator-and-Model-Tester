@@ -1,0 +1,106 @@
+\documentclass[12pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[english]{babel}
+\usepackage{times}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+\usepackage{cite}
+\usepackage{booktabs}
+\usepackage{siunitx}
+\usepackage{microtype}
+\usepackage{url}
+\usepackage[hidelinks]{hyperref}
+\usepackage{geometry}
+\usepackage{setspace}
+\usepackage{enumitem}
+\usepackage{tikz}
+\usepackage{listings}
+\usepackage{xcolor}
+
+\geometry{margin=2.5cm}
+\onehalfspacing
+
+\begin{document}
+
+% Short cover page
+\begin{center}
+{\Large\bfseries The Open University of Israel}\\
+Department of Mathematics and Computer Science\\[0.5cm]
+{\large Project Proposal - Advanced Project in Computer Science (22997)}\\[1cm]
+{\LARGE\bfseries Real-Time Testing System for Dynamic GNN models in Traffic Simulation}\\[1cm]
+{\large Student: Guy Tordjman (036238772)}\\
+{\large Supervisor: Dr. Nadav Voloch}\\
+{\large October 2025}
+\end{center}
+
+\vspace{0.5cm}
+
+\section{Project Objective}
+
+This project aims to develop a comprehensive real-time web-based testing system for ETA (Estimated Time of Arrival) prediction models using dynamic graph neural networks. The system will provide an interactive platform for users to test and evaluate different ETA prediction models in realistic traffic simulations, enabling real-time model comparison and performance analysis through a web browser interface.
+
+The key innovation is the generation of dynamic, multi-relational graph datasets from real-time SUMO traffic simulations, creating a model-agnostic testing environment that can evaluate any ETA prediction model capable of processing dynamic graph data.
+
+\section{Background with Reference to Sources}
+
+Traffic prediction is critical for urban planning and navigation systems. Traditional statistical methods (ARIMA, Kalman filters) struggle with complex, non-linear traffic dynamics. SUMO (Simulation of Urban Mobility) \cite{SUMO2018} provides microscopic traffic simulation with individual vehicle behavior modeling, offering realistic vehicle behavior, detailed network representation, and real-time capabilities.
+
+Graph Neural Networks (GNNs) excel at processing graph-structured data where entities (nodes) are connected by relationships (edges). Unlike traditional neural networks requiring fixed-size inputs, GNNs handle variable-sized graphs with dynamic topologies, making them ideal for traffic scenarios. Key architectures include: \textbf{GCN} \cite{kipf2017gcn}, \textbf{GAT} \cite{velivckovic2017graph}, \textbf{GraphSAGE} \cite{hamilton2017inductive}, and \textbf{Graph Transformer} \cite{dwivedi2020generalization}. Recent traffic prediction models include \textbf{DeepTTE} \cite{deepTTE2018}, \textbf{DCRNN} \cite{dcrnn2018}, \textbf{ST-GCN} \cite{yu2018stgcn}, and \textbf{Graph WaveNet} \cite{wu2019graphwavenet}.
+
+Building upon previous research in traffic prediction and route optimization, this project extends the work presented in \cite{voloch2021}, which demonstrated real-time future traffic estimations for navigation route optimization. The foundation also draws from recent advances in smart simulative route predictions \cite{SmartSimulativeRoute2025}, establishing a comprehensive framework for ETA prediction using dynamic graph neural networks.
+
+Current limitations include: (1) \textbf{Limited Dynamic Datasets} - most approaches use static graph structures, (2) \textbf{Lack of Standardized Evaluation} - no consistent platform for model comparison, (3) \textbf{Insufficient Real-time Testing} - models evaluated on historical data rather than live scenarios, and (4) \textbf{Model-Specific Implementations} - systems designed for specific models rather than being model-agnostic.
+
+This project addresses these gaps by creating a comprehensive system that generates dynamic, multi-relational graph datasets from real-time SUMO simulations, provides a model-agnostic testing platform for fair comparison of ETA prediction models, enables real-time evaluation in realistic traffic conditions, and establishes standardized evaluation metrics and protocols for traffic prediction research.
+
+\section{Project Description}
+
+The proposed system consists of: (1) SUMO Simulation Engine generating realistic traffic scenarios, (2) Dynamic Dataset Creation constructing multi-relational graphs, (3) Real-time Simulation Player providing live simulation playback, (4) Web Browser Interface for user input and result viewing, (5) Inference Module integrating ETA prediction models, (6) Database System storing results and metrics, and (7) Analytics Engine generating real-time analysis.
+
+\section{Project Importance}
+
+This project addresses critical needs: (1) Standardized Datasets - consistent, dynamic graph dataset for ETA prediction research, (2) Model-Agnostic Testing - fair comparison of different ETA prediction models, (3) Real-time Evaluation - testing models in realistic traffic conditions, and (4) Web Accessibility - making advanced traffic prediction research accessible.
+
+\section{Methods for Project Execution}
+
+The project involves: Research and Analysis, Programming and Development (SUMO integration, graph algorithms, web interface, backend API, database design, model integration), Testing and Validation, and Documentation.
+
+\textbf{Tools and Software}: SUMO, Python, PyTorch/TensorFlow, PostgreSQL, HTML/CSS/JavaScript, Docker.
+
+\section{Project Timeline}
+
+\begin{itemize}[leftmargin=0pt]
+\item \textbf{Month 1:} Research \& Design - Literature review, architecture, SUMO setup.
+\item \textbf{Month 2:} Core Integration - SUMO integration, graph algorithms, database.
+\item \textbf{Month 3:} Model \& Front-End - Model integration, web interface, testing.
+\item \textbf{Month 4:} Analytics \& Testing - Real-time player, analytics, testing.
+\item \textbf{Month 5:} Finalization - User testing, optimization, documentation.
+\end{itemize}
+
+\section{Initial Source List}
+
+\begin{thebibliography}{11}
+\bibitem{SUMO2018} Lopez, P. A., et al. "Microscopic traffic simulation using SUMO." ITSC 2018.
+
+\bibitem{kipf2017gcn} Kipf, T. N., and M. Welling. "Semi-supervised classification with graph convolutional networks." ICLR 2017.
+
+\bibitem{velivckovic2017graph} Veličković, P., et al. "Graph attention networks." ICLR 2018.
+
+\bibitem{hamilton2017inductive} Hamilton, W., et al. "Inductive representation learning on large graphs." NIPS 2017.
+
+\bibitem{dwivedi2020generalization} Dwivedi, V. P., and X. Bresson. "A generalization of transformer networks to graphs." ICLR 2021.
+
+\bibitem{deepTTE2018} Wang, D., et al. "DeepTTE: A deep learning framework for travel time estimation." KDD 2018.
+
+\bibitem{dcrnn2018} Li, Y., et al. "Diffusion convolutional recurrent neural network: Data-driven traffic forecasting." ICLR 2018.
+
+\bibitem{yu2018stgcn} Yu, B., H. Yin, and Z. Zhu. "Spatio-temporal graph convolutional networks: A deep learning framework for traffic forecasting." IJCAI 2018.
+
+\bibitem{wu2019graphwavenet} Wu, Z., et al. "Graph wavenet for deep spatial-temporal graph modeling." IJCAI 2019.
+
+\bibitem{voloch2021} Voloch, N., and N. Voloch-Bloch. "Finding the fastest navigation route by real-time future traffic estimations." 2021 IEEE International Conference on Microwaves, Communications, Antennas and Electronic Systems (COMCAS), 2021.
+
+\bibitem{SmartSimulativeRoute2025} Voloch, N., N. Penkar, and G. Tordjman. "Estimating accurate traffic time by smart simulative route predictions." Proceedings of the 24th IFIP Conference on e-Business, e-Services and e-Society (I3E 2025), Limassol, Cyprus, 2025.
+\end{thebibliography}
+
+\end{document}

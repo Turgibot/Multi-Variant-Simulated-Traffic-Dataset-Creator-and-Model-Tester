@@ -1,0 +1,53 @@
+seed: 42
+
+data:
+  allow_incomplete_tail: false
+  train_path: /app/dataset
+  num_files: 2910
+  start_idx: 0
+  shuffle_windows: false
+  stride_size: 10
+
+  playback_path: /app/dataset
+  playback_num_files: 2910
+  playback_start_idx: 0  
+  window_size: 30
+  
+
+model:
+  # MoE Model settings
+  hidden: 128
+  fusion_out: 192
+  experts: 6
+  top_k: 2
+  dropout: 0.1
+
+  # Temporal snapshot context - matching your best model
+  temporal_kind: "gru"                      # "gru" | "transformer" 
+  ablation_variant: "temporal_route_aware"    # static | "dynamic" | "route_aware" | "temporal_base" | "temporal_dynamic" | "temporal_route_aware"
+  
+
+train:
+  exp_name: one_day
+  logdir: ./logs
+  resume: true
+  log_interval: 1
+  val_log_interval: 1
+  num_workers: 4          
+  persistent_workers: true
+
+  batch_size: 2
+  lr: 1.0e-3
+  weight_decay: 1.0e-2
+  epochs: 500
+  t_max: 500
+  target_key: y_log_z       # choices: y, y_minmax, y_z, y_log, y_log_z
+
+losses:
+  lb_weight: 0.05
+  router_entropy_w: 0.002          # 0 to disable
+  router_entropy_keep_grad: true    # true = actually regularize router; false = just compute/log
+  router_entropy_mode: "kl_uniform"    # or "kl_uniform"
+  type : mae # choices: mse, mae, smooth_l1
+
+

@@ -1,0 +1,44 @@
+% Main entry: NiDS / LLNCS article split by section files.
+% Build: from Academia/nids2026_article run pdflatex main (twice) or use ../compile.sh
+% Images: ../images/
+% Double-blind: replace XXXXX placeholders before non-anonymous builds.
+\documentclass[runningheads]{llncs}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage{microtype}
+\usepackage[hidelinks]{hyperref}
+
+\graphicspath{{../images/}}
+
+\newcommand{\DesktopTool}{Graph Traffic Dataset Creator}
+\newcommand{\WebApp}{web evaluation client}
+
+\title{SUMO-Linked Dataset Generation and Interactive ETA Testing\\
+for Graph-Based Traffic Models}
+
+\titlerunning{SUMO Datasets and ETA Testing}
+
+\author{XXXXX XXXXX \and XXXXX XXXXX}
+\authorrunning{X. XXXXX et al.}
+\institute{XXXXX (affiliation omitted for review)}
+
+\begin{document}
+
+\maketitle
+\hypersetup{pdfauthor={}, pdfcreator={}, pdfproducer={}}
+
+\input{sections/abstract}
+
+\input{sections/introduction}
+
+\input{sections/related_work}
+
+\input{sections/system_overview}
+
+\input{sections/bibliography}
+
+\end{document}

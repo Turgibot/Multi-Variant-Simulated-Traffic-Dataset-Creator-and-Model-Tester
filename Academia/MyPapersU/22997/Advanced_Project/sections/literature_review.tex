@@ -1,0 +1,78 @@
+\section{Literature Review}
+
+\subsection{Graph Neural Networks in Traffic Prediction}
+
+Graph Neural Networks (GNNs) have emerged as powerful tools for traffic prediction due to their ability to model complex spatial and temporal relationships in transportation networks. Recent work has shown significant improvements over traditional methods:
+
+\begin{itemize}
+    \item \textbf{DCRNN} (Li et al., 2018): Introduced diffusion convolution for traffic prediction, capturing spatial dependencies through diffusion processes
+    \item \textbf{ST-GCN} (Yu et al., 2018): Applied graph convolution to spatio-temporal data, enabling effective modeling of temporal patterns
+    \item \textbf{Graph WaveNet} (Wu et al., 2019): Combined graph convolution with dilated convolution for multi-scale temporal feature extraction
+    \item \textbf{DSTRA-GNN} (Tordjman \& Voloch, 2025): Introduced dynamic route-aware graph neural networks with explicit route encoding, achieving 82\% improvement in ETA prediction accuracy
+\end{itemize}
+
+The DSTRA-GNN model, which forms the foundation of this project, introduces several innovations:
+\begin{itemize}
+    \item Dynamic graph representation with both vehicles and junctions as nodes
+    \item Route-aware encoding of planned vehicle trajectories
+    \item Mixture-of-Experts architecture for adaptive model specialization
+    \item Temporal aggregation of stable road infrastructure features
+\end{itemize}
+
+\subsection{Real-time Traffic Simulation}
+
+SUMO (Simulation of Urban Mobility) has become the standard platform for traffic simulation research:
+
+\begin{itemize}
+    \item \textbf{SUMO}: Comprehensive traffic simulation suite providing microscopic traffic simulation with individual vehicle behavior modeling
+    \item \textbf{TraCI}: Traffic Control Interface for real-time interaction with running simulations, enabling external applications to query and modify simulation state
+    \item \textbf{Python-SUMO}: Python bindings for SUMO integration enabling programmatic control of simulations
+\end{itemize}
+
+The integration with SUMO in this project enables generation of realistic traffic scenarios with varying congestion patterns, traffic light timings, and vehicle interactions, providing a controlled environment for model testing.
+
+\subsection{Web-based Traffic Systems}
+
+Recent developments in web-based traffic systems include:
+
+\begin{itemize}
+    \item \textbf{Google Maps}: Real-time traffic visualization and routing capabilities, processing billions of route requests daily
+    \item \textbf{Waze}: Community-based traffic information platform leveraging crowd-sourced data for accurate traffic reporting
+    \item \textbf{OpenStreetMap}: Open-source mapping platform providing infrastructure data for custom applications
+\end{itemize}
+
+These systems demonstrate the importance of web-based interfaces for traffic applications, inspiring the design choices for the implemented system.
+
+\subsection{System Integration Challenges}
+
+\subsubsection{Data Plane Limitations}
+Programmable switches impose harsh constraints that affect algorithm implementation:
+\begin{itemize}
+    \item Limited processing capabilities in each pipeline stage
+    \item Restricted memory access patterns
+    \item Feed-forward packet processing architecture
+    \item Limited support for dependent memory operations
+\end{itemize}
+
+\subsubsection{Real-time Requirements}
+Real-time traffic prediction systems face several challenges:
+\begin{itemize}
+    \item Latency constraints requiring sub-100ms response times
+    \item Throughput requirements supporting high concurrent user loads
+    \item Data freshness ensuring predictions reflect current traffic conditions
+    \item Scalability to handle growing user bases and traffic volumes
+\end{itemize}
+
+\subsection{Research Gap}
+
+While significant progress has been made in individual components, there was a lack of integrated systems that combine:
+\begin{itemize}
+    \item Real-time traffic simulation
+    \item Advanced GNN models with route awareness
+    \item Web-based user interfaces
+    \item Comprehensive data collection and analysis
+    \item Real-time evaluation capabilities
+\end{itemize}
+
+This project fills this gap by creating a unified platform that integrates all these components, enabling practical deployment and continuous evaluation of traffic prediction models.
+
