@@ -1,0 +1,53 @@
+% Route matching: abstract scoring + A* as specified for the paper (conceptual layer).
+
+\begin{algorithm}[htbp]
+\caption{Edge-weight assignment from a GPS polyline (scoring pass)}
+\label{alg:route-edge-weights}
+\begin{algorithmic}[1]
+\Require Polyline $P=(p_1,\ldots,p_m)$; full road network $N=(V,E)$ with directed edges;
+         integers $k,j \ge 1$; angular threshold $\theta_{\max}=\pi/9$; trade-off $\lambda>0$ (same length units as the map, e.g.\ $\lambda=5$).
+\Ensure Each edge $e\in E_{\mathrm{bb}}$ has a tier $w(e)\in\{1,10,1000\}$ (lower is more attractive).
+\State Build axis-aligned bounding box $B$ containing all points of $P$ (optional margin).
+\State Let $N_{\mathrm{bb}}=(V_{\mathrm{bb}},E_{\mathrm{bb}})\subseteq N$ be the subnetwork of all edges in $E$ whose centreline intersects $B$, together with their endpoint nodes in~$V$.
+\State Initialise $w(e)\gets 1000$ for all $e\in E_{\mathrm{bb}}$.
+\For{each consecutive segment $s_i=(p_i,p_{i+1})$, $i=1,\ldots,m-1$}
+    \State $\phi_i \gets \mathrm{atan2}\bigl(p_{i+1}-p_i\bigr)$ \Comment{segment heading in the projected map}
+    \State $\mathcal{C}\gets\emptyset$ \Comment{candidate edges for this segment}
+    \For{each edge $e\in E_{\mathrm{bb}}$}
+        \State $\psi_e \gets$ heading of $e$ from its centreline polyline (first to last shape point)
+        \State $\delta_e \gets \min\bigl(|\phi_i-\psi_e|,\,2\pi-|\phi_i-\psi_e|\bigr)$
+        \If{$\delta_e \le \theta_{\max}$}
+            \State mark $e$ as \emph{potential} for $s_i$; add $e$ to $\mathcal{C}$
+            \State $d_i \gets d(p_i,e)$; $d_{i+1} \gets d(p_{i+1},e)$
+            \Comment{shortest Euclidean distance from each segment endpoint to the polyline of $e$}
+            \State $r_e \gets \lambda\,\delta_e + \tfrac{1}{2}(d_i + d_{i+1})$
+            \Comment{$\lambda$ scales the angle gap $\delta_e$ (radians) into map units so it is comparable to the mean endpoint--edge distances.}
+        \EndIf
+    \EndFor
+    \State sort $\mathcal{C}$ by increasing $r_e$
+    \State $\mathrm{Top}_i \gets$ first $k$ edges; $\mathrm{Sec}_i \gets$ next $j$ edges (if $|\mathcal{C}|<k{+}j$, take as many as exist)
+    \For{$e\in \mathrm{Top}_i$}
+        \State $w(e)\gets 1$
+    \EndFor
+    \For{$e\in \mathrm{Sec}_i$}
+        \State $w(e)\gets \min\bigl(w(e),10\bigr)$
+    \EndFor
+\EndFor
+\Comment{Edges that were never marked potential in any segment keep $w(e)=1000$. Each time an edge ranks in $\mathrm{Top}_i$, set $w(e)\gets 1$; secondary ranks use $\min$ with $10$ so a prior tier $1$ is not overwritten by a weaker segment.}
+\end{algorithmic}
+\end{algorithm}
+
+\begin{algorithm}[htbp]
+\caption{Route extraction by multi-start A$^\ast$}
+\label{alg:route-astar}
+\begin{algorithmic}[1]
+\Require Restricted network $N_{\mathrm{bb}}$; tiers $w(e)$ on $E_{\mathrm{bb}}$; sets $\mathrm{Top}_1$ and $\mathrm{Top}_{m-1}$ from Algorithm~\ref{alg:route-edge-weights} (primaries for the first and last polyline segments); last point $p_m$.
+\Ensure Shortest-cost route among $k$ multi-start runs.
+\State Goal set $G \gets \mathrm{Top}_{m-1}$ \Comment{the $k$ primary edges for the last segment $(p_{m-1},p_m)$}
+\For{each start edge $e_{\mathrm{start}}\in \mathrm{Top}_1$}
+    \State Run A$^\ast$ from $e_{\mathrm{start}}$ with edge cost $c(e)=w(e)\cdot \mathrm{len}(e)$ and $h(v)=$ Euclidean distance from $v$ to $p_m$;
+           \textbf{stop} the run as soon as the search reaches any state on an edge in $G$.
+\EndFor
+\State \Return the route with minimum total cost among these $k$ runs.
+\end{algorithmic}
+\end{algorithm}

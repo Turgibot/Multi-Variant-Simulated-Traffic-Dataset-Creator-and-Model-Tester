@@ -354,5 +354,14 @@
     "caption_report": "The web application's ``Model Performance Analysis'' view aggregates all logged interactive journeys stored in the backend. A top row reports cohort size and mean trip duration and distance, together with overall prediction quality in seconds (MAE, RMSE) and as a percentage (MAPE). Two further panels stratify MAE by trip duration and by trip distance, each into short, medium, and long bins, showing both the mean absolute error and the number of trips in each bin so that reliability can be read alongside sample support. Below, a ``Visual Analysis'' area lets the analyst open dedicated figures: scatter plots of trip duration versus MAE and trip distance versus MAE, a bar chart of MAE by time of day, and two sets of two-dimensional histograms (duration versus MAE and distance versus MAE) with separate short, medium, and long breakdowns. An ``Export PDF'' control bundles the same summaries and plots for offline reporting.",
     "description": "Dark-themed Model Performance Analysis UI: summary cards, stratified MAE by duration/distance, plot launchers, Export PDF.",
     "other_information": "Example run shown: ~2700+ journeys, MAE ~24s, MAPE ~3%; exact numbers depend on the logged database at capture time."
+  },
+  "porto_web.png": {
+    "application": "eta_web_simulator",
+    "application_label": "Web simulator and ETA model testing tool",
+    "latex_label": "fig:traj-path-web-porto",
+    "caption_article": "Trajectory-path web evaluation: same three-column layout as simulation-backed testing, with Porto-area map and route (center), model performance analysis (left), recent journeys (right).",
+    "caption_report": "Web client screenshot used for the trajectory construction path in NiDS: real GPS-aligned or trajectory-export runs against the Porto-scale net. Pairs with dataset_convertion_main_with_map.png as desktop + web for the trajectory branch.",
+    "description": "SmartTransportation Lab dashboard: metrics, Porto map with green route and markers, recent journey cards.",
+    "other_information": "Used in fig_traj_path_ui panel (b); anonymize branding if required for camera-ready."
   }
 }

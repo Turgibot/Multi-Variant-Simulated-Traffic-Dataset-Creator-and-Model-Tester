@@ -1,0 +1,19 @@
+% Route matching: bounding-box / search scope (a) and split trajectory repair (b).
+\begin{figure}[t]
+\centering
+\newlength{\routeMatchFigHeight}
+\setlength{\routeMatchFigHeight}{3.55cm}
+\begin{minipage}[t]{0.49\linewidth}
+\centering
+\includegraphics[width=\linewidth,height=\routeMatchFigHeight,keepaspectratio]{dataset_conversion_bounding_box_whitebg.png}\\[-0.2em]
+{\scriptsize (\textbf{a}) Bounding box and search scope}
+\end{minipage}%
+\hfill
+\begin{minipage}[t]{0.49\linewidth}
+\centering
+\includegraphics[width=\linewidth,height=\routeMatchFigHeight,keepaspectratio]{dataset_conversion_split_whitebg.png}\\[-0.2em]
+{\scriptsize (\textbf{b}) Split trajectory after a GPS outlier}
+\end{minipage}
+\caption{Route matching on the imported SUMO network (conversion path). Panels~(\textbf{a}) and~(\textbf{b}) both show the \emph{bounding box}, \emph{burgundy} roads and junctions that limit the matcher's search entities, and the thick \emph{dark} final route on the SUMO network. Panel~(\textbf{a}) additionally shows the raw GPS trace as a \emph{light blue} polyline (numbered blue samples) and \emph{green} segments as the top-three candidate edges at sampled locations. Panel~(\textbf{b}) additionally shows \emph{light blue} and \emph{orange} polylines for the \emph{split} trajectory---two segment polylines after cutting at an outlying GPS point (e.g.\ $\sim\!5$\,km from adjacent samples), with each segment matched separately.}
+\label{fig:route_matching}
+\end{figure}

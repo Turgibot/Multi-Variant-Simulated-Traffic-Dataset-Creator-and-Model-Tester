@@ -1,0 +1,38 @@
+\section{Dataset Construction and Shared Representation}\label{sec:dataset}
+
+\subsection{Goals and construction paths}
+The representation is designed first for route-aware ETA learning while remaining useful beyond a single supervised target: it places road topology, vehicles, route context, and time-varying traffic state in one coherent form for controlled experimentation and downstream testing. Because it preserves graph semantics rather than only a final ETA label, it can also support related tasks such as road-level load estimation and area-level analysis.
+
+In the simulation-derived path, construction begins from a controlled microscopic environment built with SUMO and managed through the desktop tool and TraCI~\cite{sumo2011,traci2018}. Planned routes, vehicle identities, network structure, and evolving traffic states are directly observable during execution. The desktop workflow is configurable: simulation behavior, validation of zones, landmarks, and vehicle classes, temporal sampling of snapshots, and optional irregularity such as random untracked trips for robustness experiments.
+Figure~\ref{fig:sim_path_ui}(\textbf{a}) shows the simulation-definition stage; Figure~\ref{fig:sim_path_ui}(\textbf{b}) shows the web client used to evaluate predictors on simulation-backed journeys.
+
+\input{sections/fig_sim_path_zones_web}
+
+The real-trajectory path starts from noisier traces: GPS inaccuracies, temporal inconsistencies, or jumps may break a coherent path interpretation. Conversion is a staged repair-and-alignment workflow: network preparation, import, repair, route inference or matching, slicing of trajectories with major jumps, and filtering of degenerate origin--destination pairs.
+We use the Porto taxi trajectory dataset~\cite{porto2015pkdd} as a representative real-world conversion example in our open-source bundle; the toolchain applies to other CSVs and regions.
+Figure~\ref{fig:traj_path_ui}(\textbf{a}) shows the desktop conversion interface; Figure~\ref{fig:traj_path_ui}(\textbf{b}) shows web-side evaluation on trajectory-backed runs.
+Figure~\ref{fig:route_matching} visualizes route-matching outputs on the map: search scope, candidates, raw GPS, the chosen SUMO route, and projections onto it.
+
+\input{sections/fig_traj_path_ui}
+
+\input{sections/fig_route_matching_pair}
+
+\subsection{Route matching on the network (abstract procedure)}
+Matching is not run on the full regional road graph: first, an axis-aligned bounding box $B$ is built around the GPS polyline $P$ (optionally padded), and $N_{\mathrm{bb}}=(V_{\mathrm{bb}},E_{\mathrm{bb}})$ is the subnetwork of $N$ formed from all edges whose geometry intersects $B$ and their incident nodes.
+GPS polylines are then aligned to $N_{\mathrm{bb}}$ in two phases: a \emph{scoring pass} assigns every edge a coarse tier ($1$, $10$, or $1000$) from successive segment--edge comparisons, then a \emph{routing pass} searches for a low-cost path that respects those tiers.
+For each polyline segment, edges whose heading differs from the segment by more than $\pi/9$ are discarded; among survivors, edges are ranked by $r_e=\lambda\delta_e+\frac{1}{2}\bigl(d(p_i,e)+d(p_{i+1},e)\bigr)$, where $\delta_e$ is the acute angle gap in radians, $d(p,e)$ is the distance from point $p$ to the centreline polyline of edge $e$, and $\lambda$ fixes the radian-to-metre (map-unit) trade-off.
+The first $k$ edges become \emph{primary} candidates (tier~$1$), the next $j$ become \emph{secondary} (tier~$10$); edges that never qualify as a potential match in any segment keep tier~$1000$.
+Whenever an edge appears among the top-$k$ candidates for a segment, its tier is set to $1$ outright; secondary ($10$) updates use $\min$ with the current tier so an edge that already has tier $1$ is never raised to $10$ by a later segment.
+The routing pass runs A$^\ast$ exactly $k$ times: each run starts from one edge in $\mathrm{Top}_1$ (the $k$ primaries for the first segment) and \emph{terminates} as soon as the search reaches any of the \emph{last} primaries---any edge in $\mathrm{Top}_{m-1}$ for segment $(p_{m-1},p_m)$---which form the goal set. Edge costs are tier-weighted; the heuristic is Euclidean distance to $p_m$. The cheapest route among the $k$ runs is returned.
+Algorithms~\ref{alg:route-edge-weights}--\ref{alg:route-astar} state this procedure formally.
+
+\input{sections/route_matching_algorithm}
+
+Finally, GPS samples are projected onto the inferred SUMO route so vehicle position can be aggregated as a time series in the shared representation.
+
+\subsection{Shared representation, dynamics, and use}
+Both paths emit dataset instances in the same conceptual form: roads as edges, junctions and vehicles as nodes, with planned or inferred routes so the graph encodes route-conditioned traffic context, not only a traffic snapshot. Exports are feature-rich at node and edge level. Figure~\ref{fig:graph_schema}(\textbf{b}) illustrates static junctions and roads together with vehicle nodes and dynamic edges (vehicle--vehicle and vehicle--junction).
+
+Each snapshot is tied to a simulation step or to a trajectory update instant and bundles the static road/junction substrate with the active vehicle set, its routes, and the current traffic descriptors on touched edges and nodes. That alignment matters for learning: models trained on SUMO exports and models trained on converted trajectories ingest the same logical tensors even though the emission times are regular in one branch and event-driven in the other.
+
+The graph is dynamic in two senses: node and edge attributes evolve with traffic conditions, and structure changes as vehicle nodes move and dynamic relations are created or removed. The stable road graph is supplemented by transient traffic relations reflecting positioning and interaction. Downstream users may take the full dynamic graph or simplified views (vehicles, roads, junctions; optional filtering of dynamic relations).

@@ -1,6 +1,5 @@
 \begin{abstract}
-Estimated time of arrival (ETA) is the prediction of how long a trip will take from a given origin to a destination under current and evolving traffic conditions.
-It underpins navigation, dispatch, logistics, and traveler information systems: small errors propagate into poor routing, missed connections, and loss of trust in the service.
+Estimated time of arrival (ETA) predicts trip duration under evolving traffic and underpins navigation, dispatch, and logistics; small errors degrade routing, coordination, and user trust.
 
 Machine learning approaches to ETA require datasets that align road topology, vehicle motion, and labels in a form models can learn from.
 We present a toolchain that produces \emph{rich, feature-heavy dynamic graph} data suitable for models that use explicit graph structure---for example, architectures with separate treatment of static network elements and time-varying traffic.
@@ -8,6 +7,7 @@ We present a toolchain that produces \emph{rich, feature-heavy dynamic graph} da
 The system supports two complementary paths.
 First, \emph{simulation-based} datasets: the user supplies a SUMO network and simulation configuration; the tool materializes spatio-temporal graph snapshots with detailed per-node and per-edge features from microsimulation.
 Second, \emph{trajectory-based} datasets: real vehicle trajectories are imported and aligned to the same graph representation via map matching and step conversion on a user-selected region.
+Porto taxi trajectories illustrate real-world conversion in our bundle; other CSVs and regions are supported.
 
 To demonstrate the value of this representation for learning and comparison, we also built a \emph{web-based testing environment} that couples the simulator to interactive trips, model inference, and logged prediction error, so ETA models can be evaluated under controlled, repeatable conditions.
 

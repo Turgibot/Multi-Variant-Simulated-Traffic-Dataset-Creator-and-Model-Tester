@@ -1,0 +1,45 @@
+% Parsed from example SUMO nets bundled with sim / traj conversion examples (see caption).
+% Junctions = count of <junction>; road edges = <edge> without function="internal" and id not starting with ':'.
+% Sim snapshots: dense $T/\Delta t$ for 28\,d @ 30\,s. Traj snapshots: actual export count (sparsity).
+
+\begin{table}[t]
+\caption{Representative bundles from the open-source examples. Junction/road-edge counts from SUMO \texttt{net.xml} (non-internal edges). Coverage: \texttt{location} bbox. Simulation: dense $\Delta t$ over four weeks. Trajectory: \emph{actual} emitted graph steps (trace-driven sparsity), not $\lfloor T/\Delta t\rfloor$.}
+\label{tab:dataset_stats}
+\centering
+\small
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+Quantity & Simulation & Trajectory conversion \\
+\midrule
+Temporal span & 4 weeks & 1 year \\
+Project name & 3 zones city & Porto taxi \\
+Trips after repair & 403\,848 & 1\,312\,637 \\
+Junction nodes & 1\,031 & 75\,264 \\
+Road edges (non-internal) & 1\,294 & 146\,816 \\
+Approx.\ coverage area (km$^2$) & $\approx 203$ & $\approx 385$ \\
+Graph snapshots (at $\Delta t$) & 80\,640 & 925\,644 \\
+Snapshot period $\Delta t$ (s) & 30 & 30 \\
+Node feat.\ dim.\ / edge feat.\ dim. & 28 / 6 & 28 / 6 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[t]
+\caption{ETA error on held-out evaluation journeys: route-aware model vs.\ mean-duration baseline (train-set mean predicted for every test trip). \emph{Simulation} = graph data from the microsimulation path; \emph{trajectory conversion} = real traces aligned to the network. MAE/RMSE in seconds; MAPE in percent.}
+\label{tab:eval_results}
+\centering
+\small
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{@{}l r rrr rrr@{}}
+\toprule
+ & & \multicolumn{3}{c}{Route-aware model} & \multicolumn{3}{c}{Mean baseline (avg)} \\
+\cmidrule(lr){3-5}\cmidrule(lr){6-8}
+Data source & $n$ & MAE & RMSE & MAPE & MAE & RMSE & MAPE \\
+ & & (s) & (s) & (\%) & (s) & (s) & (\%) \\
+\midrule
+Simulation & 2\,707 & 46.16 & 107.15 & 17.99 & 260.63 & 325.13 & 127.75 \\
+Trajectory conversion & 3\,055 & 52.38 & 121.50 & 20.41 & 282.66 & 352.41 & 138.50 \\
+\bottomrule
+\end{tabular}
+\end{table}

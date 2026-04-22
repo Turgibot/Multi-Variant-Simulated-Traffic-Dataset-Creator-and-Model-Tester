@@ -1,0 +1,20 @@
+% Simulation branch: desktop zone/scenario definition (a) + web ETA evaluation on simulation exports (b).
+\begin{figure}[t]
+\centering
+\newlength{\simPathFigHeight}
+\setlength{\simPathFigHeight}{3.35cm}
+\begin{minipage}[c]{0.49\linewidth}
+\centering
+\includegraphics[width=\linewidth,height=\simPathFigHeight,keepaspectratio]{dataset_zones.png}\\[-0.05em]
+{\scriptsize (\textbf{a}) Simulation path: zones and scenario setup (desktop)}
+\end{minipage}%
+\hfill
+\begin{minipage}[c]{0.49\linewidth}
+\centering
+\includegraphics[width=\linewidth,height=\simPathFigHeight,keepaspectratio]{web_sim.png}\\[-0.05em]
+{\scriptsize (\textbf{b}) Web client: evaluation on simulation-backed trips}
+\end{minipage}
+\caption{Simulation construction path and its web evaluation loop. (\textbf{a})~Simulation Definition: SUMO network map with attribute-based zones (A/B/C/H), zone statistics, and configuration before database generation and runs (example project). (\textbf{b})~Real-time ETA testing: model performance summaries, interactive map with active route, and journey log (demonstrator layout; neutralized for review).}
+\label{fig:sim_path_ui}
+\label{fig:web_eval_dashboard}
+\end{figure}

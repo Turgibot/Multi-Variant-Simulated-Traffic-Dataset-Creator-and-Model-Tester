@@ -1,0 +1,10 @@
+\section{Discussion and Conclusion}\label{sec:discussion}
+
+The main contribution of this paper is an integrated workflow for constructing route-aware ETA-oriented graph datasets and validating their downstream usability through a connected web evaluation environment. The desktop tool supports construction from both controlled simulation and repaired real trajectories; the web environment turns those outputs into persistent, analyzable evaluation evidence, narrowing the gap between dataset preparation and downstream experimentation.
+By keeping schema, export, training, and interactive testing in one lineage, the artifacts are easier to share and to critique: reviewers and readers can relate dataset statistics, model checkpoints, and logged web sessions without reconciling incompatible file formats or hidden preprocessing steps.
+
+At the same time, the present demonstrator has clear limitations. The deployed web instance represents one practical configuration of the broader framework, not the full space of possible deployments, networks, or predictors. The real-trajectory branch also remains inherently constrained by source-data noise, route-inference uncertainty, and data-availability limits that do not arise in the same way under controlled simulation. More broadly, the current paper emphasizes workflow coherence and proof of usability over exhaustive comparative experimentation.
+
+Future work includes alternative predictors, additional networks and trajectory sources, and larger-scale experiments; integration with navigation clients for live or near-real-time testing could further stress the evaluation loop.
+We also see value in packaging additional reference scenarios (network scale, demand patterns, sensor noise) so teams can compare models under shared construction assumptions rather than only sharing opaque CSV extracts.
+Overall, the toolchain is a reusable foundation for route-aware dataset construction and controlled ETA-oriented research.

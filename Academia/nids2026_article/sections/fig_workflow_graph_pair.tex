@@ -1,0 +1,47 @@
+% Side-by-side: workflow (a) + static/dynamic graph (b); shared height to save vertical space.
+\begin{figure}[t]
+\centering
+\newlength{\pairfigheight}
+\setlength{\pairfigheight}{3.75cm}
+\begin{minipage}[c]{0.49\linewidth}
+\centering
+\resizebox{!}{\pairfigheight}{%
+\begin{tikzpicture}[
+  font=\footnotesize,
+  box/.style={
+    draw,
+    rounded corners=2pt,
+    align=center,
+    inner sep=3.2pt,
+    minimum width=2.55cm,
+    line width=0.5pt
+  },
+  arr/.style={-{Stealth[length=1.6mm]}, thick, shorten >=0.5pt, shorten <=0.5pt}
+]
+\node[box] (sumo) {\textbf{Sim. path}\\SUMO + TraCI};
+\node[box, right=0.28cm of sumo] (traj) {\textbf{Traj. path}\\repair, match};
+\coordinate (m) at ($(sumo.south)!0.5!(traj.south)$);
+\node[box, below=0.38cm of m] (desk) {\textbf{Desktop}\\\DesktopTool{}};
+\node[box, below=0.30cm of desk] (snap) {\textbf{Graph snapshots}\\route-aware, time series};
+\node[box, below=0.30cm of snap] (web) {\textbf{Web client}\\interactive ETA evaluation};
+\node[box, below=0.30cm of web] (out) {\textbf{Outcomes}\\DB, metrics, reports};
+\draw[arr] (sumo.south) to[bend right=10] ([xshift=-0.85cm, yshift=1.2pt]desk.north);
+\draw[arr] (traj.south) to[bend left=10] ([xshift=0.85cm, yshift=1.2pt]desk.north);
+\draw[arr] (desk) -- (snap);
+\draw[arr] (snap) -- (web);
+\draw[arr] (web) -- (out);
+\end{tikzpicture}%
+}\\[-0.05em]
+{\scriptsize (\textbf{a}) End-to-end workflow}
+\end{minipage}%
+\hfill
+\begin{minipage}[c]{0.49\linewidth}
+\centering
+\includegraphics[width=\linewidth,height=\pairfigheight,keepaspectratio]{dynamic_static_nodes_and_edges.png}\\[-0.05em]
+{\scriptsize (\textbf{b}) Static vs.\ dynamic graph layers}
+\end{minipage}
+\caption{(\textbf{a})~End-to-end workflow: simulation and trajectory paths merge in the desktop tool, export route-aware graph time series, and feed the web layer for testing and logged analysis.
+(\textbf{b})~Static layer: black nodes A--D are junctions; grey edges are roads. Dynamic layer: green nodes are vehicles; dashed blue edges connect vehicles to other vehicles and to junctions.}
+\label{fig:workflow}
+\label{fig:graph_schema}
+\end{figure}

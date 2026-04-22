@@ -1,0 +1,32 @@
+% Figure 1: end-to-end pipeline (review draft; adjust copy or layout before camera-ready).
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[
+  font=\small,
+  box/.style={
+    draw,
+    rounded corners=2pt,
+    align=center,
+    inner sep=5pt,
+    minimum width=3.25cm,
+    line width=0.55pt
+  },
+  arr/.style={-{Stealth[length=1.8mm]}, thick, shorten >=0.6pt, shorten <=0.6pt}
+]
+\node[box] (sumo) {\textbf{Simulation path}\\SUMO network + scenario\\[-0.06em]\footnotesize TraCI control};
+\node[box, right=0.4cm of sumo] (traj) {\textbf{Trajectory path}\\GPS-like traces\\\footnotesize repair, match};
+\coordinate (m) at ($(sumo.south)!0.5!(traj.south)$);
+\node[box, below=0.5cm of m] (desk) {\textbf{Desktop tool}\\\DesktopTool{}};
+\node[box, below=0.42cm of desk] (snap) {\textbf{Shared representation}\\route-aware dynamic graph\\snapshots (time series)};
+\node[box, below=0.42cm of snap] (web) {\textbf{Web client}\\interactive ETA evaluation};
+\node[box, below=0.42cm of web] (out) {\textbf{Recorded outcomes}\\database, metrics, plots, reports};
+
+\draw[arr] (sumo.south) to[bend right=8] ([xshift=-1.05cm, yshift=1.5pt]desk.north);
+\draw[arr] (traj.south) to[bend left=8] ([xshift=1.05cm, yshift=1.5pt]desk.north);
+\draw[arr] (desk) -- (snap);
+\draw[arr] (snap) -- (web);
+\draw[arr] (web) -- (out);
+\end{tikzpicture}
+\caption{End-to-end workflow: two construction paths merge in the desktop tool, export a common route-aware graph time series, and feed the web evaluation layer for interactive testing and persistent analysis.}
+\label{fig:workflow}
+\end{figure}

@@ -1,4 +1,7 @@
-% Main entry: NiDS / LLNCS article split by section files.
+% Main entry: NiDS article (Springer proceedings). NiDS 2026 publishes in LNNS; the
+% official NiDS LaTeX bundle uses the LLNCS document class---keep this class unless
+% chairs supply an LNNS-specific variant.
+% Page limits (EasyChair CFP): full 12, short 8, workshop/tutorial 4--10, poster/DC 4.
 % Build: from Academia/nids2026_article run pdflatex main (twice) or use ../compile.sh
 % Images: ../images/
 % Double-blind: replace XXXXX placeholders before non-anonymous builds.
@@ -11,22 +14,35 @@
 \usepackage{booktabs}
 \usepackage{microtype}
 \usepackage[hidelinks]{hyperref}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,calc,positioning}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{etoolbox}
+\usepackage{placeins}
+% Smaller body text inside pseudocode only (LNCS: avoid changing global fonts; local float tweak is standard).
+\AtBeginEnvironment{algorithmic}{\small}
+\AtEndEnvironment{algorithmic}{\normalsize}
 
 \graphicspath{{../images/}}
 
 \newcommand{\DesktopTool}{Graph Traffic Dataset Creator}
 \newcommand{\WebApp}{web evaluation client}
 
-\title{SUMO-Linked Dataset Generation and Interactive ETA Testing\\
-for Graph-Based Traffic Models}
+\title{Route-Aware Dynamic Traffic Graphs for ETA: Dataset Generation and Interactive Model Testing}
 
-\titlerunning{SUMO Datasets and ETA Testing}
+\titlerunning{Route-Aware Traffic Graphs for ETA}
 
 \author{XXXXX XXXXX \and XXXXX XXXXX}
 \authorrunning{X. XXXXX et al.}
 \institute{XXXXX (affiliation omitted for review)}
 
 \begin{document}
+% Gentle float spacing reduction (LNCS defaults are generous); helps meet the 12-page limit
+% without changing fonts or layout parameters forbidden by the class.
+\setlength{\textfloatsep}{16pt plus 2pt minus 3pt}
+\setlength{\floatsep}{16pt plus 2pt minus 3pt}
+\setlength{\intextsep}{16pt plus 2pt minus 3pt}
 
 \maketitle
 \hypersetup{pdfauthor={}, pdfcreator={}, pdfproducer={}}
@@ -39,6 +55,15 @@ for Graph-Based Traffic Models}
 
 \input{sections/system_overview}
 
+\input{sections/dataset_representation}
+
+\input{sections/web_evaluation}
+
+\input{sections/evaluation}
+
+\input{sections/discussion_and_conclusion}
+
+\FloatBarrier
 \input{sections/bibliography}
 
 \end{document}

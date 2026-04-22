@@ -1,0 +1,19 @@
+% Trajectory branch: desktop conversion (a) + web evaluation on Porto-aligned exports (b).
+\begin{figure}[t]
+\centering
+\newlength{\trajPathFigHeight}
+\setlength{\trajPathFigHeight}{3.35cm}
+\begin{minipage}[c]{0.49\linewidth}
+\centering
+\includegraphics[width=\linewidth,height=\trajPathFigHeight,keepaspectratio]{dataset_convertion_main_with_map.png}\\[-0.05em]
+{\scriptsize (\textbf{a}) Trajectory path: conversion (desktop)}
+\end{minipage}%
+\hfill
+\begin{minipage}[c]{0.49\linewidth}
+\centering
+\includegraphics[width=\linewidth,height=\trajPathFigHeight,keepaspectratio]{porto_web.png}\\[-0.05em]
+{\scriptsize (\textbf{b}) Web client: evaluation on trajectory-backed trips}
+\end{minipage}
+\caption{Trajectory construction path and its web evaluation loop. (\textbf{a})~Trajectory dataset conversion: OSM/SUMO map, network overlay, CSV inputs, and batch conversion controls (example Porto-area project). (\textbf{b})~Same web client as in Figure~\ref{fig:sim_path_ui}(\textbf{b}), here exercised on exports aligned with real trajectories: map with active route, aggregate metrics, and recent journeys (demonstrator layout; neutralized for review).}
+\label{fig:traj_path_ui}
+\end{figure}
