@@ -1,0 +1,52 @@
+@startuml
+title Desktop GUI — curated class diagram
+
+skinparam classAttributeIconSize 0
+skinparam shadowing false
+skinparam packageStyle rectangle
+
+package "Navigation (main_window.py)" {
+  class MainWindow <<QMainWindow>>
+  class WelcomePage <<QWidget>>
+}
+
+package "Feature pages" {
+  class DatasetGenerationPage <<QWidget>>
+  class RouteGenerationPage <<QWidget>>
+  class SimulationPage <<QWidget>>
+  class DatasetConversionPage <<QWidget>>
+  class DebugTrajectoryPage <<QWidget>>
+}
+
+package "Asynchronous workers" {
+  class MappingExportWorker <<QObject>>
+  class NetworkLoaderWorker <<QThread>>
+  class DownloadWorker <<QThread>>
+  class StepGenerationWorker <<QThread>>
+  class TripCountWorker <<QThread>>
+  class SimulationPrepWorker <<QObject>>
+}
+
+package "Map / simulation view (simulation_view.py)" {
+  class SimulationView <<QGraphicsView>>
+  class AreaSelectionView <<QGraphicsView>>
+}
+
+MainWindow --> WelcomePage : hosts / navigates
+MainWindow --> DatasetGenerationPage : creates when needed
+MainWindow --> RouteGenerationPage
+MainWindow --> SimulationPage
+MainWindow --> DatasetConversionPage
+MainWindow --> DebugTrajectoryPage
+
+SimulationPage --> MappingExportWorker
+SimulationPage --> SimulationView
+RouteGenerationPage --> AreaSelectionView
+RouteGenerationPage --> SimulationPrepWorker
+DatasetConversionPage --> NetworkLoaderWorker
+DatasetConversionPage --> DownloadWorker
+DatasetConversionPage --> StepGenerationWorker
+DebugTrajectoryPage --> TripCountWorker
+
+AreaSelectionView --|> SimulationView
+@enduml

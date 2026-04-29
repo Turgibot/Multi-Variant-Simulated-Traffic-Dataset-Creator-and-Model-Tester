@@ -1,0 +1,69 @@
+\chapter{Dataset construction and shared representation}\label{sec:dataset}
+
+This chapter defines the \emph{data} artifact produced by the project. Chapter~\ref{sec:system} described the applications that create and consume data; here the focus is the common representation that lets two different construction paths---controlled SUMO simulation and conversion of observed GPS trajectories---feed the same training and web-evaluation pipeline.
+
+\section{Purpose and scope}
+The target artifact is a route-aware, time-indexed traffic graph for ETA-oriented learning. It must preserve enough road topology, vehicle state, route context, and future-arrival information for a downstream model to learn travel-time structure, while remaining independent of how the source traffic was produced. This separation is the main invariant of the dataset layer: simulation-derived examples and trajectory-derived examples may differ in observability and noise, but after construction they expose one contract to model code and to the \WebApp{}.
+
+The representation is also deliberately richer than a table of final travel times. It stores static network structure, dynamic vehicle nodes, route membership, road-level traffic descriptors, and labels at sampled times. As a result, the same dataset can support vehicle-level ETA prediction and related analyses such as road load, region-level congestion, or ablation studies over route features.
+
+\section{Two construction paths, one output contract}
+\paragraph{Simulation-derived construction.}
+The simulation path starts from a SUMO scenario controlled by the desktop tool and TraCI~\cite{sumo2011,traci2018}. This branch has strong observability: the network, planned routes, vehicle identities, positions, speeds, and simulator time are all available during execution. The desktop configuration defines zones, landmarks, vehicle classes, schedules, sampling cadence, output options, and optional perturbations such as untracked random trips. The operator-facing steps are documented in Section~\ref{sec:system:desktop:ui}; Chapter~4 uses those screens only as evidence and does not repeat them.
+
+During a run, the generator samples simulator state at the selected interval and writes a sequence of graph snapshots. Each snapshot records the active vehicles and the road segments carrying traffic or demand at that time. Because the simulation clock is controlled, this branch is useful for reproducible benchmark settings and for experiments where the amount of traffic or the vehicle-type mixture must be known in advance.
+
+\paragraph{Trajectory-derived construction.}
+The trajectory path starts from GPS-like rows and a SUMO-compatible road network prepared from OSM. It is less controlled than simulation: traces may include sparse samples, repeated start/end points, unrealistic jumps, and projection errors. The conversion workflow therefore performs normalization, route matching, invalid-segment handling, and projection of GPS points onto inferred SUMO routes before emitting graph snapshots. The Porto taxi data~\cite{porto2015pkdd} is used as the representative bundled example, but the contract is intentionally general.
+
+For successful conversion, imported CSV files must provide one trajectory polyline per row in a parseable list form (the converter scans for a cell like \texttt{[[...], ...]}), with each point encoded as a coordinate pair and at least two points per trip. A \texttt{TIMESTAMP} column is optional for inspecting individual routes but required by the batch step-conversion path that emits sampled snapshots and labels; it anchors each trajectory on a global time axis. Additional source columns may exist, but conversion consumes only the trajectory geometry and, when present, the timestamp. External datasets should therefore be normalized to this minimal contract before import.
+
+\paragraph{Convergence.}
+Both branches end in the same exported layout: static network material, time-step snapshots, and labels. This is why the web application is independent of the construction path (Figure~\ref{fig:web_ui_porto}) and why evaluation results can compare simulation-backed and trajectory-backed data without path-specific adapters.
+
+\section{Exported graph artifact}\label{sec:shared-representation}
+
+\input{figures_report/fig_graph_schema}
+
+Figure~\ref{fig:graph_schema} summarizes the layer split. The static layer contains junction nodes and directed road edges. The dynamic layer contains vehicle nodes and temporary relations created by vehicle movement and proximity. In the implementation, the export is organized as:
+\begin{itemize}
+    \item \textbf{Static network file} (\texttt{static.json} or \texttt{static.json.gz}): junctions and static road-edge attributes such as identifiers, geometry-derived structure, lengths, and stable network metadata.
+    \item \textbf{Snapshot files} (\texttt{snapshots/step\_*.json} or compressed equivalents): a sampled time step with active vehicle nodes, dynamic road-edge state, and dynamic vehicle relations.
+    \item \textbf{Label files} (\texttt{labels/label\_*.json} or compressed equivalents): the supervised target for active vehicles at the same timestamp, primarily ETA in seconds.
+\end{itemize}
+
+The static file is shared by all time steps in a generated dataset. Snapshot files carry evolving state: vehicle position, speed, acceleration, current edge, remaining route, route length left, road demand, average speed, density, and vehicle--road or vehicle--vehicle context as available. Label files align with snapshots by timestamp and store, for each vehicle with a known destination time, the remaining time to arrival. This keeps features and targets synchronized without baking the target into the feature graph.
+
+\section{Temporal alignment and labels}
+Time is the bridge between construction and learning. In the simulation branch, the source clock is the SUMO simulation time and snapshots are sampled at fixed intervals. In the trajectory branch, each trajectory row is first converted into a sequence of projected points with timestamps; the converter then aggregates these point updates into the same fixed-period snapshot schedule.
+
+For ETA learning, a vehicle label at time $t$ is the remaining time until that vehicle's destination event, clipped at zero after arrival. This target can be generated directly in simulation because the run observes vehicle completion. For converted trajectories, the destination event is inferred from the last valid projected point in the matched trajectory segment. The important property is that both branches produce labels with the same meaning: \emph{given the graph state and route context at timestamp $t$, estimate remaining travel time for the vehicle}.
+
+\section{Trajectory repair and route matching}
+Trajectory conversion must turn noisy GPS polylines into routes on the SUMO network. The process has three roles: remove or split invalid observations, infer a plausible network path, and project samples onto that path so graph snapshots can be generated.
+
+First, repeated start/end points can be trimmed so a trip has a single effective origin and destination. Unrealistic jumps can be treated as invalid segments; when such jumps occur, the trajectory is split and each valid segment is matched separately. The GUI diagnostics in Section~\ref{sec:system:desktop:ui} show these controls and their visual outputs without duplicating figures in this chapter.
+
+Matching is not run on the full regional road graph. An axis-aligned bounding box $B$ is built around the GPS polyline $P$ (optionally padded), and $N_{\mathrm{bb}}=(V_{\mathrm{bb}},E_{\mathrm{bb}})$ is the subnetwork formed from all edges whose geometry intersects $B$ and their incident nodes. GPS polylines are then aligned to $N_{\mathrm{bb}}$ in two phases: a \emph{scoring pass} assigns every edge a coarse tier ($1$, $10$, or $1000$) from successive segment--edge comparisons, and a \emph{routing pass} searches for a low-cost path that respects those tiers.
+
+For each polyline segment, edges whose heading differs from the segment by more than $\pi/9$ are discarded. Among survivors, edges are ranked by
+\[
+r_e=\lambda\delta_e+\frac{1}{2}\bigl(d(p_i,e)+d(p_{i+1},e)\bigr),
+\]
+where $\delta_e$ is the acute angle gap in radians, $d(p,e)$ is the distance from point $p$ to the centreline polyline of edge $e$, and $\lambda$ fixes the radian-to-map-unit trade-off. The best $k$ edges become primary candidates and the next $j$ become secondary candidates. A multi-start A$^\ast$ pass then searches between primary candidates near the origin and primary candidates near the destination. Algorithms~\ref{alg:route-edge-weights}--\ref{alg:route-astar} state this procedure formally.
+
+\input{../../nids2026_article/sections/route_matching_algorithm}
+
+After a route is inferred, GPS samples are projected onto the SUMO route. The converter records the current edge, position along the edge, speed, distance from previous point, route edges, and remaining route context. These projected states are what make trajectory-derived data compatible with simulation-derived snapshots.
+
+\section{Representation invariants}
+The shared contract rests on a small set of invariants:
+\begin{itemize}
+    \item \textbf{One static substrate:} road and junction identifiers remain stable across all snapshots in a dataset.
+    \item \textbf{Time-indexed dynamics:} vehicle nodes and road-edge dynamic attributes are sampled at explicit timestamps.
+    \item \textbf{Route conditioning:} each tracked vehicle carries an origin, destination, planned or inferred route, and route-left information.
+    \item \textbf{Separated labels:} ETA targets are stored alongside snapshots but not mixed into static or dynamic feature fields.
+    \item \textbf{Path independence:} downstream consumers see the same graph schema whether the source was a simulator run or a converted trajectory file.
+\end{itemize}
+
+These invariants are the reason Chapter~\ref{sec:web} can treat both branches through the same evaluation client. The web application loads a compatible exported representation, computes or displays routes, invokes an ETA predictor, and stores prediction--outcome evidence without needing to know whether the original data came from controlled SUMO generation or real-world GPS conversion.

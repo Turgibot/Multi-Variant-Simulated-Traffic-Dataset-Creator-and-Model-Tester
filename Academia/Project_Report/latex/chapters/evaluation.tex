@@ -1,0 +1,15 @@
+\chapter{Evaluation}\label{sec:eval}
+
+We evaluate the same route-aware predictor attached to the web environment on two representative bundles from the open-source workflow: one from the simulation path and one from repaired real trajectories. For each source, performance is measured on held-out journeys registered through the evaluation client, using MAE, RMSE, and MAPE. As a sanity-check comparator, we also report a simple mean-duration baseline that predicts the training-set average trip duration for every test journey.
+Test journeys are disjoint from the trips used to fit the route-aware model for that bundle, and the mean baseline uses only training-trip durations, so both scores refer to the same held-out set.
+The web client persists each prediction with its realized duration, which makes the projected aggregates reproducible from the logged database and ties the numbers to the interactive evaluation protocol rather than to an ad-hoc offline script.
+
+Table~\ref{tab:dataset_stats} summarizes the two dataset instances used in this snapshot. The simulation-backed example spans four weeks with dense 30\,s sampling (80\,640 snapshots, $28 \times 24 \times 60 \times 2$). The trajectory example spans one year of Porto taxi data; its 925\,644 snapshots are the emitted graph steps triggered by repaired-trace observations, not a hypothetical dense 30\,s grid over the full year. Both branches therefore differ in scale and observability but share the same node/edge feature interface.
+
+\input{../../nids2026_article/sections/evaluation_tables}
+
+Table~\ref{tab:eval_results} shows that the representation supports substantially better ETA estimation than the naive average-duration baseline in both settings. On simulation-backed data, the route-aware predictor reduces MAE from 260.63\,s to 46.16\,s (about 82\% relative improvement), while RMSE drops from 325.13\,s to 107.15\,s. On the trajectory-conversion data, MAE falls from 282.66\,s to 52.38\,s (about 81\% relative improvement), while RMSE falls from 352.41\,s to 121.50\,s. MAPE follows the same trend, dropping from well above 100\% under the baseline to 17.99\% and 20.41\%. These numbers indicate that the shared graph representation carries enough route and traffic context for the downstream predictor to learn nontrivial travel-time structure across both branches.
+
+The scatter plots in Figures~\ref{fig:mae_scatter_sim} and~\ref{fig:mae_scatter_traj} show how absolute error varies with trip duration: most journeys fall in short-to-medium durations, with a heavy tail of longer trips. Trajectory conversion is slightly harder, consistent with repair, map matching, and sparser observability, yet errors stay far below the baseline in Table~\ref{tab:eval_results}, supporting end-to-end usefulness of the workflow.
+
+\input{figures_report/fig_eval_scatter_split}

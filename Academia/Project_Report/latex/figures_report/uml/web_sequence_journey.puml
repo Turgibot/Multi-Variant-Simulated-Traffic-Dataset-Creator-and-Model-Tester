@@ -1,0 +1,58 @@
+@startuml
+title Web client — journey with ETA, persistence, and dashboard refresh (reference sequence)
+
+skinparam sequenceMessageAlign center
+skinparam maxMessageSize 240
+
+actor "User" as U
+participant "DemoPage\n(Vue)" as Vue
+participant "FastAPI\n(main.py)" as API
+participant "SUMOSimulation" as Sim
+participant "Inference\n(ETA model)" as Inf
+database "PostgreSQL\n(journeys)" as PG
+
+== Page load (simulation already up) ==
+Vue -> API : GET /api/network/data
+API -> Sim : get_network_data()
+Sim --> API : edges, junctions
+API --> Vue : draw map
+
+Vue -> API : GET /api/simulation/status
+API -> Sim : status / time
+API --> Vue : is_running, trips, …\n+ polling in UI
+
+== Pick trip ==
+U -> Vue : click start edge,\n then destination edge
+
+Vue -> API : POST /api/simulation/calculate-route-by-edges
+API -> Sim : calculate_route_by_edges()
+Sim --> API : route edges, distance, duration
+API --> Vue : highlight path
+
+== Start journey (ETA + run) ==
+U -> Vue : Start / Play (main control)
+Vue -> API : POST /api/simulation/start-journey
+API -> Sim : add_journey_vehicle(\n  start_edge, end_edge, route_edges)
+Sim -> Inf : run ETA on graph snapshot
+Inf --> Sim : predicted ETA (seconds)
+Sim --> API : vehicle_id, start times,\n distance, **predicted_eta**
+API --> Vue : show start time, ETA,\n begin playback
+
+== End of trip (metrics) ==
+Vue -> API : POST /api/simulation/complete-journey
+API -> Sim : finalize duration / error
+Sim --> API : actual duration, abs error, accuracy
+API --> Vue : update on-screen result
+
+== Persist + refresh analytics ==
+Vue -> API : POST /api/journeys/save
+API -> PG : insert Journey row
+PG --> API : journey_number
+API --> Vue : success
+
+Vue -> API : GET /api/journeys/recent, statistics,\nplot endpoints (as implemented)
+API -> PG : query aggregates
+PG --> API : rows / metrics
+API --> Vue : refresh **Recent journeys**,\n performance panels
+
+@enduml

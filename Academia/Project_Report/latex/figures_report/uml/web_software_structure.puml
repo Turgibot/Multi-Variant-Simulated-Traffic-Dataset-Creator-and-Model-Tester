@@ -1,0 +1,15 @@
+@startuml
+title Web software structure (component view)
+
+skinparam componentStyle rectangle
+skinparam shadowing false
+
+component "Vue client\nfrontend/src/main.js\npage components and routes" as VueClient
+component "FastAPI layer\nbackend/main.py\nendpoint contracts" as ApiLayer
+component "Services and inference\nservices/sumo_service.py\nmodels/eta_inference.py" as CoreLayer
+component "Persistence\nmodels/database.py\nmodels/entities.py" as PersistLayer
+
+VueClient --> ApiLayer
+ApiLayer --> CoreLayer
+CoreLayer --> PersistLayer
+@enduml

@@ -1,0 +1,56 @@
+@startuml
+title Desktop - trajectory conversion path (OSM to SUMO to CSV steps)
+
+skinparam sequenceMessageAlign center
+skinparam maxMessageSize 220
+
+actor "Operator" as Op
+participant "DatasetConversionPage" as DCP
+participant "DownloadWorker" as DW
+collections "Overpass API\n(OSM XML)" as OSM
+collections "netconvert\n(SUMO)" as NC
+participant "NetworkLoaderWorker" as NLW
+participant "NetworkParser" as NP
+participant "SimulationView" as SV
+participant "RouteLoadWorker\n(optional)" as RLW
+participant "StepGenerationWorker" as SGW
+collections "run_csv_to_steps\n/ utils" as RCS
+
+== Map extent and OSM to SUMO ==
+Op -> DCP : set bounding box\n(south, west, north, east),\n map basename, output folder
+Op -> DCP : download / build map
+DCP -> DW : start (bbox, paths)
+DW -> OSM : Overpass query for bbox
+OSM --> DW : .osm file
+DW -> NC : netconvert + typemap\n- to .net.xml, .rou.xml, .sumocfg
+NC --> DW : SUMO network on disk
+DW --> DCP : success
+
+DCP -> NLW : load generated .net.xml
+NLW -> NP : parse geometry
+NLW --> DCP : NetworkParser
+DCP -> SV : load_network(parser)
+SV --> Op : map in scene
+
+== Trajectory CSVs ==
+Op -> DCP : select main (and optional) CSVs,\n validation / path checks
+
+== Optional: inspect route matching ==
+Op -> DCP : choose route index, **Show route**
+DCP -> RLW : load trip polyline
+RLW --> DCP : GPS polyline, invalid segments,\n trim hints
+DCP -> SV : draw polyline, green/orange\ncandidate edges, diagnostics
+Op -> DCP : (optional) adjust checkboxes\n(fix segments, trim, …)
+
+== Dataset generation parameters ==
+Op -> DCP : set output dir, trajectory range\n(start--last), sampling period,\n parallel workers, compress, sorted CSV, …
+
+== Generate dataset (steps) ==
+Op -> DCP : **Start** (step conversion)
+DCP -> SGW : start worker
+SGW -> RCS : run_csv_to_steps(\n  csv, network, output, …)
+RCS --> SGW : step files, trajectories
+SGW --> DCP : progress / finished
+DCP --> Op : log + progress UI
+
+@enduml

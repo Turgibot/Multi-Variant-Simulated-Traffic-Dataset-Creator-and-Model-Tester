@@ -1,0 +1,43 @@
+\chapter{Related Work and Positioning}\label{sec:related}
+
+\section{Traffic data, graph models, and ETA}
+The broader traffic-prediction literature has been shaped by sensor-centric and aggregate spatio-temporal datasets, as reflected in surveys of traffic prediction with big data~\cite{yu2017trafficpred}. Frameworks such as LibCity have made this landscape more reproducible by standardizing datasets, tasks, and model interfaces for urban spatial-temporal prediction~\cite{libcity2021}. The dominant benchmark orientation remains broad traffic forecasting rather than route-aware ETA estimation in which the planned route of each vehicle is explicit. ETA tasks are inherently path-dependent, whereas many widely used resources primarily capture network state, trajectories, or aggregate flows without preserving a navigation-style route context.
+
+Graph-based learning has become a standard approach to traffic forecasting because it aligns naturally with road-network structure; models such as DCRNN and ST-GCN illustrate explicit graph formulations for spatial and temporal dependencies~\cite{dcrnn2018,stgcn2018}. In the ETA domain, production-scale work on Google Maps~\cite{googlemapseta2021} and Baidu Maps (DuETA)~\cite{dueta2022} underscores structured, route-aware modeling for travel-time estimation in industrial settings. Related routing-oriented work explores future-traffic-aware route choice and simulative ETA estimation~\cite{voloch2021,voloch2025}. Our emphasis is reusable route-aware data and integrated tooling to produce and test it.
+
+
+\section{Traffic datasets landscape and positioning}
+To strengthen comparability, this section organizes widely used traffic datasets by sensing modality and task fit. A key distinction for this project is whether route-level context is explicit and whether data can support interactive end-to-end ETA evaluation. Many benchmark datasets are strong for speed-flow forecasting but do not preserve per-trip route intent.
+
+\begin{table}[!htbp]
+\centering
+\caption{Traﬃc datasets and resources (one row per source)}
+\label{tab:dataset_landscape_position}
+\fontsize{4.5pt}{5.2pt}\selectfont
+\setlength{\tabcolsep}{2pt}
+\resizebox{\linewidth}{!}{%
+\begin{tabular}{@{}p{1.5cm}p{2.8cm}p{2.8cm} >{\centering\arraybackslash}m{0.5cm} >{\centering\arraybackslash}m{0.5cm}@{}}
+\toprule
+Dataset & Representation & Usage & Route-aware & Accessibility \\
+\midrule
+METR-LA~\cite{dcrnn2018} & Per-segment speed/flow time series (loop/sensor) & Speed forecasting, benchmark & $\times$ & $\checkmark$ \\
+PEMS-BAY~\cite{dcrnn2018} & Per-segment time series (sensor network) & Speed forecasting, benchmark & $\times$ & $\checkmark$ \\
+PEMSD4~\cite{astgcn2019} & Per-segment flow/occupancy time series & Traffic flow forecasting, benchmark & $\times$ & $\checkmark$ \\
+PEMSD8~\cite{astgcn2019} & Per-segment flow/occupancy time series & Traffic flow forecasting, benchmark & $\times$ & $\checkmark$ \\
+T-Drive~\cite{tdrive2011} & GPS polylines / trip trajectories & Trajectory mining, routing, mobility & $\times$ & $\checkmark$ \\
+Porto taxi~\cite{porto2015pkdd} & GPS trip points / traces & Trip-level prediction, mobility & $\times$ & $\checkmark$ \\
+NYC TLC~\cite{nyc_tlc} & Trip table (O/D, time, fare; sparse geometry) & Demand, duration, analytics & $\times$ & $\checkmark$ \\
+NGSIM~\cite{ngsim2006} & Lane-level vehicle trajectories (highway) & Microscopic behavior, safety & $\times$ & $\checkmark$ \\
+Google Maps internal logs~\cite{googlemapseta2021} & Route + road graph + traffic state (production request logs) & Industrial ETA, large-scale GNNs & $\checkmark$ & $\times$ \\
+Baidu Maps (DuETA)~\cite{dueta2022} & Segment network + route context + congestion-signal graph & Industrial ETA, congestion & $\checkmark$ & $\times$ \\
+\textbf{Ours} & \textbf{Route-aware dynamic graph snapshots} & \textbf{ETA / graph learning, same-network analysis} & \textbf{\checkmark} & \textbf{\checkmark} \\
+\bottomrule
+\end{tabular}
+}
+\end{table}
+
+
+\section{Simulation, trajectories, and integrated evaluation}
+Microscopic traffic simulation, with SUMO and TraCI, provides repeatable scenarios and external programmatic control~\cite{sumo2011,traci2018}, and is attractive for ETA-oriented dataset construction because vehicle state, route context, and traffic evolution are highly observable. Real trajectory data requires repair, alignment, and route inference before coherent downstream ETA analysis. Simulation and trajectory pipelines are often optimized separately; this work supports both in one common representation.
+
+Existing libraries and evaluation frameworks improve reproducibility for traffic prediction but typically start from pre-existing datasets rather than from integrated dataset construction. Here, a web evaluation layer is coupled to generation: it attaches a compatible predictor, registers outcomes, and exposes analysis under controlled conditions.

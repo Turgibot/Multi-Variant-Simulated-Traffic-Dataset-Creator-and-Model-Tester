@@ -1,0 +1,46 @@
+@startuml
+title Web backend — curated class diagram
+
+skinparam classAttributeIconSize 0
+skinparam shadowing false
+skinparam packageStyle rectangle
+
+package "API surface (main.py)" {
+  class "FastAPI application" as FastAPIApp <<FastAPI>>
+  class RouteRequest <<Pydantic>>
+}
+
+package "services/sumo_service.py" {
+  class SUMOSimulation
+}
+
+package "models/eta_inference.py" {
+  class Inference
+}
+
+package "models/entities.py (in-memory graph)" {
+  class Junction
+  class Road
+  class Vehicle
+}
+
+package "models/database.py (SQLAlchemy)" {
+  class Base <<declarative_base>>
+  class Journey
+}
+
+package "model checkpoint (inference stack)" {
+  class TemporalMoEETA <<nn.Module>>
+}
+
+Journey --|> Base
+FastAPIApp ..> RouteRequest : request models
+FastAPIApp ..> SUMOSimulation : singleton
+FastAPIApp ..> Journey : via Session / get_db
+
+SUMOSimulation --> Inference : eta_inference
+SUMOSimulation ..> Junction : builds / updates
+SUMOSimulation ..> Road
+SUMOSimulation ..> Vehicle
+Inference --> TemporalMoEETA : model
+@enduml

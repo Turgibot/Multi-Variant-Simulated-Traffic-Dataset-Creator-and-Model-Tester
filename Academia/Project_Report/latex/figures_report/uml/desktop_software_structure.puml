@@ -1,0 +1,15 @@
+@startuml
+title Desktop software structure (component view)
+
+skinparam componentStyle rectangle
+skinparam shadowing false
+
+component "UI shell and pages\nmain_window.py\nsimulation_page.py\ndataset_conversion_page.py" as UI
+component "Workers / controllers\nQThread and QObject workers\nmapping, loading, generation" as Workers
+component "Domain utilities\nnetwork parsing\nroute finding\nconversion / export helpers" as Domain
+component "Shared export bundle\ntime-indexed graph artifacts\nfor training and web evaluation" as Bundle
+
+UI --> Workers
+Workers --> Domain
+Domain --> Bundle
+@enduml

@@ -1,0 +1,14 @@
+\chapter{Reproducibility, assets, and figure checklist}
+\label{ap:repro}
+
+\paragraph{Repository layout.}
+Figure assets shared with the simulation toolchains live in \texttt{Academia/images/}. This project is built from \texttt{Academia/Project\_Report/latex/} with \verb|\graphicspath| as set in \texttt{main.tex} (including the Open University cover directory for the logo).
+
+\paragraph{Adding UI screenshots.}
+Place high-resolution captures under \texttt{figures/ui/} and include them with \verb|\includegraphics| inside standard \verb|figure| environments so they appear in the List of Images.
+
+\paragraph{Compile command.}
+From \texttt{Project\_Report/}, run \verb|./compile.sh| (or \verb|latexmk -pdf main.tex| from \texttt{latex/}). Run enough passes that the table of contents and the three list pages (images, tables, algorithms) settle.
+
+\paragraph{Consistency of reported numbers.}
+Dataset statistics, metrics, and experimental settings in the body should match the configuration used to generate the results tables and figures. If you rerun experiments, update all affected numbers and captions together.

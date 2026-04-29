@@ -1,0 +1,80 @@
+\documentclass[12pt,a4paper]{report}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{geometry}
+\geometry{margin=2.5cm}
+\setcounter{secnumdepth}{3}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{array}
+\usepackage{booktabs}
+\usepackage{microtype}
+\usepackage{setspace}
+\onehalfspacing
+\usepackage{url}
+\usepackage{placeins}
+\usepackage{float}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{etoolbox}
+\AtBeginEnvironment{algorithmic}{\small}
+\AtEndEnvironment{algorithmic}{\normalsize}
+\usepackage[numbers,sort&compress]{natbib}
+\usepackage[hidelinks]{hyperref}
+\usepackage[nameinlink,capitalize]{cleveref}
+\crefname{algorithm}{Algorithm}{Algorithms}
+\usepackage{tikz}
+\usepackage{listings}
+\lstset{
+  basicstyle=\scriptsize\ttfamily,
+  breaklines=true,
+  breakatwhitespace=false,
+  columns=fullflexible,
+  keepspaces=true,
+  tabsize=2,
+  frame=lines,
+}
+\usepackage{chngcntr}
+\usetikzlibrary{arrows.meta,calc,positioning}
+
+\newcommand{\DesktopTool}{Graph Traffic Dataset Creator}
+\newcommand{\WebApp}{web evaluation client}
+% Shared figures; UI placeholders; OU cover (ou_logo.png) lives next to cover.tex.
+\graphicspath{{../../images/}{figures/ui/}{figures_report/uml/}{../../MyPapersU/22997/Advanced_Project/}}
+\renewcommand{\listfigurename}{List of Images}
+\floatname{algorithm}{Algorithm}
+\floatplacement{figure}{!htbp}
+\floatplacement{table}{!htbp}
+\counterwithout{figure}{chapter}
+\renewcommand{\thefigure}{\arabic{figure}}
+
+\hypersetup{pdftitle={Route-Aware Dynamic Traffic Graphs for ETA},pdfauthor={Guy Tordjman}}
+
+\begin{document}
+% M.Sc. cover page (maintain title/date in \texttt{MyPapersU/22997/Advanced\_Project/cover.tex}).
+\input{../../MyPapersU/22997/Advanced_Project/cover}
+\cleardoublepage
+\begin{abstract}
+\input{chapters/abstract}
+\end{abstract}
+\tableofcontents
+\listoffigures
+\listoftables
+\listof{algorithm}{List of Algorithms}
+\FloatBarrier
+
+\input{chapters/introduction}
+\input{chapters/related_work}
+\input{chapters/system_design_and_architecture}
+\input{chapters/dataset_and_representation}
+\input{chapters/web_evaluation}
+\input{chapters/evaluation}
+\input{chapters/discussion}
+
+\bibliographystyle{plainnat}
+\bibliography{references}
+\appendix
+\input{appendices/appendix_repro}
+\input{appendices/appendix_simulation_config}
+\end{document}

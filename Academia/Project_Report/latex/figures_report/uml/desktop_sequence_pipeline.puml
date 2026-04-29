@@ -1,0 +1,48 @@
+@startuml
+title Desktop — preparation pipeline before the simulation page (reference sequence)
+
+skinparam sequenceMessageAlign center
+skinparam maxMessageSize 220
+
+actor "Operator" as Op
+participant "DatasetGenerationPage" as DGP
+participant "SUMOConfigManager" as SCM
+participant "RouteGenerationPage" as RGP
+participant "NetworkParser" as NP
+participant "SimulationView /\nAreaSelectionView" as SV
+participant "SimulationPrepWorker" as SPW
+participant "SimulationDBService" as DBS
+database "SimulationDB\n(SQLite)" as SimDB
+participant "MainWindow" as MW
+participant "SimulationPage" as SimP
+
+Op -> DGP : select / validate .sumocfg,\n browse referenced assets
+DGP -> SCM : persist sumocfg path,\n list net/routes from XML
+
+Op -> RGP : open **Define simulation**
+RGP -> SCM : resolve network path from sumocfg
+RGP -> NP : parse .net.xml
+NP --> RGP : road / junction model
+RGP -> SV : load_network(parser)
+SV --> Op : SUMO map rendered
+
+Op -> RGP : configure scenario\n(simulation.config.json, zones,\nroutes, demand as in project)
+
+Op -> DGP : configure **dataset generation**\n(output / snapshot folder)
+DGP -> SCM : set_dataset_output_folder\n(default …/datasets if empty)
+
+Op -> RGP : **Generate Simulation DB**
+RGP -> SPW : run preparation (async)
+SPW -> DBS : prepare_initial_snapshot()
+DBS -> SimDB : build / refresh DB + config hash
+SimDB --> SPW : ready
+SPW --> RGP : success (Run enabled)
+
+Op -> DGP : **Run simulation**
+DGP -> MW : emit run_simulation_clicked\n(project, sumocfg, output_folder)
+MW -> SimP : construct SimulationPage
+SimP -> SCM : read sumocfg / paths
+SimP -> NP : load network
+SimP -> SV : display map for TraCI run
+
+@enduml

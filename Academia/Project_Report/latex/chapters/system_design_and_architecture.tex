@@ -1,0 +1,140 @@
+% Baby steps 0--1: section skeleton; high-level overview prose in place. Flow/UML/GUI in later steps.
+\chapter{System design and architecture}\label{sec:system}
+
+This chapter gives a \emph{system} view: end-to-end information flow, the two construction paths, and how the reference desktop and web applications fit together. The \emph{data} view---how instances are built, the formal shared graph, and route matching---is the subject of Chapter~\ref{sec:dataset}. Section~\ref{sec:system:overview} summarizes the pipeline; Section~\ref{sec:system:desktop} and Section~\ref{sec:system:web} develop each application, each opening with a \emph{platform and tooling} subsection that contains an \emph{implementation stack} subsubsection, followed by flow, structure, optional sequences, and GUI at subsection level. Each application's \emph{Software structure} subsection pairs a component-level figure with a curated class-level UML diagram for the reference code layout. The \emph{Sequence interactions} subsections (Section~\ref{sec:system:desktop:sequence} and Section~\ref{sec:system:web:sequence}) give end-to-end message-level views: on the desktop, both the simulation preparation pipeline and the trajectory conversion pipeline (Figures~\ref{fig:desktop_sequence_pipeline} and~\ref{fig:desktop_sequence_conversion}); on the web, the journey lifecycle (Figure~\ref{fig:web_sequence_journey}).
+
+\section{High-level overview}\label{sec:system:overview}
+The workflow links heterogeneous traffic inputs to downstream ETA-oriented evaluation through one artifact family. The system offers two \emph{construction} paths: a \emph{simulation} path built on controlled SUMO scenarios, and a \emph{trajectory} path that imports GPS-like traces and aligns them to a road network. The paths differ in observability, preprocessing, and error sources, but both emit material in a common, route-oriented graph form suited to ETA and related learning tasks. That form can be consumed offline for training and can also be loaded into a \emph{web} evaluation client where a compatible predictor is attached, trip-level outcomes are recorded, and analyses are generated.
+
+Figure~\ref{fig:workflow} summarizes the pipeline.
+
+\input{figures_report/fig_workflow_split}
+
+Dataset work is done in the \DesktopTool{}, an integrated desktop tool rather than ad hoc scripts. For simulation, the tool supports scenario configuration, run control, visual validation of zones, landmarks, and vehicle classes, and export of time-stamped, route-aware graph snapshots with chosen sampling and optional effects such as random untracked trips. For trajectories, it supports map and network preparation, import, repair, route alignment, and batch export into the same export schema. Exports use one layout of nodes, edges, and features so that training code and the \WebApp{} share a single contract and avoid silent mismatch between construction and evaluation.
+
+The central \emph{conceptual} object is a route-conditioned traffic graph: roads and junctions as a stable substrate, vehicles and their routes as the dynamic part, and node/edge features that track evolving traffic state. This representation targets vehicle-level ETA but can be projected to road- or area-level views. The \WebApp{} closes the loop: interactive tests with a pluggable predictor, persistence in a database, and cohort- or journey-level reports. Predictors can be swapped; the open release is intended to support external re-use. A cloud-deployed instance, where applicable, is one possible deployment, not a separate product line.
+
+\section{Desktop application}\label{sec:system:desktop}
+Material in this section is organized as follows: a short \emph{platform} block with the implementation stack as a subsubsection, then subsections for behavior and data paths, software structure, optional sequence views, and the user interface.
+
+\subsection{Platform and tooling}\label{sec:system:desktop:platform}
+\subsubsection{Implementation stack}\label{sec:system:desktop:stack}
+The open-source \emph{TrafficLab} desktop path is built around SUMO for microscopic simulation and TraCI for programmatic control (scenario stepping, vehicle state, and network queries). The desktop GUI is implemented in Python with PySide6 (Qt), primarily Qt Widgets for forms/dialogs and Qt Graphics View/Scene for interactive map-like rendering and inspection. The \DesktopTool{} coordinates project configuration, runs or batch conversions, and export into the shared bundle format. Offline model preparation and experimentation use Python with PyTorch and PyTorch Geometric where a route-aware ETA model is trained or packaged before it can be attached in the web evaluation client.
+
+\subsection{Behavior and data paths}\label{sec:system:desktop:flow}
+This subsection describes how the desktop application executes work over time and how artifacts move between stages. The same GUI shell supports two operational paths---simulation-derived generation and trajectory-derived conversion---that converge to one export contract. In both paths, the operator starts from a project definition, validates required inputs, executes a staged pipeline, inspects intermediate results, and exports a bundle that can be consumed by downstream training code and the web evaluation client without schema translation.
+
+The project-creation stage is therefore part of the behavior narrative, not only a GUI detail: it determines which pipeline and validation rules are activated from the first step. In this project, users receive two complete examples out of the box: a simulation-based \emph{3-zone city} project and a trajectory-conversion project based on the \emph{Porto taxi} dataset. Figure~\ref{fig:desktop_project_creation_examples} shows the two creation dialogs side by side.
+
+\begin{figure}[!htbp]
+\centering
+\includegraphics[width=0.88\linewidth,height=0.36\textheight,keepaspectratio]{dataset_projects.png}
+\caption{Desktop project list page showing both supported paths and their bundled examples: the 3-zone city simulation project (left) and the Porto taxi conversion project (right).}
+\label{fig:desktop_project_creation_examples}
+\end{figure}
+
+\paragraph{Simulation-derived path.}
+The simulation path begins with scenario configuration (network, zones, demand/schedule controls, and optional perturbations). At runtime, the desktop layer orchestrates SUMO/TraCI stepping, reads dynamic state at selected intervals, and aggregates per-step context into route-aware snapshots. Validation is interleaved with execution: the operator can inspect map overlays, active entities, and configured controls before committing to a long run. The result is an ordered snapshot sequence tied to simulation time, together with metadata required for reproducibility (configuration choices, sampling cadence, and run context). Operationally, this path is deterministic up to configured randomness and simulator settings, which makes it suitable for controlled benchmarking and ablation-style experiments.
+
+\paragraph{Trajectory-derived path.}
+The trajectory path starts from imported traces and a prepared road network. Processing is staged as repair-and-alignment: normalization/cleanup of raw records, filtering of invalid segments, route inference/matching on the network, then conversion into the same route-aware graph-oriented snapshot format used by the simulation branch. The desktop workflow exposes checkpoints where operators can inspect candidate matches, route continuity, and projection quality before export. Compared with simulation, this branch has stronger data-quality sensitivity (missing points, jumps, timestamp irregularity), so behavior includes stricter validation gates and optional exclusion of degenerate trips. The output still follows the common schema, but emission timing reflects observed trajectories rather than simulator ticks.
+
+\paragraph{Convergence and artifact handoff.}
+Both paths converge at export: each produces a bundle with aligned structural elements (road/junction substrate, vehicle-related entities, dynamic relations, and time-indexed features/labels). This convergence is the key design choice of the desktop behavior layer: path-specific logic remains inside each branch, while downstream consumers see one contract. As a consequence, model training and web-side inference do not need path-specific adapters. Failures are also localized: configuration or simulation errors are surfaced in the simulation branch; import/repair/matching errors are surfaced in the trajectory branch; export validation is shared and acts as the final gate before artifacts are released.
+
+\subsection{Software structure}\label{sec:system:desktop:structure}
+The desktop software is organized as a layered component architecture around one Qt shell. At the presentation layer, \texttt{main\_window.py} provides application-level navigation (\texttt{MainWindow}, \texttt{WelcomePage}) and hosts path-specific pages such as \texttt{SimulationPage}, \texttt{DatasetGenerationPage}, \texttt{RouteGenerationPage}, \texttt{DatasetConversionPage}, and \texttt{DebugTrajectoryPage}. These pages are intentionally thin in business semantics: they collect operator input, trigger tasks, and render status.
+
+\paragraph{Architectural decomposition.}
+Control and long-running operations are delegated to worker objects (for example \texttt{MappingExportWorker}, \texttt{NetworkLoaderWorker}, \texttt{DownloadWorker}, \texttt{StepGenerationWorker}, and \texttt{TripCountWorker}) so expensive I/O and processing do not block the UI event loop. Domain processing is concentrated in utilities and service modules under \texttt{src/utils} (network parsing, route finding, SUMO configuration, conversion and export routines). The rendering layer is centralized in \texttt{simulation\_view.py} (\texttt{SimulationView} and related graphics items), which decouples map-like visualization from page-level orchestration.
+
+\paragraph{Module mapping and layer contracts.}
+The structural contract is: UI pages emit user intent and validated parameters; worker/controller objects execute asynchronous tasks; utility/service functions return deterministic artifacts and status; and export routines produce the shared bundle consumed by training and web evaluation. This keeps branch-specific complexity local: simulation pages call simulation-centric utilities and runtime controls, while trajectory pages call conversion/matching utilities, yet both paths terminate in the same export contract. Figure~\ref{fig:desktop_software_structure} summarizes this split.
+
+\input{figures_report/fig_desktop_software_structure}
+
+\paragraph{Class-level view.}
+Figure~\ref{fig:desktop_class_diagram} names key Qt pages, representative asynchronous workers that offload work from the UI thread, and the relationship between \texttt{SimulationView} and route-generation \texttt{AreaSelectionView}. It is curated rather than a full inventory (many graphics items and helpers under \texttt{src/utils} are omitted).
+
+\input{figures_report/fig_desktop_class_diagram}
+
+\paragraph{Design rationale and boundaries.}
+This separation supports responsiveness, testability, and replacement of internals without destabilizing the GUI shell. Runtime ordering and state transitions are described in Section~\ref{sec:system:desktop:flow}; screen-level behavior and operator actions are covered in Section~\ref{sec:system:desktop:ui}. The present subsection focuses on static structure: first a component view, then the class-level relations in Figure~\ref{fig:desktop_class_diagram}.
+
+\subsection{Sequence interactions}\label{sec:system:desktop:sequence}
+
+\paragraph{Simulation-derived preparation.}
+Figure~\ref{fig:desktop_sequence_pipeline} summarizes one coherent preparation path that matches the reference implementation: the operator supplies and validates a \texttt{.sumocfg}, loads the referenced network into the route-definition view, edits scenario and dataset-export settings, generates the project-local simulation database (SQLite) used for dispatch and validation, and only then opens the \texttt{SimulationPage} for interactive TraCI-backed simulation. The exact order of UI visits can vary (for example, returning to dataset settings after route work), but the underlying dependencies---valid SUMO inputs, a prepared DB, then the simulation shell---are as shown.
+
+\input{figures_report/fig_desktop_sequence_pipeline}
+
+\paragraph{Trajectory conversion (GPS CSV) path.}
+The second construction path uses \texttt{DatasetConversionPage}. Figure~\ref{fig:desktop_sequence_conversion} follows that flow: the operator sets a geographic bounding box and triggers download; a worker fetches OSM data (Overpass) and runs SUMO \texttt{netconvert} to obtain a road network and minimal \texttt{.sumocfg}; the network is loaded asynchronously and rendered in \texttt{SimulationView}. After attaching trajectory CSVs, the operator may inspect a chosen trip's polyline and route-matching overlays (background \texttt{RouteLoadWorker}, main-thread drawing). Finally, step-conversion parameters (output folder, trajectory index range, sampling period, parallelism, compression, and related options) are fixed and \texttt{StepGenerationWorker} runs \texttt{run\_csv\_to\_steps} to emit time-step artifacts for training and export.
+
+\input{figures_report/fig_desktop_sequence_conversion}
+
+\subsection{User interface}\label{sec:system:desktop:ui}
+Screens in this subsection cover the full desktop operator workflow: first the \emph{simulation} path (Figures~\ref{fig:desktop_project_creation_examples}--\ref{fig:desktop_ui_sim_background}), then the \emph{trajectory conversion} path. This ordering keeps every desktop UI figure before Section~\ref{sec:system:web}. The simulation ordering expands Figure~\ref{fig:desktop_sequence_pipeline} with intermediate panels (vehicles, demand, schedules, core readiness); the conversion walkthrough still follows Figure~\ref{fig:desktop_sequence_conversion}.
+
+\paragraph{Simulation preparation path.}
+The operator opens or creates projects from the hub (Figure~\ref{fig:desktop_project_creation_examples}), creates a new simulation project when needed (Figure~\ref{fig:desktop_ui_sim_create}), links the SUMO configuration and verifies tooling (Figure~\ref{fig:desktop_ui_sim_settings}), inspects the network and zones on the map (Figure~\ref{fig:desktop_ui_sim_zones}), edits vehicle types (Figure~\ref{fig:desktop_ui_sim_vehicles}), allocates trip shares and within-zone vehicle mix (Figure~\ref{fig:desktop_ui_sim_zone_trips}), configures landmarks and visit counts (Figure~\ref{fig:desktop_ui_sim_landmarks}), and adds schedules such as the seven-day random-trip example (Figure~\ref{fig:desktop_ui_sim_schedule}). On the \textbf{Core Settings} step, \textbf{dev\_fraction} in $(0,1]$ limits how many trips are materialized for faster debugging; \textbf{total\_num\_vehicles} tracks demand implied by the generators. Figure~\ref{fig:desktop_ui_sim_core_blocked} shows the blocked state: \textbf{Generate Simulation DB} must run first. Readiness uses a config fingerprint: the current GUI state is serialized to \texttt{simulation.config.json}, hashed with SHA-256 over canonical JSON (\texttt{json.dumps} with sorted keys, as in \texttt{compute\_config\_hash}), and that digest is stored in SQLite when preparation finishes; if the file changes, the hash no longer matches and the UI reports a stale DB until regeneration. Figure~\ref{fig:desktop_ui_sim_db_ready} shows a matching hash with \textbf{Run Simulation} enabled. On the simulation page (Figure~\ref{fig:desktop_ui_sim_running}), checkboxes control mapping-file export, dataset emission vs.\ run-only, gzip compression, and \textbf{Run in background}; the latter skips map redraws for speed, leaving a grey map as in Figure~\ref{fig:desktop_ui_sim_background}. A full example \texttt{simulation.config.json} appears in Appendix~\ref{ap:sim-config}.
+
+\input{figures_report/fig_system_desktop_ui_simulation}
+
+\paragraph{Trajectory conversion path.}
+The operator creates a trajectory conversion project (Figure~\ref{fig:desktop_ui_conv_create}), enters map border coordinates and downloads OSM data that is converted to SUMO (Figure~\ref{fig:desktop_ui_conv_bbox}), and attaches the trajectory CSV input files (Figure~\ref{fig:desktop_ui_conv_csv}). The main workspace can show SUMO network geometry only (Figure~\ref{fig:desktop_ui_conv_map_network}) or the same network over a real basemap (Figure~\ref{fig:desktop_ui_conv_map}). For route-inspection diagnostics, the operator toggles raw GPS path drawing, invalid-segment fixing, start/end trimming, and bounding-polygon display (Figure~\ref{fig:desktop_ui_conv_split}); route subsets then expose \textbf{Show SUMO route} (black matched route) and \textbf{Show candidate edges} (green/orange candidates). Example outcomes are shown in Figures~\ref{fig:desktop_ui_conv_split_example} and~\ref{fig:desktop_ui_conv_bbox_example}. Finally, dataset-generation settings and conversion start are configured in Figure~\ref{fig:desktop_ui_conv_generate}.
+
+\input{figures_report/fig_system_desktop_ui_conversion}
+
+\section{Web application}\label{sec:system:web}
+The same pattern applies: a \emph{platform} subsection holding the implementation stack as a subsubsection, followed by evaluation flow, structure, optional sequences, and GUI.
+
+\subsection{Platform and tooling}\label{sec:system:web:platform}
+\subsubsection{Implementation stack}\label{sec:system:web:stack}
+The web evaluation path in the reference build is a Vue.js~3 client over a FastAPI Python backend. PostgreSQL stores sessions, journey selections, prediction outputs, and aggregates used for cohort metrics and reporting. The demonstration predictor attached to the client is implemented with PyTorch Geometric and is invoked through the API for batched or interactive runs; later chapters treat evaluation metrics on top of this stack.
+
+\subsection{Behavior and evaluation flow}\label{sec:system:web:flow}
+The web path is organized around a \emph{long-lived} backend simulation service and a stateful browser client. It is intentionally independent of how the dataset was produced: simulation-derived and trajectory-converted bundles are both loaded through the same shared representation, so the web client does not need separate screens or logic for each desktop construction path. At application startup the FastAPI process constructs a \texttt{SUMOSimulation} instance (configured scenario, network, and attached ETA \texttt{Inference} model) so TraCI-backed state and the predictor are ready before any HTTP session. The Vue demonstrator then drives evaluation as a repeating loop: visualize the network, define a trip on the map, run the simulation step-by-step for that trip, record prediction--outcome pairs, and persist rows for dashboards and plots. Chapter~\ref{sec:web} develops the evaluation methodology and UI evidence in depth; here we summarize control and data flow only.
+
+\paragraph{Initialization and map session.}
+When the user opens the evaluation view, the client fetches static network geometry and junction metadata (\texttt{GET /api/network/data}) and the current simulation clock and run flags (\texttt{GET /api/simulation/status}). It may also preload recent journeys and aggregate statistics from PostgreSQL so the side panels are not empty. Timers or polling keep the displayed simulation time and vehicle counts aligned with the backend as TraCI steps advance. This phase establishes \emph{situational awareness} before the user commits to a new trip.
+
+\paragraph{Interactive evaluation loop (route and journey).}
+The operator selects start and destination edges on the rendered network (or equivalent controls). The client requests a shortest-path route over the SUMO network (\texttt{POST /api/simulation/calculate-route-by-edges}); the response supplies edge sequences used both for map highlighting and for the next call. Starting the journey (\texttt{POST /api/simulation/start-journey}) injects a vehicle, attaches the precomputed route, and returns identifiers, distance, wall-clock-style start labels, and a \emph{predicted ETA} produced inside the service by the neural model. The UI then runs or resumes simulation playback so the vehicle moves in step with simulated time; the user sees travel progress together with prediction context. When the trip ends, the client calls completion logic (\texttt{POST /api/simulation/complete-journey}) so the backend can finalize duration, error, and accuracy fields in the in-memory vehicle record. Figure~\ref{fig:web_sequence_journey} shows the same story as a message sequence.
+
+\paragraph{Persistence, aggregation, and reporting hooks.}
+After each finished trip, the client may push a denormalized journey record (\texttt{POST /api/journeys/save}) so SQLAlchemy can insert or update a \texttt{Journey} row. Subsequent \texttt{GET} calls load recent rows, journey counts, and precomputed series for charts (MAE by time, duration vs.\ error, histograms, and related panels used in the demonstrator). That closes the \emph{evaluation} loop: predictions and realized outcomes are no longer ephemeral TraCI state but queryable evidence for cohort metrics and export. The web chapter documents screenshots, metrics definitions, and operator steps; the present subsection only fixes the ordering of operations at the system level.
+
+\subsection{Software structure}\label{sec:system:web:structure}
+The web path follows a client-server-service structure. The frontend (\texttt{Academia/TrafficLab/frontend/src}) is a Vue 3 single-page client with route-level components initialized from \texttt{main.js}; it handles session interaction, visualization, and user-triggered evaluation actions. The backend (\texttt{Academia/TrafficLab/backend/main.py}) exposes FastAPI endpoints for simulation state, prediction/evaluation operations, and reporting-related data retrieval.
+
+\paragraph{Architectural decomposition.}
+API handlers in the backend delegate to service and model layers instead of embedding all logic in endpoint functions. Simulation/runtime integration is encapsulated in \texttt{services/sumo\_service.py} (\texttt{SUMOSimulation}), inference logic in \texttt{models/eta\_inference.py} and related model modules, and persistence in SQLAlchemy-based modules such as \texttt{models/database.py} and entity definitions in \texttt{models/entities.py}. This yields a clear chain: Vue UI -> FastAPI endpoints -> services/inference -> database/session logs.
+
+\paragraph{Module mapping and contracts.}
+The frontend consumes typed JSON payloads over HTTP and renders metrics/journey views. The backend contract is stable at endpoint boundaries even when model internals evolve (for example, replacing checkpoints or tuning inference strategy). Persistence modules store journey/session outcomes and provide retrieval paths for analysis panels and exports. Figure~\ref{fig:web_software_structure} summarizes these structural relations.
+
+\input{figures_report/fig_web_software_structure}
+
+\paragraph{Class-level view.}
+Figure~\ref{fig:web_class_diagram} relates the FastAPI application surface to the long-lived \texttt{SUMOSimulation} service, the PyTorch \texttt{Inference} wrapper and loaded \texttt{TemporalMoEETA} model, in-memory graph entities used during simulation, and the persisted \texttt{Journey} ORM type. Endpoint names are omitted for readability.
+
+\input{figures_report/fig_web_class_diagram}
+
+\paragraph{Design rationale and boundaries.}
+The split isolates concerns: UI composition and interaction in Vue, orchestration and API guarantees in FastAPI, simulation/inference in service/model layers, and durability in PostgreSQL via SQLAlchemy. Behavioral sequencing of evaluation sessions belongs to Section~\ref{sec:system:web:flow}, and screen walkthrough details belong to Section~\ref{sec:system:web:ui}; this subsection remains a static architectural view, with the component figure above and the class relations in Figure~\ref{fig:web_class_diagram}.
+
+\subsection{Sequence interactions}\label{sec:system:web:sequence}
+The demo client loads the network and simulation status on mount while the backend service is already running. Figure~\ref{fig:web_sequence_journey} walks through a single end-to-end trip: the user picks start and destination edges, the server computes a shortest route, the journey start endpoint adds a vehicle and returns predicted ETA, the client displays timing and runs playback, completion posts metrics, the journey is saved to PostgreSQL, and the UI refreshes recent results and performance aggregates.
+
+\input{figures_report/fig_web_sequence_journey}
+
+\subsection{User interface}\label{sec:system:web:ui}
+The demonstrator screens in this subsection follow Figure~\ref{fig:web_sequence_journey}: main dashboard on load, map legend, shortest-route selection, active journey playback with ETA context, post-trip panels fed by PostgreSQL persistence, and finally the same UI running on a trajectory-converted Porto network.
+
+\paragraph{Chronological screen flow.}
+Figure~\ref{fig:web_ui_init} shows the main window while traffic is already running, with model-performance analysis on the left and recent journeys on the right. Figure~\ref{fig:web_ui_legend} documents the map legend used to interpret roads, markers, and vehicles. Figure~\ref{fig:web_ui_route} shows origin/destination selection, shortest-route calculation, and the running recent-journey entry for journey \#2709. Figure~\ref{fig:web_ui_recent} shows arrival at the destination and the completed journey record with its error and accuracy. Figure~\ref{fig:web_ui_porto} closes the walkthrough with the Porto trajectory-derived network, demonstrating that the web application uses the same evaluation surface regardless of whether the dataset came from simulation or conversion.
+
+\input{figures_report/fig_system_web_ui}
+
+\FloatBarrier

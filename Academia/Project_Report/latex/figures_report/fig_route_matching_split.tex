@@ -1,0 +1,13 @@
+\begin{figure}[!htbp]
+\centering
+\includegraphics[width=\linewidth,keepaspectratio]{dataset_conversion_bounding_box_whitebg.png}
+\caption{Route matching (part~1): bounding box and search scope. The \emph{bounding box}, \emph{burgundy} roads and junctions that limit the matcher's search entities, and the thick \emph{dark} final route on the SUMO network. The raw GPS trace appears as a \emph{light blue} polyline (numbered blue samples) and \emph{green} segments as the top-three candidate edges at sampled locations.}
+\label{fig:route_matching_a}
+\end{figure}
+
+\begin{figure}[!htbp]
+\centering
+\includegraphics[width=\linewidth,keepaspectratio]{dataset_conversion_split_whitebg.png}
+\caption{Route matching (part~2): split trajectory after a GPS outlier. Same legend style as Figure~\ref{fig:route_matching_a}; \emph{light blue} and \emph{orange} polylines show the \emph{split} trajectory---two segment polylines after cutting at an outlying GPS point (e.g.\ $\sim\!5$\,km from adjacent samples), with each segment matched separately.}
+\label{fig:route_matching_b}
+\end{figure}

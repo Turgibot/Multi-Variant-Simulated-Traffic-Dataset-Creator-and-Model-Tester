@@ -1,0 +1,63 @@
+% Desktop UI walkthrough: trajectory conversion path (order matches Figure~\ref{fig:desktop_sequence_conversion}).
+\begin{figure}[!htbp]
+\centering
+\includegraphics[width=0.88\linewidth,height=0.34\textheight,keepaspectratio]{dataset_create_trajectory_project.png}
+\caption{Desktop UI (conversion path, step 1): \textbf{Create Trajectory Conversion Project} dialog---name, optional description, and folder before the \texttt{DatasetConversionPage} workflow.}
+\label{fig:desktop_ui_conv_create}
+\end{figure}
+
+\begin{figure}[!htbp]
+\centering
+\includegraphics[width=0.88\linewidth,height=0.34\textheight,keepaspectratio]{dataset_convertion_coords.png}
+\caption{Desktop UI (conversion path, step 2): map border coordinates and map base name---the app downloads OSM data for the selected box and converts it to a SUMO network via \texttt{netconvert}.}
+\label{fig:desktop_ui_conv_bbox}
+\end{figure}
+
+\begin{figure}[!htbp]
+\centering
+\includegraphics[width=0.88\linewidth,height=0.34\textheight,keepaspectratio]{dataset_convertion_files.png}
+\caption{Desktop UI (conversion path, step 3): attach trajectory CSV files (main required, optional extras) for conversion after the SUMO network is ready.}
+\label{fig:desktop_ui_conv_csv}
+\end{figure}
+
+\begin{figure}[!htbp]
+\centering
+\includegraphics[width=\linewidth,height=0.48\textheight,keepaspectratio]{dataset_convertion_main_with_network.png}
+\caption{Desktop UI (conversion path, step 4): main view with SUMO network only, used for initial visual validation before deeper route inspection.}
+\label{fig:desktop_ui_conv_map_network}
+\end{figure}
+
+\begin{figure}[!htbp]
+\centering
+\includegraphics[width=\linewidth,height=0.48\textheight,keepaspectratio]{dataset_convertion_main_with_map.png}
+\caption{Desktop UI (conversion path, step 5): same view with real map tiles under the SUMO network, helping alignment checks in geographic context.}
+\label{fig:desktop_ui_conv_map}
+\end{figure}
+
+\begin{figure}[!htbp]
+\centering
+\includegraphics[width=0.88\linewidth,height=0.46\textheight,keepaspectratio]{dataset_conversion_display_split.png}
+\caption{Desktop UI (conversion path, step 6, optional): trajectory inspection controls. Checkboxes toggle raw GPS drawing, invalid-segment splitting for jump repair, start/end trimming, and trajectory polygon display. After \textbf{Show}, results appear in \textbf{Trajectory subsets}: each segment yields a route; \textbf{Show SUMO route} draws black matched routes and \textbf{Show candidate edges} overlays green/orange candidates for debugging.}
+\label{fig:desktop_ui_conv_split}
+\end{figure}
+
+\begin{figure}[!htbp]
+\centering
+\includegraphics[width=\linewidth,height=0.5\textheight,keepaspectratio]{dataset_conversion_split.png}
+\caption{Desktop UI (conversion path, step 7, optional): example route-display outcome after split-and-fix processing, showing segmented matching results.}
+\label{fig:desktop_ui_conv_split_example}
+\end{figure}
+
+\begin{figure}[!htbp]
+\centering
+\includegraphics[width=\linewidth,height=0.5\textheight,keepaspectratio]{dataset_conversion_bounding_box.png}
+\caption{Desktop UI (conversion path, step 8, optional): second route-display example emphasizing search-region/bounding behavior during map matching diagnostics.}
+\label{fig:desktop_ui_conv_bbox_example}
+\end{figure}
+
+\begin{figure}[!htbp]
+\centering
+\includegraphics[width=0.88\linewidth,height=0.34\textheight,keepaspectratio]{dataset_converstion_create_settings.png}
+\caption{Desktop UI (conversion path, step 9): final dataset-generation settings and \textbf{Start}---choose first/last/count trajectories, optional timestamp sorting and sorted-copy path, sampling period, compression, worker count, and output folder (final stage in Figure~\ref{fig:desktop_sequence_conversion}).}
+\label{fig:desktop_ui_conv_generate}
+\end{figure}

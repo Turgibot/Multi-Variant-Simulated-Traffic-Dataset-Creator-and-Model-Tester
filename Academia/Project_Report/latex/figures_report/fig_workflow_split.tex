@@ -1,0 +1,33 @@
+% End-to-end workflow (Chapter 3). Graph schema: see fig_graph_schema.tex in dataset chapter.
+\begin{figure}[!htbp]
+\centering
+\resizebox{0.5\linewidth}{!}{%
+\begin{tikzpicture}[
+  font=\footnotesize,
+  box/.style={
+    draw,
+    rounded corners=2pt,
+    align=center,
+    inner sep=3.2pt,
+    minimum width=2.55cm,
+    line width=0.5pt
+  },
+  arr/.style={-{Stealth[length=1.6mm]}, thick, shorten >=0.5pt, shorten <=0.5pt}
+]
+\node[box] (sumo) {\textbf{Sim. path}\\SUMO + TraCI};
+\node[box, right=0.28cm of sumo] (traj) {\textbf{Traj. path}\\repair, match};
+\coordinate (m) at ($(sumo.south)!0.5!(traj.south)$);
+\node[box, below=0.38cm of m] (desk) {\textbf{Desktop}\\\DesktopTool{}};
+\node[box, below=0.30cm of desk] (snap) {\textbf{Graph snapshots}\\route-aware, time series};
+\node[box, below=0.30cm of snap] (web) {\textbf{Web client}\\interactive ETA evaluation};
+\node[box, below=0.30cm of web] (out) {\textbf{Outcomes}\\DB, metrics, reports};
+\draw[arr] (sumo.south) to[bend right=10] ([xshift=-0.85cm, yshift=1.2pt]desk.north);
+\draw[arr] (traj.south) to[bend left=10] ([xshift=0.85cm, yshift=1.2pt]desk.north);
+\draw[arr] (desk) -- (snap);
+\draw[arr] (snap) -- (web);
+\draw[arr] (web) -- (out);
+\end{tikzpicture}%
+}
+\caption{End-to-end workflow: simulation and trajectory paths merge in the desktop tool, export route-aware graph time series, and feed the web layer for testing and logged analysis.}
+\label{fig:workflow}
+\end{figure}

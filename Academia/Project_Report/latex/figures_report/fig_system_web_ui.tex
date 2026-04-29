@@ -1,0 +1,50 @@
+% Web UI walkthrough (order matches Figure~\ref{fig:web_sequence_journey}).
+\begin{figure}[!htbp]
+\centering
+\includegraphics[width=\linewidth,height=0.48\textheight,keepaspectratio]{web0.png}
+\caption{Web UI (step 1): main evaluation window after load. The traffic simulation is already running in the center map; the left panel summarizes model-performance analysis, while the right panel lists recent journeys and their prediction/error records.}
+\label{fig:web_ui_init}
+\end{figure}
+
+\begin{figure}[!htbp]
+\centering
+\includegraphics[width=0.22\linewidth,keepaspectratio]{web_legend.png}
+\caption{Web UI (step 2): map legend. It defines road styles, start/destination markers, vehicle classes, the highlighted user vehicle, and not-tracked vehicles.}
+\label{fig:web_ui_legend}
+\end{figure}
+
+\begin{figure}[!htbp]
+\centering
+\begin{minipage}[t]{0.63\linewidth}
+\centering
+\includegraphics[width=\linewidth,height=0.50\textheight,keepaspectratio]{web3.png}
+\end{minipage}\hfill
+\begin{minipage}[t]{0.34\linewidth}
+\centering
+\includegraphics[width=\linewidth,height=0.50\textheight,keepaspectratio]{web4.png}
+\end{minipage}
+\caption{Web UI (steps 3--4): the user selects origin and destination points, then the backend calculates the shortest route with SUMO's Dijkstra implementation. After \textbf{Start Journey}, journey \#2709 appears as running in the recent-journeys panel: distance 13.51\,km, start Wednesday 05:21:00, predicted ETA 05:38:11, and estimated duration 17:11 minutes.}
+\label{fig:web_ui_route}
+\label{fig:web_ui_running}
+\end{figure}
+
+\begin{figure}[!htbp]
+\centering
+\begin{minipage}[t]{0.63\linewidth}
+\centering
+\includegraphics[width=\linewidth,height=0.50\textheight,keepaspectratio]{web6.png}
+\end{minipage}\hfill
+\begin{minipage}[t]{0.34\linewidth}
+\centering
+\includegraphics[width=\linewidth,height=0.50\textheight,keepaspectratio]{web7.png}
+\end{minipage}
+\caption{Web UI (steps 5--6): the vehicle reaches the destination, then journey \#2709 is marked completed in the recent-journeys panel. The prediction was 19 seconds before the actual arrival, giving 98.1\% accuracy for this journey.}
+\label{fig:web_ui_recent}
+\end{figure}
+
+\begin{figure}[!htbp]
+\centering
+\includegraphics[width=\linewidth,height=0.48\textheight,keepaspectratio]{porto_web.png}
+\caption{Web UI (step 7): the same evaluation client on a Porto trajectory-derived network. The web application is independent of whether the underlying dataset was generated from the simulation path or the trajectory-conversion path; it consumes the shared exported representation and exposes the same route selection, ETA prediction, recent-journey, and aggregate-analysis panels.}
+\label{fig:web_ui_porto}
+\end{figure}

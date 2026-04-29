@@ -1,0 +1,21 @@
+\chapter{Web-based evaluation and validation loop}\label{sec:web}
+
+\section{Workflow, interface, and evidence}
+The web application closes the loop between dataset construction and measurable use.
+It accepts representation-compatible inputs, runs prediction sessions under controlled conditions, and persists evidence for later inspection, so the representation is exercised end-to-end rather than left as a static export.
+The environment supports interactive ETA-oriented testing, cumulative storage, and repeatable analysis; it is not a production navigation system, but it shows navigation-style interaction is feasible on the representation.
+Chapter~\ref{sec:system:web:ui} places the simulation-backed web workflow first: Figure~\ref{fig:web_ui_init} shows the main evaluation dashboard (map, cohort metrics, journey log), and Figures~\ref{fig:web_ui_route}--\ref{fig:web_ui_recent} show route start and completion.
+The trajectory path uses the same client after export, as in Figure~\ref{fig:web_ui_porto}, following desktop conversion in Figure~\ref{fig:desktop_ui_conv_generate}; the web application is therefore independent of whether the dataset originated in the simulation branch or the conversion branch.
+
+A compatible ETA predictor is attached as a pluggable component that consumes the shared representation and returns trip-level ETA outputs. Users can trigger predictions for selected trips, inspect outputs, and run controlled sessions; other predictors can be substituted if they conform to the representation interface. Predictions and metadata are stored in a database so results can be revisited and aggregated. The client computes measures such as MAE, RMSE, and MAPE over selected sets and supports cohort grouping. It also generates plots from registered data and can assemble PDF reports combining statistics and figures.
+In typical use, an operator loads an exported bundle, selects trips or cohort filters on the map, runs a batch of evaluations, and inspects per-journey logs alongside aggregate error panels; the same session state can be exported for archival or for archival or appendices without re-running inference.
+
+\section{Demonstrator scope and validation role}
+The deployed application is one configuration of a broader framework: the same logic can be reused with alternative predictors and datasets from supported environments. The contribution is the coupling of construction and evaluation through a reusable interface, not a single prototype deployment.
+
+The web loop validates representation coherence, downstream trainability, and a workflow that does not stop at raw export, with continuity from construction to evaluation.
+
+
+\section{User guide: web client (expanded)}
+The following screen-oriented checklist maps to the non-duplicated screenshots in Section~\ref{sec:system:web:ui}. \textbf{Load data:} import a representation-compatible bundle; confirm node/edge layout loads without schema errors. \textbf{Map:} pan and zoom, select origin and destination points, and let the server compute the SUMO shortest route. \textbf{Run evaluation:} start the journey so the prediction, ETA, distance, and estimated duration are recorded in the recent-journeys panel. \textbf{Review:} after completion, inspect arrival time, realized duration, error, accuracy, aggregate MAE/RMSE/MAPE panels, and optional PDF export.
+\FloatBarrier
