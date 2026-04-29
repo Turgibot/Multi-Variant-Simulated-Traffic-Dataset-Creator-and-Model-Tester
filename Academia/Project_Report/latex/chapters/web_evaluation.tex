@@ -1,21 +1,96 @@
-\chapter{Web-based evaluation and validation loop}\label{sec:web}
+\chapter{Learning-Based Validation of the Shared Representation}\label{sec:eval}
 
-\section{Workflow, interface, and evidence}
-The web application closes the loop between dataset construction and measurable use.
-It accepts representation-compatible inputs, runs prediction sessions under controlled conditions, and persists evidence for later inspection, so the representation is exercised end-to-end rather than left as a static export.
-The environment supports interactive ETA-oriented testing, cumulative storage, and repeatable analysis; it is not a production navigation system, but it shows navigation-style interaction is feasible on the representation.
-Chapter~\ref{sec:system:web:ui} places the simulation-backed web workflow first: Figure~\ref{fig:web_ui_init} shows the main evaluation dashboard (map, cohort metrics, journey log), and Figures~\ref{fig:web_ui_route}--\ref{fig:web_ui_recent} show route start and completion.
-The trajectory path uses the same client after export, as in Figure~\ref{fig:web_ui_porto}, following desktop conversion in Figure~\ref{fig:desktop_ui_conv_generate}; the web application is therefore independent of whether the dataset originated in the simulation branch or the conversion branch.
+Chapter~\ref{sec:dataset} defined a shared route-aware graph representation for two construction paths: controlled SUMO simulation and conversion of repaired GPS trajectories. This chapter validates that representation from the learning side. The claim is intentionally practical: the same ETA learning pipeline can consume both exported dataset types, train successfully, and converge to useful held-out error levels. The model is used here as a downstream validator of the data contract, not as the main contribution of the report.
 
-A compatible ETA predictor is attached as a pluggable component that consumes the shared representation and returns trip-level ETA outputs. Users can trigger predictions for selected trips, inspect outputs, and run controlled sessions; other predictors can be substituted if they conform to the representation interface. Predictions and metadata are stored in a database so results can be revisited and aggregated. The client computes measures such as MAE, RMSE, and MAPE over selected sets and supports cohort grouping. It also generates plots from registered data and can assemble PDF reports combining statistics and figures.
-In typical use, an operator loads an exported bundle, selects trips or cohort filters on the map, runs a batch of evaluations, and inspects per-journey logs alongside aggregate error panels; the same session state can be exported for archival or for archival or appendices without re-running inference.
+\section{Validation question}
+The dataset layer is only useful if it supports a model-facing task without path-specific adapters. Therefore, the validation question is:
+\begin{quote}
+Can one route-aware ETA model be trained on graph bundles produced by both the simulation path and the trajectory-conversion path?
+\end{quote}
 
-\section{Demonstrator scope and validation role}
-The deployed application is one configuration of a broader framework: the same logic can be reused with alternative predictors and datasets from supported environments. The contribution is the coupling of construction and evaluation through a reusable interface, not a single prototype deployment.
+The answer is evaluated on two representative bundles from the open-source workflow. The first comes from the three-zone simulation example, where traffic is controlled and sampled densely. The second comes from the Porto trajectory-conversion example, where sparse GPS traces are repaired, map matched, and projected into the same graph schema. Successful training on both sources shows that Chapter~\ref{sec:dataset}'s representation is not merely syntactically consistent; it is also learnable by a downstream ETA predictor.
 
-The web loop validates representation coherence, downstream trainability, and a workflow that does not stop at raw export, with continuity from construction to evaluation.
+\section{Representative bundles}
+Table~\ref{tab:dataset_stats_ch5} summarizes the two dataset instances used for learning validation. The simulation-backed bundle spans four weeks with dense 30\,s sampling. The trajectory-conversion bundle spans one year of Porto taxi data~\cite{porto2015pkdd}; its graph snapshots are trace-driven emitted steps, not a dense 30\,s grid over the full year. The two bundles therefore differ in scale, geography, and observability, while preserving the same node/edge feature interface.
 
+\begin{table}[!htbp]
+\caption{Representative bundles from the open-source examples. Junction and road-edge counts are taken from SUMO \texttt{net.xml} files after excluding internal edges. Trip-rate, duration, and distance rows summarize the generated or converted trip populations used for the learning snapshot.}
+\label{tab:dataset_stats_ch5}
+\centering
+\scriptsize
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+Quantity & Simulation & Trajectory conversion \\
+\midrule
+Temporal span & 4 weeks & 1 year \\
+Project name & 3 zones city & Porto taxi \\
+Trips after repair & 403\,848 & 1\,312\,637 \\
+Trips per hour, avg.\ / std. & 601.0 / 366.4 & 149.8 / 128.7 \\
+Trip duration (s), avg.\ / std. & 1\,011 / 416 & 731 / 514 \\
+Trip distance (km), avg.\ / std. & 13.07 / 6.42 & 5.82 / 5.10 \\
+Junction nodes & 1\,031 & 75\,264 \\
+Road edges (non-internal) & 1\,294 & 146\,816 \\
+Approx.\ coverage area (km$^2$) & $\approx 203$ & $\approx 385$ \\
+Graph snapshots (at $\Delta t$) & 80\,640 & 925\,644 \\
+Snapshot period $\Delta t$ (s) & 30 & 30 \\
+Node feat.\ dim.\ / edge feat.\ dim. & 28 / 6 & 28 / 6 \\
+\bottomrule
+\end{tabular}
+\end{table}
 
-\section{User guide: web client (expanded)}
-The following screen-oriented checklist maps to the non-duplicated screenshots in Section~\ref{sec:system:web:ui}. \textbf{Load data:} import a representation-compatible bundle; confirm node/edge layout loads without schema errors. \textbf{Map:} pan and zoom, select origin and destination points, and let the server compute the SUMO shortest route. \textbf{Run evaluation:} start the journey so the prediction, ETA, distance, and estimated duration are recorded in the recent-journeys panel. \textbf{Review:} after completion, inspect arrival time, realized duration, error, accuracy, aggregate MAE/RMSE/MAPE panels, and optional PDF export.
+\section{Model used for validation}
+The predictor used in this report follows the DSTRA-GNN route-aware ETA model~\cite{dstra_gnn}. At a high level, it consumes a temporal window of graph snapshots, encodes the current traffic graph, incorporates each vehicle's remaining route context, and regresses ETA in seconds. This makes it suitable for validating the dataset representation because it relies on the same ingredients the representation is designed to expose: static road structure, dynamic vehicle state, road-level traffic signals, route suffixes, and time-aligned ETA labels.
+
+The model itself is not the subject of this report. It is treated as a compatible downstream learner, and the full DSTRA-GNN paper is attached in Appendix~\ref{ap:dstra-paper} for methodological detail. The present work asks whether the dataset-creation workflow can feed such a learner from both construction paths.
+
+As a sanity-check comparator, we also use a naive mean-duration baseline. For each dataset bundle, the baseline predicts the training-set average trip duration for every held-out journey. It has no access to route geometry, traffic state, graph context, or time-varying demand. Beating this baseline by a large margin indicates that the graph representation carries information beyond the marginal distribution of trip durations.
+
+\section{Training protocol and metrics}
+The simulation and trajectory-conversion bundles are trained separately with the same model interface and held-out evaluation protocol. Test journeys are disjoint from the trips used to fit the model for that bundle, and the mean-duration baseline uses only training-trip durations.
+
+Performance is reported using mean absolute error (MAE), root mean squared error (RMSE), and mean absolute percentage error (MAPE):
+\[
+\mathrm{MAE}=\frac{1}{N}\sum_{i=1}^{N}|\hat{y}_i-y_i|,
+\quad
+\mathrm{RMSE}=\sqrt{\frac{1}{N}\sum_{i=1}^{N}(\hat{y}_i-y_i)^2},
+\]
+\[
+\mathrm{MAPE}(\%)=100\cdot\frac{1}{N}\sum_{i=1}^{N}\left|\frac{\hat{y}_i-y_i}{y_i}\right|.
+\]
+Here, $y_i$ is the realized remaining travel time and $\hat{y}_i$ is the prediction. MAE gives the typical absolute miss in seconds, RMSE penalizes large errors more strongly, and MAPE expresses error relative to trip duration.
+
+\section{Training convergence}
+Table~\ref{tab:learning_validation_results} reports the held-out metrics after 100 training epochs. The same route-aware model converges on both dataset sources. The trajectory-conversion result is slightly weaker, which is expected: converted GPS data is sparser, includes repaired segments, and depends on map matching before graph snapshots can be emitted.
+
+\begin{table}[!htbp]
+\caption{Learning validation after 100 epochs: route-aware model vs.\ mean-duration baseline. MAE/RMSE are in seconds; MAPE is in percent.}
+\label{tab:learning_validation_results}
+\centering
+\scriptsize
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{@{}l r rrr rrr@{}}
+\toprule
+ & & \multicolumn{3}{c}{Route-aware model} & \multicolumn{3}{c}{Mean baseline} \\
+\cmidrule(lr){3-5}\cmidrule(lr){6-8}
+Data source & $n$ & MAE & RMSE & MAPE & MAE & RMSE & MAPE \\
+ & & (s) & (s) & (\%) & (s) & (s) & (\%) \\
+\midrule
+Simulation & 2\,707 & 44.35 & 106.56 & 17.09 & 260.63 & 325.13 & 127.75 \\
+Trajectory conversion & 3\,055 & 51.69 & 120.56 & 20.08 & 282.66 & 352.41 & 138.50 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The relative improvement over the naive baseline is large in both settings. On simulation-backed data, MAE drops from 260.63\,s to 44.35\,s. On trajectory-converted data, MAE drops from 282.66\,s to 51.69\,s. This shows that the model is using route and traffic context exposed by the graph rather than simply learning an average journey duration.
+
+\input{figures_report/fig_training_curves}
+
+Figure~\ref{fig:training_curves} illustrates typical validation behavior over the 100 epochs. The simulation curve descends faster because the simulator exposes dense, regularly sampled, controlled trajectories. The conversion curve reaches a comparable regime later because the learning signal comes from sparse real traces that have passed through repair, segmentation, and route matching.
+
+\section{Interpretation}
+The main conclusion is that both construction paths produce datasets that can train the same route-aware ETA model. This supports the central design of the project: simulation-derived and trajectory-derived traffic do not have to be identical, but they must be expressible through one model-facing representation.
+
+This chapter therefore validates the representation as a learning artifact. Chapter~\ref{sec:web} continues the story from the application side: once a compatible model exists, the web environment can use it in an interactive route-selection and prediction--outcome loop.
+
 \FloatBarrier

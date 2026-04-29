@@ -1,15 +1,33 @@
-\chapter{Evaluation}\label{sec:eval}
+\chapter{Web-Based Evaluation and Validation Loop}\label{sec:web}
 
-We evaluate the same route-aware predictor attached to the web environment on two representative bundles from the open-source workflow: one from the simulation path and one from repaired real trajectories. For each source, performance is measured on held-out journeys registered through the evaluation client, using MAE, RMSE, and MAPE. As a sanity-check comparator, we also report a simple mean-duration baseline that predicts the training-set average trip duration for every test journey.
-Test journeys are disjoint from the trips used to fit the route-aware model for that bundle, and the mean baseline uses only training-trip durations, so both scores refer to the same held-out set.
-The web client persists each prediction with its realized duration, which makes the projected aggregates reproducible from the logged database and ties the numbers to the interactive evaluation protocol rather than to an ad-hoc offline script.
+Chapter~\ref{sec:eval} showed that the shared representation is trainable on both construction paths. This chapter closes the validation chain by showing how a trained, representation-compatible ETA predictor is used inside the \WebApp{} to produce persistent prediction--outcome evidence. The web application is not presented as a production navigation service; it is an evaluation harness that connects route selection, model inference, simulated or replayed movement, realized arrival, and aggregate analysis.
 
-Table~\ref{tab:dataset_stats} summarizes the two dataset instances used in this snapshot. The simulation-backed example spans four weeks with dense 30\,s sampling (80\,640 snapshots, $28 \times 24 \times 60 \times 2$). The trajectory example spans one year of Porto taxi data; its 925\,644 snapshots are the emitted graph steps triggered by repaired-trace observations, not a hypothetical dense 30\,s grid over the full year. Both branches therefore differ in scale and observability but share the same node/edge feature interface.
+\section{Role of the web loop}
+The web loop validates operational usability. A trained model can have good held-out metrics, yet still be difficult to use in an interactive setting if the surrounding system cannot load the network, compute a route, invoke inference, track the journey, or preserve the result. The \WebApp{} exercises these steps in one workflow:
+\begin{enumerate}
+    \item load a representation-compatible bundle and render the road network;
+    \item let the user select origin and destination points;
+    \item compute a SUMO shortest route for the selected endpoints;
+    \item invoke the attached ETA model and display the predicted arrival;
+    \item run the journey until the vehicle reaches its destination;
+    \item compare predicted and realized arrival times;
+    \item store the completed journey for later analysis.
+\end{enumerate}
 
-\input{../../nids2026_article/sections/evaluation_tables}
+The canonical screenshots for this process appear in Section~\ref{sec:system:web:ui}. Figure~\ref{fig:web_ui_init} shows the loaded dashboard, Figure~\ref{fig:web_ui_route} shows route selection and journey start, and Figure~\ref{fig:web_ui_recent} shows the completed prediction--outcome record.
 
-Table~\ref{tab:eval_results} shows that the representation supports substantially better ETA estimation than the naive average-duration baseline in both settings. On simulation-backed data, the route-aware predictor reduces MAE from 260.63\,s to 46.16\,s (about 82\% relative improvement), while RMSE drops from 325.13\,s to 107.15\,s. On the trajectory-conversion data, MAE falls from 282.66\,s to 52.38\,s (about 81\% relative improvement), while RMSE falls from 352.41\,s to 121.50\,s. MAPE follows the same trend, dropping from well above 100\% under the baseline to 17.99\% and 20.41\%. These numbers indicate that the shared graph representation carries enough route and traffic context for the downstream predictor to learn nontrivial travel-time structure across both branches.
+\section{Per-journey evidence}
+The atomic evidence unit is one completed journey. Each journey record contains the selected route, trip distance, start time, predicted ETA, realized arrival, actual duration, signed error, absolute error, and accuracy. This is the bridge between model training and user-facing validation: the model produces an ETA before the trip is complete, and the application later records what actually happened.
 
-The scatter plots in Figures~\ref{fig:mae_scatter_sim} and~\ref{fig:mae_scatter_traj} show how absolute error varies with trip duration: most journeys fall in short-to-medium durations, with a heavy tail of longer trips. Trajectory conversion is slightly harder, consistent with repair, map matching, and sparser observability, yet errors stay far below the baseline in Table~\ref{tab:eval_results}, supporting end-to-end usefulness of the workflow.
+Journey \#2709 in Figure~\ref{fig:web_ui_route}--\ref{fig:web_ui_recent} is the running example. The selected route is 13.51\,km. The trip starts on Wednesday at 05:21:00, with a predicted arrival at 05:38:11, corresponding to a predicted duration of 17:11 minutes. At completion, the recorded prediction is 19 seconds before the actual arrival, giving 98.1\% journey-level accuracy. This example is not used as a statistical claim by itself; it illustrates the evidence schema that can be accumulated over many journeys.
 
-\input{figures_report/fig_eval_scatter_split}
+\section{Path-independent validation}
+The same web surface is used regardless of how the underlying graph bundle was produced. The simulation-backed workflow uses controlled traffic from the desktop simulation path, while Figure~\ref{fig:web_ui_porto} shows the same client operating on the Porto trajectory-conversion network. This matters because it confirms that path independence extends beyond file layout and model training: once exported, both bundles can support the same route-selection and ETA-evaluation workflow.
+
+\section{Aggregation and reporting}
+Completed journeys are persisted so that the interface can compute aggregate error panels, recent-journey summaries, plots, and report exports without rerunning inference. Aggregates such as MAE, RMSE, and MAPE are meaningful here because each row has both a prediction and a realized outcome. The dashboard therefore serves two roles: it lets an operator inspect single journeys, and it accumulates enough evidence to analyze cohorts by route, duration, time of day, or dataset source.
+
+\section{Validation boundary}
+The web loop validates that the representation, trained model, backend service, and user-facing client can work together end to end. It does not claim universal production readiness, optimal routing, or model superiority across all possible cities and traffic regimes. Those claims would require broader deployments and additional controlled comparisons. The contribution here is narrower and directly tied to the report: datasets produced by both construction paths can train a compatible ETA model, and that trained model can be exercised in a persistent interactive validation loop.
+
+\FloatBarrier
