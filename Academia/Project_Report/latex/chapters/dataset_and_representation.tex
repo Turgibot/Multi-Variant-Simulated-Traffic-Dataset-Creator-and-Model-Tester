@@ -14,12 +14,44 @@ The simulation path starts from a SUMO scenario controlled by the desktop tool a
 During a run, the generator samples simulator state at the selected interval and writes a sequence of graph snapshots. Each snapshot records the active vehicles and the road segments carrying traffic or demand at that time. Because the simulation clock is controlled, this branch is useful for reproducible benchmark settings and for experiments where the amount of traffic or the vehicle-type mixture must be known in advance.
 
 \paragraph{Trajectory-derived construction.}
-The trajectory path starts from GPS-like rows and a SUMO-compatible road network prepared from OSM. It is less controlled than simulation: traces may include sparse samples, repeated start/end points, unrealistic jumps, and projection errors. The conversion workflow therefore performs normalization, route matching, invalid-segment handling, and projection of GPS points onto inferred SUMO routes before emitting graph snapshots. The Porto taxi data~\cite{porto2015pkdd} is used as the representative bundled example, but the contract is intentionally general.
+The trajectory path starts from GPS-like rows and a SUMO-compatible road network prepared from OSM~\cite{osm}. It is less controlled than simulation: traces may include sparse samples, repeated start/end points, unrealistic jumps, and projection errors. The conversion workflow therefore performs normalization, route matching, invalid-segment handling, and projection of GPS points onto inferred SUMO routes before emitting graph snapshots. The Porto taxi data~\cite{porto2015pkdd} is used as the representative bundled example, but the contract is intentionally general.
 
-For successful conversion, imported CSV files must provide one trajectory polyline per row in a parseable list form (the converter scans for a cell like \texttt{[[...], ...]}), with each point encoded as a coordinate pair and at least two points per trip. A \texttt{TIMESTAMP} column is optional for inspecting individual routes but required by the batch step-conversion path that emits sampled snapshots and labels; it anchors each trajectory on a global time axis. Additional source columns may exist, but conversion consumes only the trajectory geometry and, when present, the timestamp. External datasets should therefore be normalized to this minimal contract before import.
+For successful conversion, imported CSV files must provide one trajectory polyline per row in a parseable list form (the converter scans for a cell like \texttt{[[...], ...]}), with each point encoded as a coordinate pair and at least two points per trip. A \texttt{TIMESTAMP} column is optional for inspecting individual routes but required by the batch step-conversion path that emits sampled snapshots and labels; it anchors each trajectory on a global time axis. Additional source columns may exist, but conversion consumes only the trajectory geometry and, when present, the timestamp. External datasets should therefore be normalized to this minimal contract before import. Section~\ref{sec:dataset:csv-contract} gives the concrete CSV shape.
 
 \paragraph{Convergence.}
 Both branches end in the same exported layout: static network material, time-step snapshots, and labels. This is why the web application is independent of the construction path (Figure~\ref{fig:web_ui_porto}) and why evaluation results can compare simulation-backed and trajectory-backed data without path-specific adapters.
+
+\section{Trajectory CSV input contract}\label{sec:dataset:csv-contract}
+The trajectory-conversion branch accepts CSV files whose rows describe complete trips. The converter does not require the full Porto schema; it only needs the geometry and, for batch snapshot generation, a start timestamp. Therefore, other trajectory datasets can be used after being normalized to the following minimal structure.
+
+\begin{table}[!htbp]
+\centering
+\scriptsize
+\begin{tabular}{p{0.22\linewidth}p{0.20\linewidth}p{0.46\linewidth}}
+\toprule
+\textbf{CSV field} & \textbf{Required} & \textbf{Meaning} \\
+\midrule
+\texttt{TIMESTAMP} & Required for batch export & Integer start time for the trip. It is used to place the converted route on the global time axis before sampling snapshots. \\
+Polyline cell & Required & Any cell in the row containing a parseable list of coordinate pairs, for example \texttt{[[-8.61,41.15],[-8.60,41.16]]}. The converter scans cells for this shape. \\
+Other columns & Optional & Source identifiers, taxi metadata, missing-data flags, or dataset-specific fields. They may remain in the CSV, but they are not consumed by conversion. \\
+\bottomrule
+\end{tabular}
+\caption{Minimal trajectory CSV contract for conversion.}
+\label{tab:trajectory_csv_contract}
+\end{table}
+
+A compact valid row is shown below. The coordinate order is the one expected by the converter: longitude followed by latitude in each point. The example contains only the fields that matter for conversion; real source files may contain additional columns.
+
+\begin{lstlisting}[caption={Minimal trajectory CSV example.},label={lst:trajectory-csv-example}]
+TRIP_ID,TIMESTAMP,POLYLINE
+1,1372636858,"[[-8.6186,41.1413],[-8.6179,41.1420],[-8.6168,41.1431]]"
+\end{lstlisting}
+
+A trajectory is therefore interpreted as an ordered polyline
+\[
+P = (p_1,\ldots,p_m), \quad p_i=(\mathrm{lon}_i,\mathrm{lat}_i),
+\]
+with an associated start time. During conversion, repeated stationary endpoints may be trimmed, unrealistic jumps may split $P$ into smaller valid segments, and each remaining segment is matched to the SUMO network.
 
 \section{Exported graph artifact}\label{sec:shared-representation}
 
@@ -33,6 +65,213 @@ Figure~\ref{fig:graph_schema} summarizes the layer split. The static layer conta
 \end{itemize}
 
 The static file is shared by all time steps in a generated dataset. Snapshot files carry evolving state: vehicle position, speed, acceleration, current edge, remaining route, route length left, road demand, average speed, density, and vehicle--road or vehicle--vehicle context as available. Label files align with snapshots by timestamp and store, for each vehicle with a known destination time, the remaining time to arrival. This keeps features and targets synchronized without baking the target into the feature graph.
+
+\section{Entity feature schema}
+The exported representation uses four graph entity families: junctions, road edges, vehicle nodes, and dynamic edges. Static junctions and static road-edge fields are written once in \texttt{static.json}; vehicle nodes, dynamic road-edge fields, and dynamic edges are written per snapshot; ETA labels are written in matching label files.
+
+\begin{table}[!htbp]
+\centering
+\scriptsize
+\begin{tabular}{p{0.24\linewidth}p{0.18\linewidth}p{0.46\linewidth}}
+\toprule
+\textbf{Junction feature} & \textbf{Type} & \textbf{Description} \\
+\midrule
+\texttt{id} & string & Stable junction identifier from the SUMO network. \\
+\texttt{x} & number & Junction x-position in SUMO/map coordinates. \\
+\texttt{y} & number & Junction y-position in SUMO/map coordinates. \\
+\texttt{type} & string & SUMO junction type, defaulting to \texttt{priority} when unavailable. \\
+\texttt{zone} & string & Optional zone label used by scenario configuration. \\
+\texttt{incoming} & list[string] & Incoming road-edge identifiers. \\
+\texttt{outgoing} & list[string] & Outgoing road-edge identifiers. \\
+\bottomrule
+\end{tabular}
+\caption{Static junction-node features in \texttt{static.json}.}
+\label{tab:junction_features}
+\end{table}
+
+\begin{table}[!htbp]
+\centering
+\scriptsize
+\begin{tabular}{p{0.24\linewidth}p{0.18\linewidth}p{0.46\linewidth}}
+\toprule
+\textbf{Road feature} & \textbf{Type} & \textbf{Description} \\
+\midrule
+\texttt{id} & string & Stable road-edge identifier. Lane suffixes are collapsed to a base edge ID. \\
+\texttt{from} & string & Junction identifier at the start of the directed edge. \\
+\texttt{to} & string & Junction identifier at the end of the directed edge. \\
+\texttt{edge\_type} & integer & Static road edges use \texttt{0}; dynamic relation types are listed separately. \\
+\texttt{speed} & number & SUMO speed limit or representative free-flow speed. \\
+\texttt{length} & number & Edge length in metres/map units as supplied by SUMO. \\
+\texttt{num\_lanes} & integer & Number of lanes represented by the collapsed road edge. \\
+\texttt{zone} & string & Optional zone assignment. \\
+\texttt{vehicles\_on\_road} & list[string] & Dynamic list of active vehicle IDs currently on the edge. \\
+\texttt{edge\_demand} & number & Dynamic downstream demand contribution from active routes. \\
+\texttt{avg\_speed} & number & Dynamic average speed of vehicles currently on the edge. \\
+\texttt{density} & number & Dynamic occupancy estimate, computed from vehicles, length, and lane count. \\
+\bottomrule
+\end{tabular}
+\caption{Road-edge features. Static fields appear in \texttt{static.json}; dynamic traffic fields appear in each snapshot under \texttt{road\_edges\_dynamic}.}
+\label{tab:road_features}
+\end{table}
+
+\begin{table}[!htbp]
+\centering
+\scriptsize
+\begin{tabular}{p{0.24\linewidth}p{0.18\linewidth}p{0.46\linewidth}}
+\toprule
+\textbf{Vehicle feature} & \textbf{Type} & \textbf{Description} \\
+\midrule
+\texttt{id} & string & Vehicle/node identifier. \\
+\texttt{vehicle\_type} & string & Vehicle class, e.g. passenger, bus, or truck. \\
+\texttt{length} & number & Vehicle length when known. \\
+\texttt{width} & number & Vehicle width when known. \\
+\texttt{height} & number & Vehicle height when known. \\
+\texttt{speed} & number & Current vehicle speed. \\
+\texttt{acceleration} & number & Current vehicle acceleration. \\
+\texttt{current\_x} & number & Current projected x-coordinate. \\
+\texttt{current\_y} & number & Current projected y-coordinate. \\
+\texttt{current\_zone} & string & Zone currently occupied, when available. \\
+\texttt{current\_edge} & string & Road edge currently occupied. \\
+\texttt{current\_position} & number & Position along the current edge. \\
+\texttt{origin\_name} & string & Human-readable origin label, when available. \\
+\texttt{origin\_zone} & string & Zone assigned to the trip origin. \\
+\texttt{origin\_edge} & string & Road edge containing the origin point. \\
+\texttt{origin\_position} & number & Position along the origin edge. \\
+\texttt{origin\_x} & number & Origin x-coordinate. \\
+\texttt{origin\_y} & number & Origin y-coordinate. \\
+\texttt{origin\_start\_sec} & integer & Trip start time in seconds on the dataset time axis. \\
+\texttt{route} & list[string] & Full planned or inferred edge route. \\
+\texttt{route\_length} & number & Total route length. \\
+\texttt{route\_left} & list[string] & Remaining route after the current edge. \\
+\texttt{route\_length\_left} & number & Remaining distance estimate to destination. \\
+\texttt{destination\_name} & string & Human-readable destination label, when available. \\
+\texttt{destination\_edge} & string & Road edge containing the destination point. \\
+\texttt{destination\_position} & number & Position along the destination edge. \\
+\texttt{destination\_x} & number & Destination x-coordinate. \\
+\texttt{destination\_y} & number & Destination y-coordinate. \\
+\bottomrule
+\end{tabular}
+\caption{Vehicle-node features in snapshot \texttt{nodes}.}
+\label{tab:vehicle_features}
+\end{table}
+
+\begin{table}[!htbp]
+\centering
+\scriptsize
+\begin{tabular}{p{0.24\linewidth}p{0.18\linewidth}p{0.46\linewidth}}
+\toprule
+\textbf{Dynamic-edge feature} & \textbf{Type} & \textbf{Description} \\
+\midrule
+\texttt{id} & string & Generated relation identifier. \\
+\texttt{from} & string & Source node identifier. \\
+\texttt{to} & string & Target node identifier. \\
+\texttt{edge\_type} & integer & \texttt{0}: static road edge; \texttt{1}: junction-to-first-vehicle; \texttt{2}: vehicle-to-vehicle; \texttt{3}: last-vehicle-to-junction. \\
+\bottomrule
+\end{tabular}
+\caption{Dynamic relation-edge features in snapshot \texttt{dynamic\_edges}.}
+\label{tab:dynamic_edge_features}
+\end{table}
+
+\begin{table}[!htbp]
+\centering
+\scriptsize
+\begin{tabular}{p{0.24\linewidth}p{0.18\linewidth}p{0.46\linewidth}}
+\toprule
+\textbf{Label field} & \textbf{Type} & \textbf{Description} \\
+\midrule
+\texttt{timestamp} & integer & Snapshot time that the labels align to. \\
+\texttt{labels[].id} & string & Vehicle identifier. \\
+\texttt{labels[].eta} & number & Remaining time to destination in seconds, clipped at zero after arrival. \\
+\bottomrule
+\end{tabular}
+\caption{ETA label-file schema.}
+\label{tab:label_features}
+\end{table}
+
+\FloatBarrier
+
+\section{Compact output example}
+The implementation writes static data, snapshots, and labels as separate files. Listing~\ref{lst:dataset-json-example} shows a shortened, aligned excerpt with one junction, one road edge, one vehicle, one dynamic edge, and one ETA label. Values are illustrative; the structure mirrors the generated artifact.
+
+\begin{lstlisting}[caption={Compact dataset JSON excerpt across \texttt{static.json}, one snapshot, and one label file.},label={lst:dataset-json-example}]
+{
+  "static.json": {
+    "junctions": [
+      {
+        "id": "J1",
+        "x": 10.0,
+        "y": 20.0,
+        "type": "priority",
+        "zone": "A",
+        "incoming": [],
+        "outgoing": ["E1"]
+      }
+    ],
+    "road_edges": [
+      {
+        "id": "E1",
+        "from": "J1",
+        "to": "J2",
+        "edge_type": 0,
+        "speed": 13.9,
+        "length": 120.0,
+        "num_lanes": 1,
+        "zone": "A"
+      }
+    ]
+  },
+  "snapshots/step_000000001030.json": {
+    "step": 1030,
+    "nodes": [
+      {
+        "id": "veh_1",
+        "vehicle_type": "passenger",
+        "speed": 8.4,
+        "acceleration": 0.2,
+        "current_x": 42.0,
+        "current_y": 77.0,
+        "current_zone": "A",
+        "current_edge": "E1",
+        "current_position": 35.0,
+        "origin_edge": "E1",
+        "origin_position": 0.0,
+        "destination_edge": "E9",
+        "destination_position": 70.0,
+        "route": ["E1", "E5", "E9"],
+        "route_length": 420.0,
+        "route_left": ["E5", "E9"],
+        "route_length_left": 385.0
+      }
+    ],
+    "road_edges_dynamic": [
+      {
+        "id": "E1",
+        "vehicles_on_road": ["veh_1"],
+        "edge_demand": 0.8,
+        "avg_speed": 8.4,
+        "density": 0.0083
+      }
+    ],
+    "dynamic_edges": [
+      {
+        "id": "dyn_000000001",
+        "from": "J1",
+        "to": "veh_1",
+        "edge_type": 1
+      }
+    ]
+  },
+  "labels/label_000000001030.json": {
+    "timestamp": 1030,
+    "labels": [
+      {
+        "id": "veh_1",
+        "eta": 420
+      }
+    ]
+  }
+}
+\end{lstlisting}
 
 \section{Temporal alignment and labels}
 Time is the bridge between construction and learning. In the simulation branch, the source clock is the SUMO simulation time and snapshots are sampled at fixed intervals. In the trajectory branch, each trajectory row is first converted into a sequence of projected points with timestamps; the converter then aggregates these point updates into the same fixed-period snapshot schedule.
@@ -55,6 +294,8 @@ where $\delta_e$ is the acute angle gap in radians, $d(p,e)$ is the distance fro
 \input{../../nids2026_article/sections/route_matching_algorithm}
 
 After a route is inferred, GPS samples are projected onto the SUMO route. The converter records the current edge, position along the edge, speed, distance from previous point, route edges, and remaining route context. These projected states are what make trajectory-derived data compatible with simulation-derived snapshots.
+
+\FloatBarrier
 
 \section{Representation invariants}
 The shared contract rests on a small set of invariants:
