@@ -21,6 +21,8 @@ For successful conversion, imported CSV files must provide one trajectory polyli
 \paragraph{Convergence.}
 Both branches end in the same exported layout: static network material, time-step snapshots, and labels. This is why the web application is independent of the construction path (Figure~\ref{fig:web_ui_porto}) and why evaluation results can compare simulation-backed and trajectory-backed data without path-specific adapters.
 
+The generated graph-representation datasets for the 3-zone simulation network and the Porto taxi conversion example are publicly available in a \href{https://drive.google.com/drive/folders/1baEONbv8WyDVanF_qvLCq1UJ4oT5N7LE?usp=sharing}{shared dataset folder}. They are distributed under an attribution license: users may reuse the datasets, but should cite the author and this work when doing so. The desktop dataset generator and trajectory-conversion tool are available in the public repository \href{https://github.com/Turgibot/Multi-Variant-Simulated-Traffic-Dataset-Creator-and-Model-Tester}{Turgibot/Multi-Variant-Simulated-Traffic-Dataset-Creator-and-Model-Tester}, so users can reproduce the bundled examples or construct graph datasets from their own networks and trajectory sources.
+
 \section{Trajectory CSV input contract}\label{sec:dataset:csv-contract}
 The trajectory-conversion branch accepts CSV files whose rows describe complete trips. The converter does not require the full Porto schema; it only needs the geometry and, for batch snapshot generation, a start timestamp. Therefore, other trajectory datasets can be used after being normalized to the following minimal structure.
 
@@ -57,7 +59,15 @@ with an associated start time. During conversion, repeated stationary endpoints 
 
 \input{figures_report/fig_graph_schema}
 
-Figure~\ref{fig:graph_schema} summarizes the layer split. The static layer contains junction nodes and directed road edges. The dynamic layer contains vehicle nodes and temporary relations created by vehicle movement and proximity. In the implementation, the export is organized as:
+Figure~\ref{fig:graph_schema} summarizes the layer split. The static layer contains junction nodes and directed road edges. The dynamic layer contains vehicle nodes and temporary relations created by vehicle movement and proximity. Figure~\ref{fig:traffic_graph_snapshot} shows the same idea on a concrete morning traffic snapshot: the road graph forms the stable substrate, active vehicles are placed along the network, and route/dynamic relations connect the current traffic state to downstream ETA labels. In the implementation, the export is organized as:
+
+\begin{figure}[!htbp]
+\centering
+\includegraphics[width=\linewidth,keepaspectratio]{graph_representation_of_traffic.png}
+\caption{Graph representation of a morning traffic snapshot. Blue nodes are static junctions, green nodes are dynamic vehicle nodes, grey lines are static road edges, and orange lines are dynamic edges that encode route-aware traffic relations.}
+\label{fig:traffic_graph_snapshot}
+\end{figure}
+
 \begin{itemize}
     \item \textbf{Static network file} (\texttt{static.json} or \texttt{static.json.gz}): junctions and static road-edge attributes such as identifiers, geometry-derived structure, lengths, and stable network metadata.
     \item \textbf{Snapshot files} (\texttt{snapshots/step\_*.json} or compressed equivalents): a sampled time step with active vehicle nodes, dynamic road-edge state, and dynamic vehicle relations.

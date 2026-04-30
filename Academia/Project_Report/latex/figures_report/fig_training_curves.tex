@@ -1,6 +1,7 @@
 \begin{figure}[!htbp]
 \centering
-\begin{tikzpicture}[scale=0.85]
+\resizebox{\linewidth}{!}{%
+\begin{tikzpicture}
 
 \begin{scope}[xshift=0cm]
   \draw[->] (0.8,0.7) -- (6.05,0.7) node[right] {\scriptsize Epoch};
@@ -37,10 +38,14 @@
   \node[anchor=east] at (0.75,2.92) {\scriptsize 250s};
 \end{scope}
 
-\draw[blue, thick] (3.7,0.15) -- (4.2,0.15) node[right] {\scriptsize MAE [s]};
-\draw[red!75!black, thick] (5.0,0.15) -- (5.5,0.15) node[right] {\scriptsize RMSE [s]};
-\draw[green!50!black, thick, dashed] (6.55,0.15) -- (7.05,0.15) node[right] {\scriptsize MAPE [\%], scaled};
+\begin{scope}[shift={(9.25,3.65)}]
+  \draw[fill=white, draw=gray!40] (-0.12,-0.10) rectangle (2.25,0.58);
+  \draw[blue, thick] (0,0.43) -- (0.32,0.43) node[right] {\tiny MAE [s]};
+  \draw[red!75!black, thick] (0,0.23) -- (0.32,0.23) node[right] {\tiny RMSE [s]};
+  \draw[green!50!black, thick, dashed] (0,0.03) -- (0.32,0.03) node[right, align=left] {\tiny MAPE [\%]};
+\end{scope}
 \end{tikzpicture}
-\caption{Representative 100-epoch validation curves for the two construction paths. Both curves converge, while the trajectory-conversion path converges later because repaired GPS traces are sparser and noisier than the controlled simulation data.}
+}
+\caption{Representative 100-epoch validation curves for the two construction paths. Both curves converge, while the trajectory-conversion path converges later because its active-traffic snapshots are sparser; the denser simulation snapshots expose dynamic vehicle and relation edges more frequently during training.}
 \label{fig:training_curves}
 \end{figure}

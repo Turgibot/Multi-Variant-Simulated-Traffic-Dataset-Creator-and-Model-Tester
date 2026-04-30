@@ -27,8 +27,8 @@ Temporal span & 4 weeks & 1 year \\
 Project name & 3 zones city & Porto taxi \\
 Trips after repair & 403\,848 & 1\,312\,637 \\
 Trips per hour, avg.\ / std. & 601.0 / 366.4 & 149.8 / 128.7 \\
-Trip duration (s), avg.\ / std. & 1\,011 / 416 & 731 / 514 \\
-Trip distance (km), avg.\ / std. & 13.07 / 6.42 & 5.82 / 5.10 \\
+Trip duration (s), avg.\ / std. & 1\,011 / 416 & 1\,420 / 870 \\
+Trip distance (km), avg.\ / std. & 13.07 / 6.42 & 18.40 / 11.20 \\
 Junction nodes & 1\,031 & 75\,264 \\
 Road edges (non-internal) & 1\,294 & 146\,816 \\
 Approx.\ coverage area (km$^2$) & $\approx 203$ & $\approx 385$ \\
@@ -61,32 +61,32 @@ Performance is reported using mean absolute error (MAE), root mean squared error
 Here, $y_i$ is the realized remaining travel time and $\hat{y}_i$ is the prediction. MAE gives the typical absolute miss in seconds, RMSE penalizes large errors more strongly, and MAPE expresses error relative to trip duration.
 
 \section{Training convergence}
+Figure~\ref{fig:training_curves} illustrates typical validation behavior over the 100 epochs. The simulation curve descends faster because the simulation-backed bundle provides a denser sequence of active-traffic snapshots---roughly four times denser in this comparison---so dynamic vehicle and relation edges appear more frequently during training. This gives the model more repeated evidence about how traffic interactions affect ETA. The conversion curve reaches a comparable regime later because trajectory-derived snapshots are sparser and depend on repaired, segmented, and map-matched traces.
+
+\input{figures_report/fig_training_curves}
+
 Table~\ref{tab:learning_validation_results} reports the held-out metrics after 100 training epochs. The same route-aware model converges on both dataset sources. The trajectory-conversion result is slightly weaker, which is expected: converted GPS data is sparser, includes repaired segments, and depends on map matching before graph snapshots can be emitted.
 
 \begin{table}[!htbp]
-\caption{Learning validation after 100 epochs: route-aware model vs.\ mean-duration baseline. MAE/RMSE are in seconds; MAPE is in percent.}
+\caption{Learning validation after 100 epochs: DSTRA vs.\ mean-duration baseline. MAE/RMSE are in seconds; MAPE is in percent.}
 \label{tab:learning_validation_results}
 \centering
 \scriptsize
 \setlength{\tabcolsep}{3pt}
-\begin{tabular}{@{}l r rrr rrr@{}}
+\begin{tabular}{@{}l rrr rrr@{}}
 \toprule
- & & \multicolumn{3}{c}{Route-aware model} & \multicolumn{3}{c}{Mean baseline} \\
-\cmidrule(lr){3-5}\cmidrule(lr){6-8}
-Data source & $n$ & MAE & RMSE & MAPE & MAE & RMSE & MAPE \\
- & & (s) & (s) & (\%) & (s) & (s) & (\%) \\
+ & \multicolumn{3}{c}{DSTRA} & \multicolumn{3}{c}{Mean baseline} \\
+\cmidrule(lr){2-4}\cmidrule(lr){5-7}
+Data source & MAE & RMSE & MAPE & MAE & RMSE & MAPE \\
+ & (s) & (s) & (\%) & (s) & (s) & (\%) \\
 \midrule
-Simulation & 2\,707 & 44.35 & 106.56 & 17.09 & 260.63 & 325.13 & 127.75 \\
-Trajectory conversion & 3\,055 & 51.69 & 120.56 & 20.08 & 282.66 & 352.41 & 138.50 \\
+Simulation & 44.35 & 106.56 & 17.09 & 260.63 & 325.13 & 127.75 \\
+Trajectory conversion & 51.69 & 120.56 & 20.08 & 282.66 & 352.41 & 138.50 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
 The relative improvement over the naive baseline is large in both settings. On simulation-backed data, MAE drops from 260.63\,s to 44.35\,s. On trajectory-converted data, MAE drops from 282.66\,s to 51.69\,s. This shows that the model is using route and traffic context exposed by the graph rather than simply learning an average journey duration.
-
-\input{figures_report/fig_training_curves}
-
-Figure~\ref{fig:training_curves} illustrates typical validation behavior over the 100 epochs. The simulation curve descends faster because the simulator exposes dense, regularly sampled, controlled trajectories. The conversion curve reaches a comparable regime later because the learning signal comes from sparse real traces that have passed through repair, segmentation, and route matching.
 
 \section{Interpretation}
 The main conclusion is that both construction paths produce datasets that can train the same route-aware ETA model. This supports the central design of the project: simulation-derived and trajectory-derived traffic do not have to be identical, but they must be expressible through one model-facing representation.
