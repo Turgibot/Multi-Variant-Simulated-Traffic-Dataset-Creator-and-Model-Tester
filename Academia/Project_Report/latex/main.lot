@@ -1,0 +1,18 @@
+\addvspace {10\p@ }
+\addvspace {10\p@ }
+\contentsline {table}{\numberline {1}{\ignorespaces Traffic datasets and resources (one row per source)}}{11}{table.2.1}%
+\addvspace {10\p@ }
+\addvspace {10\p@ }
+\contentsline {table}{\numberline {2}{\ignorespaces Minimal trajectory CSV contract for conversion.}}{42}{table.4.2}%
+\contentsline {table}{\numberline {3}{\ignorespaces Static junction-node features in \texttt {static.json}.}}{44}{table.4.3}%
+\contentsline {table}{\numberline {4}{\ignorespaces Road-edge features. Static fields appear in \texttt {static.json}; dynamic traffic fields appear in each snapshot under \texttt {road\_edges\_dynamic}.}}{45}{table.4.4}%
+\contentsline {table}{\numberline {5}{\ignorespaces Vehicle-node features in snapshot \texttt {nodes}.}}{45}{table.4.5}%
+\contentsline {table}{\numberline {6}{\ignorespaces Dynamic relation-edge features in snapshot \texttt {dynamic\_edges}.}}{45}{table.4.6}%
+\contentsline {table}{\numberline {7}{\ignorespaces ETA label-file schema.}}{46}{table.4.7}%
+\addvspace {10\p@ }
+\contentsline {table}{\numberline {8}{\ignorespaces Representative dataset bundles from the open-source examples.}}{52}{table.5.8}%
+\contentsline {table}{\numberline {9}{\ignorespaces Learning validation after 100 epochs: DSTRA vs.\ mean-duration baseline. MAE/RMSE are in seconds; MAPE is in percent.}}{54}{table.5.9}%
+\addvspace {10\p@ }
+\contentsline {table}{\numberline {10}{\ignorespaces DSTRA consistency: web-tool measurements vs.\ training-evaluation results.}}{57}{table.6.10}%
+\addvspace {10\p@ }
+\addvspace {10\p@ }

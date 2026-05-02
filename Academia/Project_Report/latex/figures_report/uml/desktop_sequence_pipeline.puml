@@ -1,5 +1,5 @@
 @startuml
-title Desktop — preparation pipeline before the simulation page (reference sequence)
+title Desktop: preparation pipeline before the simulation page (reference sequence)
 
 skinparam sequenceMessageAlign center
 skinparam maxMessageSize 220

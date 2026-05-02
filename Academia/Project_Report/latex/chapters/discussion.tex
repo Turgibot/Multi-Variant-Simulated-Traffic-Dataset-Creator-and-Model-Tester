@@ -7,7 +7,7 @@ The first contribution is the desktop construction workflow. It supports two dif
 
 The second contribution is the shared route-aware dynamic graph representation described in Chapter~\ref{sec:dataset}. Instead of exporting disconnected trip tables, the workflow preserves road topology, vehicle state, remaining route context, dynamic edge relations, and ETA labels in a time-indexed graph structure. This representation is deliberately shaped for ETA learning, where the route a vehicle intends to follow is central to the prediction task.
 
-The third contribution is validation across two levels. Chapter~\ref{sec:eval} shows that the representation can train a DSTRA-compatible ETA model on both construction paths. Chapter~\ref{sec:web} shows that the trained model can then be exercised in the \WebApp{}, where selected journeys produce prediction--outcome records and aggregate analysis. Together, these chapters show that the dataset is not only generated successfully, but also usable by a neural ETA model and by an interactive evaluation workflow.
+The third contribution is validation across two levels. Chapter~\ref{sec:eval} shows that the representation can train a DSTRA-compatible ETA model on both construction paths. Chapter~\ref{sec:web} shows that the trained model can then be exercised in the \WebApp{}, where selected journeys produce logged prediction records with realized outcomes and aggregate analysis. Together, these chapters show that the dataset is not only generated successfully, but also usable by a neural ETA model and by an interactive evaluation workflow.
 
 \section{What the shared representation achieved}
 The key design question was whether simulation-derived traffic and trajectory-derived traffic could be expressed through one model-facing contract. These sources differ substantially. Simulation provides strong observability and controlled demand; trajectory conversion begins with sparse, noisy real-world traces and must infer route structure before graph snapshots can be emitted. The value of the representation is that it absorbs this difference at construction time, so downstream consumers do not need separate schemas or special-purpose adapters.
@@ -39,7 +39,48 @@ The trajectory-conversion path has different risks. GPS traces can be sparse, re
 
 The model scope is also intentionally limited. DSTRA is one compatible learner, not a comprehensive benchmark over all ETA models. Other graph neural networks, sequence models, tree-based methods, or hybrid route models may respond differently to the same representation. The present results show that the representation can support a neural model; they do not establish that the chosen model is optimal.
 
+Three additional threats deserve explicit mention. First, \textbf{label leakage}: the representation keeps ETA labels in separate label files, physically decoupled from the snapshot feature tensors. This structural separation prevents the target from contaminating the graph input during training, but readers implementing their own loaders should verify that their data pipeline does not inadvertently read from label files at feature-extraction time. Second, \textbf{sensitivity to map-matching errors}: when the route-matching algorithm selects an incorrect road path, the error propagates silently into route-left features and dynamic edge relations for the entire trajectory segment. The trajectory-conversion results therefore represent an upper bound on achievable accuracy under noisy matching, and the true effect of matching errors on learning is not separately quantified here. Third, \textbf{limited external validity}: all experiments use one simulated three-zone network and one Portuguese urban taxi dataset. It is unknown how well the representation, the matching procedure, or the trained model would transfer to other cities, road network styles, transit modes, or demand patterns. Claims about generalization across geographies should await experiments on additional benchmark networks.
+
+The choice of evaluation metrics also carries a limitation. MAPE is sensitive to short trip durations: a small absolute error on a two-minute journey produces a high percentage error that inflates the aggregate. Tables~\ref{tab:learning_validation_results} and~\ref{tab:web_eval_results} therefore report MedAE and P90/P95 absolute errors alongside MAE, RMSE, and MAPE. The MedAE values confirm that the median prediction error is well below the mean, and the P90/P95 columns bound the tail, giving a more complete picture of model behavior on short-trip populations.
+
 Finally, the web tool is a validation harness rather than a production navigation system. It demonstrates route selection, ETA inference, journey logging, aggregate plots, and report-style evidence. It does not address production requirements such as live map updates, user-scale concurrency, robustness to service outages, calibrated uncertainty, privacy controls, or deployment across arbitrary cities without preparation. Aggregate metrics such as MAE, RMSE, and MAPE also do not capture every operational concern, including regional fairness, rare-event behavior, or prediction stability under disruptions.
+
+\section{Reproducibility}
+The dataset generator, trajectory-conversion tool, web evaluation client, and this report are all available in the public repository \href{https://github.com/Turgibot/Multi-Variant-Simulated-Traffic-Dataset-Creator-and-Model-Tester}{Turgibot/Multi-Variant-Simulated-Traffic-Dataset-Creator-and-Model-Tester}. The pre-generated graph datasets used in this report are distributed separately in a \href{https://drive.google.com/drive/folders/1baEONbv8WyDVanF_qvLCq1UJ4oT5N7LE?usp=sharing}{shared dataset folder}. The web evaluation application is deployed at \href{https://smarttransportationlab.com/sim-demo}{smarttransportationlab.com/sim-demo} and its source is available at \href{https://github.com/Turgibot/TrafficLab}{Turgibot/TrafficLab}.
+
+\paragraph{Software versions.}
+\begin{sloppypar}
+The toolchain was developed and tested with SUMO~1.20, Python~3.10, PyTorch~2.2, and PyTorch Geometric~2.5. The web backend runs FastAPI~0.111 with Python~3.10; the frontend uses Vue.js~3.
+\end{sloppypar}
+
+\paragraph{Hardware.}
+Training experiments were run on a single NVIDIA GPU (16\,GB VRAM). Dataset generation and trajectory conversion run on CPU and do not require a GPU.
+
+\paragraph{Random seeds.}
+The DSTRA training runs used a fixed random seed applied to both PyTorch and NumPy to ensure reproducibility of weight initialization and data shuffle.
+The seed value is recorded in the training configuration file committed to the repository.
+
+\paragraph{Reproducing evaluation tables and figures.}
+\begin{enumerate}
+    \item Clone the repository and follow the \texttt{README} to install dependencies.
+    \item Download the pre-generated datasets from the shared dataset folder.
+    \item Run the training script with the bundled configuration to reproduce the held-out metrics in Table~\ref{tab:learning_validation_results}.
+    \item Load the exported bundles into the web client and run evaluation sessions to reproduce the web-tool measurements in Table~\ref{tab:web_eval_results}.
+    \item Scatter plots and training curves are generated automatically by the evaluation and training scripts; outputs are written to the \texttt{results/} directory.
+\end{enumerate}
+To reproduce this report PDF, run \texttt{./compile.sh} from \texttt{Academia/Project\_Report/}; the script resolves the full \texttt{pdflatex} and \texttt{bibtex} chain automatically.
+
+\section{Data licensing and privacy}
+This work uses two external data sources, each with distinct licensing conditions.
+
+\paragraph{Porto taxi dataset.}
+The Porto taxi trajectory data was released as part of the ECML/PKDD 2015 taxi-service trajectory prediction competition~\cite{porto2015pkdd} and is publicly available on Kaggle for research use. The dataset contains GPS traces collected from taxi vehicles operating in Porto, Portugal; it does not include direct personally identifiable information such as names or payment records. However, trajectory data can be re-identifying in practice: sufficiently long or distinctive routes can be linked to individuals even without explicit identifiers. The system uses this dataset strictly as a conversion demonstrator. Any use of the Porto data beyond the competition's original research license, or in contexts where re-identification risk is relevant, requires compliance with applicable privacy regulations.
+
+\paragraph{OpenStreetMap data.}
+Road network geometry for trajectory conversion and simulation scenarios is obtained from OpenStreetMap (OSM) via the Overpass API~\cite{osm}. OSM data is distributed under the Open Database License (ODbL), which requires attribution and share-alike conditions on derived databases. Users of this toolchain who export or redistribute network files derived from OSM data must comply with the ODbL, including providing appropriate credit to OpenStreetMap contributors.
+
+\paragraph{General principle.}
+The toolchain itself does not collect, store, or transmit personal data. The web evaluation client stores journey records (route, predicted and realized travel times, and aggregate statistics) in a local database for analysis purposes; these records do not contain vehicle identifiers or user identities. Any deployment of the web evaluation client in a context involving real users or real vehicles should be assessed against applicable data-protection regulations before production use.
 
 \section{Future work}
 Future work should broaden the empirical base of the framework. Additional simulation networks, demand schedules, city scales, and trajectory datasets would make it possible to separate representation effects from scenario-specific behavior. More systematic ablations could also test which features are most important: route suffixes, dynamic relation edges, road-demand features, temporal history, or compression choices.

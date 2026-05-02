@@ -43,12 +43,14 @@
 \newcommand{\WebApp}{web evaluation client}
 % Shared figures; UI placeholders; OU cover (ou_logo.png) lives next to cover.tex.
 \graphicspath{{../../images/}{figures/ui/}{figures_report/uml/}{../../MyPapersU/22997/Advanced_Project/}}
-\renewcommand{\listfigurename}{List of Images}
+\renewcommand{\listfigurename}{List of Figures}
 \floatname{algorithm}{Algorithm}
 \floatplacement{figure}{!htbp}
 \floatplacement{table}{!htbp}
 \counterwithout{figure}{chapter}
 \renewcommand{\thefigure}{\arabic{figure}}
+\counterwithout{table}{chapter}
+\renewcommand{\thetable}{\arabic{table}}
 
 \hypersetup{pdftitle={Route-Aware Dynamic Traffic Graphs for ETA},pdfauthor={Guy Tordjman}}
 

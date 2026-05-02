@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 ACADEMIA="$(cd "${ROOT}/.." && pwd)"
 TECTONIC="${ACADEMIA}/tectonic"
-TECTONIC_RERUNS="${TECTONIC_RERUNS:-1}"
+TECTONIC_RERUNS="${TECTONIC_RERUNS:-3}"
 cd "${ROOT}/latex"
 MAIN="main"
 FAST_APPENDICES="${FAST_APPENDICES:-0}"

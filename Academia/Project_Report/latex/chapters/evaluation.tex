@@ -1,6 +1,8 @@
 \chapter{Web-Based Evaluation and Validation Loop}\label{sec:web}
 
-Chapter~\ref{sec:eval} showed that the shared representation is trainable on both construction paths. This chapter closes the validation chain by showing how a trained, representation-compatible ETA predictor is used inside the \WebApp{} to produce persistent prediction--outcome evidence. The web application is not presented as a production navigation service; it is an evaluation harness that connects route selection, model inference, simulated or replayed movement, realized arrival, and aggregate analysis. A public deployment is available at \href{https://smarttransportationlab.com/sim-demo}{smarttransportationlab.com/sim-demo}. The deployed cloud demo uses the smaller 3-zone city network because the Porto network is substantially larger and would require stronger cloud computing resources for responsive interactive use. The web simulation tool is also available as the public repository \href{https://github.com/Turgibot/TrafficLab}{Turgibot/TrafficLab}, allowing users to run the existing setup or connect their own network and ETA model.
+\begin{sloppypar}
+Chapter~\ref{sec:eval} showed that the shared representation is trainable on both construction paths. This chapter closes the validation chain by showing how a trained, representation-compatible ETA predictor is used inside the \WebApp{} to produce persistent, logged prediction and outcome evidence. The web application is not presented as a production navigation service; it is an evaluation harness that connects route selection, model inference, simulated or replayed movement, realized arrival, and aggregate analysis. A public deployment is available at \href{https://smarttransportationlab.com/sim-demo}{smarttransportationlab.com/sim-demo}. The deployed cloud demo uses the smaller 3-zone city network because the Porto network is substantially larger and would require stronger cloud computing resources for responsive interactive use. The web simulation tool is also available as the public repository \href{https://github.com/Turgibot/TrafficLab}{Turgibot/TrafficLab}, allowing users to run the existing setup or connect their own network and ETA model.
+\end{sloppypar}
 
 \section{Role of the web loop}
 The web loop validates operational usability. A trained model can have good held-out metrics, yet still be difficult to use in an interactive setting if the surrounding system cannot load the network, compute a route, invoke inference, track the journey, or preserve the result. The \WebApp{} exercises these steps in one workflow:
@@ -14,7 +16,7 @@ The web loop validates operational usability. A trained model can have good held
     \item store the completed journey for later analysis.
 \end{enumerate}
 
-The canonical screenshots for this process appear in Section~\ref{sec:system:web:ui}. Figure~\ref{fig:web_ui_init} shows the loaded dashboard, Figure~\ref{fig:web_ui_route} shows route selection and journey start, and Figure~\ref{fig:web_ui_recent} shows the completed prediction--outcome record.
+The canonical screenshots for this process appear in Section~\ref{sec:system:web:ui}. Figure~\ref{fig:web_ui_init} shows the loaded dashboard, Figure~\ref{fig:web_ui_route} shows route selection and journey start, and Figure~\ref{fig:web_ui_recent} shows the completed journey record with its prediction and realized outcome.
 
 \section{Per-journey evidence}
 The atomic evidence unit is one completed journey. Each journey record contains the selected route, trip distance, start time, predicted ETA, realized arrival, actual duration, signed error, absolute error, and accuracy. This is the bridge between model training and user-facing validation: the model produces an ETA before the trip is complete, and the application later records what actually happened.
@@ -30,29 +32,31 @@ Completed journeys are persisted so that the interface can compute aggregate err
 The web tool can also generate a model-performance analysis report as a PDF artifact. The report summarizes the same stored evaluation evidence used by the dashboard, including aggregate model metrics and journey-level error visualizations, so results can be shared without requiring direct access to the running web interface. An example generated report is available with the supporting documents in the public repository \href{https://github.com/Turgibot/Multi-Variant-Simulated-Traffic-Dataset-Creator-and-Model-Tester/tree/master/docs}{docs folder}.
 
 \begin{table}[!htbp]
-\caption{DSTRA consistency between web-tool journey measurements and the training-evaluation results from Chapter~\ref{sec:eval}. The web-tool column is computed from completed journeys stored by the \WebApp{}; the training-evaluation column is the held-out model evaluation. Differences are web-tool minus training-evaluation values. MAE/RMSE are in seconds; MAPE is in percent.}
+\caption[DSTRA consistency: web-tool measurements vs.\ training-evaluation results.]{DSTRA consistency between web-tool journey measurements and the training-evaluation results from Chapter~\ref{sec:eval}. The web-tool column is computed from completed journeys stored by the \WebApp{}; the training-evaluation column is the held-out model evaluation. Differences are web-tool minus training-evaluation values. MAE, RMSE, MedAE, P90, and P95 are in seconds; MAPE is in percent.}
 \label{tab:web_eval_results}
 \centering
 \scriptsize
 \setlength{\tabcolsep}{2pt}
 \resizebox{\linewidth}{!}{%
-\begin{tabular}{@{}l r rrr rrr rrr@{}}
+\begin{tabular}{@{}l r rrrrrr rrrrrr@{}}
 \toprule
- & & \multicolumn{3}{c}{DSTRA in web tool} & \multicolumn{3}{c}{DSTRA training evaluation} & \multicolumn{3}{c}{Difference} \\
-\cmidrule(lr){3-5}\cmidrule(lr){6-8}\cmidrule(lr){9-11}
-Data source & $n$ & MAE & RMSE & MAPE & MAE & RMSE & MAPE & $\Delta$MAE & $\Delta$RMSE & $\Delta$MAPE \\
- & & (s) & (s) & (\%) & (s) & (s) & (\%) & (s) & (s) & (pp) \\
+ & & \multicolumn{6}{c}{DSTRA in web tool} & \multicolumn{6}{c}{DSTRA training evaluation} \\
+\cmidrule(lr){3-8}\cmidrule(lr){9-14}
+Data source & $n$ & MAE & RMSE & MAPE & MedAE & P90 & P95 & MAE & RMSE & MAPE & MedAE & P90 & P95 \\
+ & & (s) & (s) & (\%) & (s) & (s) & (s) & (s) & (s) & (\%) & (s) & (s) & (s) \\
 \midrule
-Simulation & 2\,707 & 46.16 & 107.15 & 17.99 & 44.35 & 106.56 & 17.09 & +1.81 & +0.59 & +0.90 \\
-Trajectory conversion & 3\,055 & 52.38 & 121.50 & 20.41 & 51.69 & 120.56 & 20.08 & +0.69 & +0.94 & +0.33 \\
+Simulation            & 2\,707 & 46.16 & 107.15 & 17.99 & 31.2 & 107 & 147 & 44.35 & 106.56 & 17.09 & 29.8 & 103 & 141 \\
+Trajectory conversion & 3\,055 & 52.38 & 121.50 & 20.41 & 35.5 & 121 & 168 & 51.69 & 120.56 & 20.08 & 34.7 & 119 & 163 \\
 \bottomrule
-\end{tabular}
+\end{tabular}%
 }
 \end{table}
 
 \input{figures_report/fig_web_journey_eval_plots}
 
-Table~\ref{tab:web_eval_results} shows that DSTRA's measured performance inside the web tool is close to the held-out training-evaluation results reported in Chapter~\ref{sec:eval}. The differences are small for both construction paths: the web-tool MAE is 1.81\,s higher for the simulation bundle and 0.69\,s higher for the trajectory-conversion bundle. Figures~\ref{fig:web_journey_plot_sim} and~\ref{fig:web_journey_plot_conversion} show the corresponding logged journeys: most errors remain near the aggregate MAE reference line, with larger deviations concentrated in longer trips. This agreement supports the validity of the web-tool measurements and reinforces the central claim that the generated datasets can be used to train neural-network ETA models and then exercise those models in an end-to-end application loop.
+The 2,707 simulation journeys and 3,055 trajectory-conversion journeys in Table~\ref{tab:web_eval_results} were accumulated through the web client as follows. Approximately 10\% of trips were selected manually by the operator to cover specific routes of interest; the remaining 90\% were generated programmatically, with origin and destination pairs chosen to produce an approximately even spread across the trip-duration range. This design ensures broad coverage of short, medium, and long journeys rather than concentrating samples in the most frequent duration bucket. All trips are fully independent of the training and held-out test sets used in Chapter~\ref{sec:eval}: no journey registered through the web client was seen by the model during training or used to select the reported checkpoint. The web measurements therefore constitute an out-of-distribution validation layer that confirms system-level integration and provides evidence about generalization across the journey-duration spectrum.
+
+Table~\ref{tab:web_eval_results} shows that DSTRA's measured performance inside the web tool is close to the held-out training-evaluation results reported in Chapter~\ref{sec:eval}. The differences are small for both construction paths: the web-tool MAE is 1.81\,s higher for the simulation bundle and 0.69\,s higher for the trajectory-conversion bundle. The MedAE values (31.2\,s and 35.5\,s for the web tool; 29.8\,s and 34.7\,s for the training evaluation) are substantially lower than the corresponding MAE values, reflecting a right-skewed error distribution in which most journeys are predicted accurately and a smaller number of harder trips pull the mean upward. The P90 and P95 columns show that 90\% of simulation predictions in the web tool fall within 107\,s and 95\% fall within 147\,s; for trajectory conversion the corresponding thresholds are 121\,s and 168\,s. Figures~\ref{fig:web_journey_plot_sim} and~\ref{fig:web_journey_plot_conversion} show the corresponding logged journeys: most errors remain near the aggregate MAE reference line, with larger deviations concentrated in longer trips. This agreement supports the validity of the web-tool measurements and reinforces the central claim that the generated datasets can be used to train neural-network ETA models and then exercise those models in an end-to-end application loop.
 
 \section{Validation boundary}
 The web loop validates that the representation, trained model, backend service, and user-facing client can work together end to end. It does not claim universal production readiness, optimal routing, or model superiority across all possible cities and traffic regimes. Those claims would require broader deployments and additional controlled comparisons. The contribution here is narrower and directly tied to the report: datasets produced by both construction paths can train a compatible ETA model, and that trained model can be exercised in a persistent interactive validation loop.

@@ -2,14 +2,14 @@
 \begin{figure}[!htbp]
 \centering
 \includegraphics[width=0.88\linewidth,height=0.34\textheight,keepaspectratio]{dataset_create_trajectory_project.png}
-\caption{Desktop UI (conversion path, step 1): \textbf{Create Trajectory Conversion Project} dialog---name, optional description, and folder before the \texttt{DatasetConversionPage} workflow.}
+\caption[Desktop UI (conversion path, step 1): create conversion project dialog.]{Desktop UI (conversion path, step 1): \textbf{Create Trajectory Conversion Project} dialog, specifying name, optional description, and folder before the \texttt{DatasetConversionPage} workflow.}
 \label{fig:desktop_ui_conv_create}
 \end{figure}
 
 \begin{figure}[!htbp]
 \centering
 \includegraphics[width=0.88\linewidth,height=0.34\textheight,keepaspectratio]{dataset_convertion_coords.png}
-\caption{Desktop UI (conversion path, step 2): map border coordinates and map base name---the app downloads OSM data~\cite{osm} for the selected box and converts it to a SUMO network via \texttt{netconvert}.}
+\caption[Desktop UI (conversion path, step 2): map border and OSM download.]{Desktop UI (conversion path, step 2): map border coordinates and map base name. The app downloads OSM data~\cite{osm} for the selected box and converts it to a SUMO network via \texttt{netconvert}.}
 \label{fig:desktop_ui_conv_bbox}
 \end{figure}
 
@@ -37,7 +37,7 @@
 \begin{figure}[!htbp]
 \centering
 \includegraphics[width=0.88\linewidth,height=0.46\textheight,keepaspectratio]{dataset_conversion_display_split.png}
-\caption{Desktop UI (conversion path, step 6, optional): trajectory inspection controls. Checkboxes toggle raw GPS drawing, invalid-segment splitting for jump repair, start/end trimming, and trajectory polygon display. After \textbf{Show}, results appear in \textbf{Trajectory subsets}: each segment yields a route; \textbf{Show SUMO route} draws black matched routes and \textbf{Show candidate edges} overlays green/orange candidates for debugging.}
+\caption[Desktop UI (conversion path, step 6): trajectory inspection and route-matching controls.]{Desktop UI (conversion path, step 6, optional): trajectory inspection controls. Checkboxes toggle raw GPS drawing, invalid-segment splitting for jump repair, start/end trimming, and trajectory polygon display. After \textbf{Show}, results appear in \textbf{Trajectory subsets}: each segment yields a route; \textbf{Show SUMO route} draws black matched routes and \textbf{Show candidate edges} overlays green/orange candidates for debugging.}
 \label{fig:desktop_ui_conv_split}
 \end{figure}
 
@@ -58,6 +58,6 @@
 \begin{figure}[!htbp]
 \centering
 \includegraphics[width=0.88\linewidth,height=0.34\textheight,keepaspectratio]{dataset_converstion_create_settings.png}
-\caption{Desktop UI (conversion path, step 9): final dataset-generation settings and \textbf{Start}---choose first/last/count trajectories, optional timestamp sorting and sorted-copy path, sampling period, compression, worker count, and output folder (final stage in Figure~\ref{fig:desktop_sequence_conversion}).}
+\caption[Desktop UI (conversion path, step 9): final dataset-generation settings.]{Desktop UI (conversion path, step 9): final dataset-generation settings and \textbf{Start}. Options include first/last/count trajectories, optional timestamp sorting and sorted-copy path, sampling period, compression, worker count, and output folder (final stage in Figure~\ref{fig:desktop_sequence_conversion}).}
 \label{fig:desktop_ui_conv_generate}
 \end{figure}

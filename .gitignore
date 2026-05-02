@@ -171,4 +171,4 @@ examples/**/*.sqlite3
 examples/porto_conversion/config/porto.net.xml
 # Generated from split train.csv.zip.part* on first run (see ensure_porto_example_train_csv)
 examples/porto_conversion/data/train.csv
-Academia/
+# Academia/

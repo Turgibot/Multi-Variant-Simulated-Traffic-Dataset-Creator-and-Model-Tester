@@ -1,5 +1,5 @@
 @startuml
-title Desktop GUI — curated class diagram
+title Desktop GUI: curated class diagram
 
 skinparam classAttributeIconSize 0
 skinparam shadowing false

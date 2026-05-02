@@ -4,76 +4,76 @@
 \begin{figure}[!htbp]
 \centering
 \includegraphics[width=0.88\linewidth,height=0.34\textheight,keepaspectratio]{dataset_create_simulation_project.png}
-\caption{Desktop UI (simulation path, step~2): \textbf{Create Simulation Project}---name, optional description, and folder for a new SUMO-based project.}
+\caption{Desktop UI (simulation path, step~2): \textbf{Create Simulation Project}, specifying name, optional description, and folder for a new SUMO-based project.}
 \label{fig:desktop_ui_sim_create}
 \end{figure}
 
 \begin{figure}[!htbp]
 \centering
 \includegraphics[width=0.88\linewidth,height=0.34\textheight,keepaspectratio]{dataset_general_setting.png}
-\caption{Desktop UI (simulation path, step~3): \textbf{Dataset Generation Settings}---link the \texttt{.sumocfg}, review referenced network and additional files, and confirm SUMO is discoverable (\texttt{SUMO\_HOME}, \texttt{PATH}, or the Python \texttt{eclipse-sumo} package).}
+\caption[Desktop UI (simulation path, step~3): dataset generation settings.]{Desktop UI (simulation path, step~3): \textbf{Dataset Generation Settings}. Link the \texttt{.sumocfg}, review referenced network and additional files, and confirm SUMO is discoverable (\texttt{SUMO\_HOME}, \texttt{PATH}, or the Python \texttt{eclipse-sumo} package).}
 \label{fig:desktop_ui_sim_settings}
 \end{figure}
 
 \begin{figure}[!htbp]
 \centering
 \includegraphics[width=0.88\linewidth,height=0.34\textheight,keepaspectratio]{dataset_zones.png}
-\caption{Desktop UI (simulation path, step~4): \textbf{Simulation Definition}---map view for visual inspection of the network and attribute-based zones before demand and core settings.}
+\caption{Desktop UI (simulation path, step~4): \textbf{Simulation Definition}, showing the map view for visual inspection of the network and attribute-based zones before demand and core settings.}
 \label{fig:desktop_ui_sim_zones}
 \end{figure}
 
 \begin{figure}[!htbp]
 \centering
 \includegraphics[width=0.88\linewidth,height=0.34\textheight,keepaspectratio]{datset_vehicle.png}
-\caption{Desktop UI (simulation path, step~5): \textbf{Vehicle Types}---per-class geometry, speeds, and display colors.}
+\caption{Desktop UI (simulation path, step~5): \textbf{Vehicle Types}, showing per-class geometry, speeds, and display colors.}
 \label{fig:desktop_ui_sim_vehicles}
 \end{figure}
 
 \begin{figure}[!htbp]
 \centering
 \includegraphics[width=0.88\linewidth,height=0.34\textheight,keepaspectratio]{dataset_zone_trip_allocation.png}
-\caption{Desktop UI (simulation path, step~6): \textbf{Zone trip allocation}---share of total trips originating in each zone and, within each zone, the split across vehicle types (percentages must sum appropriately).}
+\caption{Desktop UI (simulation path, step~6): \textbf{Zone trip allocation}, configuring the share of total trips originating in each zone and, within each zone, the split across vehicle types (percentages must sum appropriately).}
 \label{fig:desktop_ui_sim_zone_trips}
 \end{figure}
 
 \begin{figure}[!htbp]
 \centering
 \includegraphics[width=0.88\linewidth,height=0.34\textheight,keepaspectratio]{dataset_landmarks.png}
-\caption{Desktop UI (simulation path, step~7): \textbf{Landmarks}---named edge groups in the network, default home/work/restaurant assignments, and \textbf{Visit} (count of random extra trips associated with a vehicle trip).}
+\caption{Desktop UI (simulation path, step~7): \textbf{Landmarks}, showing named edge groups in the network, default home/work/restaurant assignments, and \textbf{Visit} (count of random extra trips associated with a vehicle trip).}
 \label{fig:desktop_ui_sim_landmarks}
 \end{figure}
 
 \begin{figure}[!htbp]
 \centering
 \includegraphics[width=0.88\linewidth,height=0.34\textheight,keepaspectratio]{dataset_schedule.png}
-\caption{Desktop UI (simulation path, step~8): \textbf{Weekday schedule} example---\textbf{Random Trips} with all seven days selected; \textbf{vpm\_rate} set to 1 starts one new trip per minute; origins and destinations constrain how trips draw from zones and landmarks (here, origins favor \textbf{home}/\textbf{work} across zones; destinations use non-home/work landmarks).}
+\caption[Desktop UI (simulation path, step~8): weekday schedule configuration.]{Desktop UI (simulation path, step~8): \textbf{Weekday schedule} example showing \textbf{Random Trips} with all seven days selected. \textbf{vpm\_rate} set to 1 starts one new trip per minute; origins and destinations constrain how trips draw from zones and landmarks (here, origins favor \textbf{home}/\textbf{work} across zones; destinations use non-home/work landmarks).}
 \label{fig:desktop_ui_sim_schedule}
 \end{figure}
 
 \begin{figure}[!htbp]
 \centering
 \includegraphics[width=0.88\linewidth,height=0.34\textheight,keepaspectratio]{dataset_core_blocked.png}
-\caption{Desktop UI (simulation path, step~9): \textbf{Core Settings} before database generation---\textbf{dev\_fraction} in $(0,1]$ scales generated trips for faster debug runs; \textbf{total\_num\_vehicles} updates from trip generation. \textbf{Run Simulation} stays inactive while the DB is missing or its stored config hash does not match the current GUI state.}
+\caption[Desktop UI (simulation path, step~9): core settings and DB generation gate.]{Desktop UI (simulation path, step~9): \textbf{Core Settings} before database generation. \textbf{Dev\_fraction} in $(0,1]$ scales generated trips for faster debug runs; \textbf{total\_num\_vehicles} updates from trip generation. \textbf{Run Simulation} stays inactive while the DB is missing or its stored config hash does not match the current GUI state.}
 \label{fig:desktop_ui_sim_core_blocked}
 \end{figure}
 
 \begin{figure}[!htbp]
 \centering
 \includegraphics[width=0.88\linewidth,height=0.34\textheight,keepaspectratio]{dataset_core_ready.png}
-\caption{Desktop UI (simulation path, step~10): after \textbf{Generate Simulation DB}, the preparation DB matches the current GUI state; \textbf{Run Simulation} is enabled. The \textbf{Open simulation.config.json} action surfaces the serialized configuration (Appendix~\ref{ap:sim-config}).}
+\caption[Desktop UI (simulation path, step~10): DB ready, simulation enabled.]{Desktop UI (simulation path, step~10): after \textbf{Generate Simulation DB}, the preparation DB matches the current GUI state; \textbf{Run Simulation} is enabled. The \textbf{Open simulation.config.json} action surfaces the serialized configuration (Appendix~\ref{ap:sim-config}).}
 \label{fig:desktop_ui_sim_db_ready}
 \end{figure}
 
 \begin{figure}[!htbp]
 \centering
 \includegraphics[width=\linewidth,height=0.48\textheight,keepaspectratio]{dataset_simulation_playing.png}
-\caption{Desktop UI (simulation path, step~11): \textbf{SUMO Simulation} with live map redraw---\textbf{Create mapping files} (SUMO string IDs to integer indices per entity family), \textbf{Create dataset} vs.\ run-only, and \textbf{Compress dataset files} (\texttt{.gz}). \textbf{Run in background} is off so traffic is redrawn.}
+\caption[Desktop UI (simulation path, step~11): running simulation with live map redraw.]{Desktop UI (simulation path, step~11): \textbf{SUMO Simulation} with live map redraw. Options shown: \textbf{Create mapping files} (SUMO string IDs to integer indices per entity family), \textbf{Create dataset} vs.\ run-only, and \textbf{Compress dataset files} (\texttt{.gz}). \textbf{Run in background} is off so traffic is redrawn.}
 \label{fig:desktop_ui_sim_running}
 \end{figure}
 
 \begin{figure}[!htbp]
 \centering
 \includegraphics[width=\linewidth,height=0.48\textheight,keepaspectratio]{dataset_simulation_backgroung.png}
-\caption{Desktop UI (simulation path, step~12): same run with \textbf{Run in background} enabled---the map stays greyed because vehicle positions are not redrawn, improving throughput.}
+\caption{Desktop UI (simulation path, step~12): same run with \textbf{Run in background} enabled. The map stays greyed because vehicle positions are not redrawn, improving throughput.}
 \label{fig:desktop_ui_sim_background}
 \end{figure}

@@ -1,0 +1,86 @@
+\contentsline {paragraph}{Keywords.}{1}{section*.1}%
+\contentsline {paragraph}{Report scope.}{1}{section*.2}%
+\contentsline {chapter}{\numberline {1}Introduction}{8}{chapter.1}%
+\contentsline {chapter}{\numberline {2}Related Work and Positioning}{10}{chapter.2}%
+\contentsline {section}{\numberline {2.1}Traffic data, graph models, and ETA}{10}{section.2.1}%
+\contentsline {section}{\numberline {2.2}Traffic datasets landscape and positioning}{10}{section.2.2}%
+\contentsline {section}{\numberline {2.3}Simulation, trajectories, and integrated evaluation}{11}{section.2.3}%
+\contentsline {chapter}{\numberline {3}System design and architecture}{12}{chapter.3}%
+\contentsline {section}{\numberline {3.1}High-level overview}{12}{section.3.1}%
+\contentsline {section}{\numberline {3.2}Desktop application}{13}{section.3.2}%
+\contentsline {subsection}{\numberline {3.2.1}Platform and tooling}{14}{subsection.3.2.1}%
+\contentsline {subsubsection}{\numberline {3.2.1.1}Implementation stack}{14}{subsubsection.3.2.1.1}%
+\contentsline {subsection}{\numberline {3.2.2}Behavior and data paths}{14}{subsection.3.2.2}%
+\contentsline {paragraph}{Simulation-derived path.}{14}{section*.7}%
+\contentsline {paragraph}{Trajectory-derived path.}{15}{section*.8}%
+\contentsline {paragraph}{Convergence and artifact handoff.}{15}{section*.9}%
+\contentsline {subsection}{\numberline {3.2.3}Software structure}{16}{subsection.3.2.3}%
+\contentsline {paragraph}{Architectural decomposition.}{16}{section*.10}%
+\contentsline {paragraph}{Module mapping and layer contracts.}{16}{section*.11}%
+\contentsline {paragraph}{Class-level view.}{16}{section*.12}%
+\contentsline {paragraph}{Design rationale and boundaries.}{16}{section*.13}%
+\contentsline {subsection}{\numberline {3.2.4}Sequence interactions}{18}{subsection.3.2.4}%
+\contentsline {paragraph}{Simulation-derived preparation.}{18}{section*.14}%
+\contentsline {paragraph}{Trajectory conversion (GPS CSV) path.}{18}{section*.15}%
+\contentsline {subsection}{\numberline {3.2.5}User interface}{20}{subsection.3.2.5}%
+\contentsline {paragraph}{Simulation preparation path.}{20}{section*.16}%
+\contentsline {paragraph}{Trajectory conversion path.}{20}{section*.17}%
+\contentsline {section}{\numberline {3.3}Web application}{31}{section.3.3}%
+\contentsline {subsection}{\numberline {3.3.1}Platform and tooling}{31}{subsection.3.3.1}%
+\contentsline {subsubsection}{\numberline {3.3.1.1}Implementation stack}{31}{subsubsection.3.3.1.1}%
+\contentsline {subsection}{\numberline {3.3.2}Behavior and evaluation flow}{31}{subsection.3.3.2}%
+\contentsline {paragraph}{Initialization and map session.}{31}{section*.18}%
+\contentsline {paragraph}{Interactive evaluation loop (route and journey).}{31}{section*.19}%
+\contentsline {paragraph}{Persistence, aggregation, and reporting hooks.}{32}{section*.20}%
+\contentsline {subsection}{\numberline {3.3.3}Software structure}{32}{subsection.3.3.3}%
+\contentsline {paragraph}{Architectural decomposition.}{32}{section*.21}%
+\contentsline {paragraph}{Module mapping and contracts.}{32}{section*.22}%
+\contentsline {paragraph}{Class-level view.}{33}{section*.23}%
+\contentsline {paragraph}{Design rationale and boundaries.}{33}{section*.24}%
+\contentsline {subsection}{\numberline {3.3.4}Sequence interactions}{33}{subsection.3.3.4}%
+\contentsline {subsection}{\numberline {3.3.5}User interface}{34}{subsection.3.3.5}%
+\contentsline {paragraph}{Chronological screen flow.}{34}{section*.25}%
+\contentsline {chapter}{\numberline {4}Dataset construction and shared representation}{40}{chapter.4}%
+\contentsline {section}{\numberline {4.1}Purpose and scope}{40}{section.4.1}%
+\contentsline {section}{\numberline {4.2}Two construction paths, one output contract}{40}{section.4.2}%
+\contentsline {paragraph}{Simulation-derived construction.}{40}{section*.26}%
+\contentsline {paragraph}{Trajectory-derived construction.}{41}{section*.27}%
+\contentsline {paragraph}{Convergence.}{41}{section*.28}%
+\contentsline {section}{\numberline {4.3}Trajectory CSV input contract}{42}{section.4.3}%
+\contentsline {section}{\numberline {4.4}Exported graph artifact}{42}{section.4.4}%
+\contentsline {section}{\numberline {4.5}Entity feature schema}{44}{section.4.5}%
+\contentsline {section}{\numberline {4.6}Compact output example}{46}{section.4.6}%
+\contentsline {section}{\numberline {4.7}Temporal alignment and labels}{47}{section.4.7}%
+\contentsline {section}{\numberline {4.8}Trajectory repair and route matching}{48}{section.4.8}%
+\contentsline {section}{\numberline {4.9}Representation invariants}{50}{section.4.9}%
+\contentsline {chapter}{\numberline {5}Learning-Based Validation of the Shared Representation}{51}{chapter.5}%
+\contentsline {section}{\numberline {5.1}Validation question}{51}{section.5.1}%
+\contentsline {section}{\numberline {5.2}Representative bundles}{51}{section.5.2}%
+\contentsline {section}{\numberline {5.3}Model used for validation}{52}{section.5.3}%
+\contentsline {section}{\numberline {5.4}Training protocol and metrics}{53}{section.5.4}%
+\contentsline {section}{\numberline {5.5}Training convergence}{53}{section.5.5}%
+\contentsline {section}{\numberline {5.6}Interpretation}{54}{section.5.6}%
+\contentsline {chapter}{\numberline {6}Web-Based Evaluation and Validation Loop}{55}{chapter.6}%
+\contentsline {section}{\numberline {6.1}Role of the web loop}{55}{section.6.1}%
+\contentsline {section}{\numberline {6.2}Per-journey evidence}{56}{section.6.2}%
+\contentsline {section}{\numberline {6.3}Path-independent validation}{56}{section.6.3}%
+\contentsline {section}{\numberline {6.4}Aggregation and reporting}{56}{section.6.4}%
+\contentsline {section}{\numberline {6.5}Validation boundary}{58}{section.6.5}%
+\contentsline {chapter}{\numberline {7}Discussion and Conclusion}{59}{chapter.7}%
+\contentsline {section}{\numberline {7.1}Summary of contributions}{59}{section.7.1}%
+\contentsline {section}{\numberline {7.2}What the shared representation achieved}{60}{section.7.2}%
+\contentsline {section}{\numberline {7.3}Interpretation of learning validation}{60}{section.7.3}%
+\contentsline {section}{\numberline {7.4}Interpretation of web validation}{61}{section.7.4}%
+\contentsline {section}{\numberline {7.5}Limitations and threats to validity}{61}{section.7.5}%
+\contentsline {section}{\numberline {7.6}Reproducibility}{63}{section.7.6}%
+\contentsline {paragraph}{Software versions.}{63}{section*.29}%
+\contentsline {paragraph}{Hardware.}{63}{section*.30}%
+\contentsline {paragraph}{Random seeds.}{63}{section*.31}%
+\contentsline {paragraph}{Reproducing evaluation tables and figures.}{63}{section*.32}%
+\contentsline {section}{\numberline {7.7}Data licensing and privacy}{63}{section.7.7}%
+\contentsline {paragraph}{Porto taxi dataset.}{64}{section*.33}%
+\contentsline {paragraph}{OpenStreetMap data.}{64}{section*.34}%
+\contentsline {paragraph}{General principle.}{64}{section*.35}%
+\contentsline {section}{\numberline {7.8}Future work}{64}{section.7.8}%
+\contentsline {section}{\numberline {7.9}Conclusion}{65}{section.7.9}%
+\contentsline {chapter}{\numberline {A}Example \texttt {simulation.config.json} (3-zone project)}{68}{appendix.A}%

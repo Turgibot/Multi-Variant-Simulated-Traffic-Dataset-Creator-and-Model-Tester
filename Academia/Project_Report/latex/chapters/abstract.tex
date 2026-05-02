@@ -1,7 +1,7 @@
 Estimated time of arrival (ETA) predicts trip duration under evolving traffic and underpins navigation, dispatch, and logistics; small errors degrade routing, coordination, and user trust.
 
 Machine learning approaches to ETA require datasets that align road topology, vehicle motion, and labels in a form models can learn from.
-We present a toolchain that produces \emph{rich, feature-heavy dynamic graph} data suitable for models that use explicit graph structure---for example, architectures with separate treatment of static network elements and time-varying traffic.
+We present a toolchain that produces \emph{rich, feature-heavy dynamic graph} data suitable for models that use explicit graph structure, for example architectures with separate treatment of static network elements and time-varying traffic.
 
 The system supports two complementary paths.
 First, \emph{simulation-based} datasets: the user supplies a SUMO network and simulation configuration; the tool materializes spatio-temporal graph snapshots with detailed per-node and per-edge features from microsimulation.
@@ -11,7 +11,9 @@ Porto taxi trajectories illustrate real-world conversion in our bundle; other CS
 To demonstrate the value of this representation for learning and comparison, we also built a \emph{web-based testing environment} that couples the simulator to interactive trips, model inference, and logged prediction error, so ETA models can be evaluated under controlled, repeatable conditions.
 
 \paragraph{Keywords.}
+\begin{sloppypar}
 Estimated time of arrival; traffic simulation; SUMO; dynamic graphs; dataset generation; graph neural networks; web-based evaluation.
+\end{sloppypar}
 
 \paragraph{Report scope.}
 This document presents the toolchain, evaluation methodology, and results in the depth expected for an advanced M.Sc. project report, including user-interface description, implementation context, and appendices. The narrative is self-contained and can be read without reference to any separate publication.

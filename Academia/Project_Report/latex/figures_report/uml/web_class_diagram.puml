@@ -1,5 +1,5 @@
 @startuml
-title Web backend — curated class diagram
+title Web backend: curated class diagram
 
 skinparam classAttributeIconSize 0
 skinparam shadowing false

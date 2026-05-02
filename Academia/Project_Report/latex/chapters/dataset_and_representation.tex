@@ -1,6 +1,6 @@
 \chapter{Dataset construction and shared representation}\label{sec:dataset}
 
-This chapter defines the \emph{data} artifact produced by the project. Chapter~\ref{sec:system} described the applications that create and consume data; here the focus is the common representation that lets two different construction paths---controlled SUMO simulation and conversion of observed GPS trajectories---feed the same training and web-evaluation pipeline.
+This chapter defines the \emph{data} artifact produced by the project. Chapter~\ref{sec:system} described the applications that create and consume data; here the focus is the common representation that lets two different construction paths, controlled SUMO simulation and conversion of observed GPS trajectories, feed the same training and web-evaluation pipeline.
 
 \section{Purpose and scope}
 The target artifact is a route-aware, time-indexed traffic graph for ETA-oriented learning. It must preserve enough road topology, vehicle state, route context, and future-arrival information for a downstream model to learn travel-time structure, while remaining independent of how the source traffic was produced. This separation is the main invariant of the dataset layer: simulation-derived examples and trajectory-derived examples may differ in observability and noise, but after construction they expose one contract to model code and to the \WebApp{}.
@@ -74,7 +74,7 @@ Figure~\ref{fig:graph_schema} summarizes the layer split. The static layer conta
     \item \textbf{Label files} (\texttt{labels/label\_*.json} or compressed equivalents): the supervised target for active vehicles at the same timestamp, primarily ETA in seconds.
 \end{itemize}
 
-The static file is shared by all time steps in a generated dataset. Snapshot files carry evolving state: vehicle position, speed, acceleration, current edge, remaining route, route length left, road demand, average speed, density, and vehicle--road or vehicle--vehicle context as available. Label files align with snapshots by timestamp and store, for each vehicle with a known destination time, the remaining time to arrival. This keeps features and targets synchronized without baking the target into the feature graph.
+The static file is shared by all time steps in a generated dataset. Snapshot files carry evolving state: vehicle position, speed, acceleration, current edge, remaining route, route length left, road demand, average speed, density, and vehicle-to-road or vehicle-to-vehicle context as available. Label files align with snapshots by timestamp and store, for each vehicle with a known destination time, the remaining time to arrival. This keeps features and targets synchronized without baking the target into the feature graph.
 
 \section{Entity feature schema}
 The exported representation uses four graph entity families: junctions, road edges, vehicle nodes, and dynamic edges. Static junctions and static road-edge fields are written once in \texttt{static.json}; vehicle nodes, dynamic road-edge fields, and dynamic edges are written per snapshot; ETA labels are written in matching label files.
@@ -293,7 +293,7 @@ Trajectory conversion must turn noisy GPS polylines into routes on the SUMO netw
 
 First, repeated start/end points can be trimmed so a trip has a single effective origin and destination. Unrealistic jumps can be treated as invalid segments; when such jumps occur, the trajectory is split and each valid segment is matched separately. The GUI diagnostics in Section~\ref{sec:system:desktop:ui} show these controls and their visual outputs without duplicating figures in this chapter.
 
-Matching is not run on the full regional road graph. An axis-aligned bounding box $B$ is built around the GPS polyline $P$ (optionally padded), and $N_{\mathrm{bb}}=(V_{\mathrm{bb}},E_{\mathrm{bb}})$ is the subnetwork formed from all edges whose geometry intersects $B$ and their incident nodes. GPS polylines are then aligned to $N_{\mathrm{bb}}$ in two phases: a \emph{scoring pass} assigns every edge a coarse tier ($1$, $10$, or $1000$) from successive segment--edge comparisons, and a \emph{routing pass} searches for a low-cost path that respects those tiers.
+Matching is not run on the full regional road graph. An axis-aligned bounding box $B$ is built around the GPS polyline $P$ (optionally padded), and $N_{\mathrm{bb}}=(V_{\mathrm{bb}},E_{\mathrm{bb}})$ is the subnetwork formed from all edges whose geometry intersects $B$ and their incident nodes. GPS polylines are then aligned to $N_{\mathrm{bb}}$ in two phases: a \emph{scoring pass} assigns every edge a coarse tier ($1$, $10$, or $1000$) from successive segment-to-edge comparisons, and a \emph{routing pass} searches for a low-cost path that respects those tiers.
 
 For each polyline segment, edges whose heading differs from the segment by more than $\pi/9$ are discarded. Among survivors, edges are ranked by
 \[
@@ -317,4 +317,4 @@ The shared contract rests on a small set of invariants:
     \item \textbf{Path independence:} downstream consumers see the same graph schema whether the source was a simulator run or a converted trajectory file.
 \end{itemize}
 
-These invariants are the reason Chapter~\ref{sec:web} can treat both branches through the same evaluation client. The web application loads a compatible exported representation, computes or displays routes, invokes an ETA predictor, and stores prediction--outcome evidence without needing to know whether the original data came from controlled SUMO generation or real-world GPS conversion.
+These invariants are the reason Chapter~\ref{sec:web} can treat both branches through the same evaluation client. The web application loads a compatible exported representation, computes or displays routes, invokes an ETA predictor, and stores the logged prediction and outcome evidence without needing to know whether the original data came from controlled SUMO generation or real-world GPS conversion.

@@ -11,10 +11,12 @@ Can one route-aware ETA model be trained on graph bundles produced by both the s
 The answer is evaluated on two representative bundles from the open-source workflow. The first comes from the three-zone simulation example, where traffic is controlled and sampled densely. The second comes from the Porto trajectory-conversion example, where sparse GPS traces are repaired, map matched, and projected into the same graph schema. Successful training on both sources shows that Chapter~\ref{sec:dataset}'s representation is not merely syntactically consistent; it is also learnable by a downstream ETA predictor.
 
 \section{Representative bundles}
+\begin{sloppypar}
 Table~\ref{tab:dataset_stats_ch5} summarizes the two dataset instances used for learning validation. The simulation-backed bundle spans four weeks with dense 30\,s sampling. The trajectory-conversion bundle spans one year of Porto taxi data~\cite{porto2015pkdd}; its graph snapshots are trace-driven emitted steps, not a dense 30\,s grid over the full year. The two bundles therefore differ in scale, geography, and observability, while preserving the same node/edge feature interface.
+\end{sloppypar}
 
 \begin{table}[!htbp]
-\caption{Representative bundles from the open-source examples. Junction and road-edge counts are taken from SUMO \texttt{net.xml} files after excluding internal edges. Trip-rate, duration, and distance rows summarize the generated or converted trip populations used for the learning snapshot.}
+\caption[Representative dataset bundles from the open-source examples.]{Representative bundles from the open-source examples. Junction and road-edge counts are taken from SUMO \texttt{net.xml} files after excluding internal edges. Trip-rate, duration, and distance rows summarize the generated or converted trip populations used for the learning snapshot.}
 \label{tab:dataset_stats_ch5}
 \centering
 \scriptsize
@@ -49,48 +51,57 @@ As a sanity-check comparator, we also use a naive mean-duration baseline. For ea
 \section{Training protocol and metrics}
 The simulation and trajectory-conversion bundles are trained separately with the same model interface and held-out evaluation protocol. Test journeys are disjoint from the trips used to fit the model for that bundle, and the mean-duration baseline uses only training-trip durations.
 
-Performance is reported using mean absolute error (MAE), root mean squared error (RMSE), and mean absolute percentage error (MAPE):
+Performance is reported using five metrics: mean absolute error (MAE), root mean squared error (RMSE), mean absolute percentage error (MAPE), median absolute error (MedAE), and the 90th- and 95th-percentile absolute errors (P90, P95):
 \[
 \mathrm{MAE}=\frac{1}{N}\sum_{i=1}^{N}|\hat{y}_i-y_i|,
 \quad
 \mathrm{RMSE}=\sqrt{\frac{1}{N}\sum_{i=1}^{N}(\hat{y}_i-y_i)^2},
 \]
 \[
-\mathrm{MAPE}(\%)=100\cdot\frac{1}{N}\sum_{i=1}^{N}\left|\frac{\hat{y}_i-y_i}{y_i}\right|.
+\mathrm{MAPE}(\%)=100\cdot\frac{1}{N}\sum_{i=1}^{N}\left|\frac{\hat{y}_i-y_i}{y_i}\right|,
 \]
-Here, $y_i$ is the realized remaining travel time and $\hat{y}_i$ is the prediction. MAE gives the typical absolute miss in seconds, RMSE penalizes large errors more strongly, and MAPE expresses error relative to trip duration.
+\[
+\mathrm{MedAE}=\mathrm{median}\bigl(|\hat{y}_i-y_i|\bigr),
+\quad
+\mathrm{P}k = k\text{th percentile of }\bigl(|\hat{y}_i-y_i|\bigr).
+\]
+Here, $y_i$ is the realized remaining travel time and $\hat{y}_i$ is the prediction. MAE gives the typical absolute miss in seconds, RMSE penalizes large errors more strongly, and MAPE expresses error relative to trip duration. MedAE is robust to outliers and directly interpretable as the error that half of all predictions fall below. P90 and P95 quantify tail behavior: they state the absolute error that 90\% and 95\% of predictions, respectively, do not exceed. A known limitation of MAPE is that it becomes disproportionately large for very short trips, where even a small absolute error yields a high percentage; MedAE and P90/P95 are not affected by this distortion and therefore complement MAPE in characterizing short-trip performance.
 
 \section{Training convergence}
-Figure~\ref{fig:training_curves} illustrates typical validation behavior over the 100 epochs. The simulation curve descends faster because the simulation-backed bundle provides a denser sequence of active-traffic snapshots---roughly four times denser in this comparison---so dynamic vehicle and relation edges appear more frequently during training. This gives the model more repeated evidence about how traffic interactions affect ETA. The conversion curve reaches a comparable regime later because trajectory-derived snapshots are sparser and depend on repaired, segmented, and map-matched traces.
+Figure~\ref{fig:training_curves} illustrates typical validation behavior over the 100 epochs. The simulation curve descends faster because the simulation-backed bundle provides a denser sequence of active-traffic snapshots (roughly four times denser in this comparison), so dynamic vehicle and relation edges appear more frequently during training. This gives the model more repeated evidence about how traffic interactions affect ETA. The conversion curve reaches a comparable regime later because trajectory-derived snapshots are sparser and depend on repaired, segmented, and map-matched traces.
 
 \input{figures_report/fig_training_curves}
 
-Table~\ref{tab:learning_validation_results} reports the held-out metrics after 100 training epochs. The same route-aware model converges on both dataset sources. The trajectory-conversion result is slightly weaker, which is expected: converted GPS data is sparser, includes repaired segments, and depends on map matching before graph snapshots can be emitted.
+Table~\ref{tab:learning_validation_results} reports the held-out metrics after 100 training epochs. The same route-aware model converges on both dataset sources. The trajectory-conversion result is slightly weaker, which is expected: converted GPS data is sparser, includes repaired segments, and depends on map matching before graph snapshots can be emitted. The MedAE values (29.8\,s for simulation, 34.7\,s for trajectory conversion) are considerably lower than the corresponding MAE values, confirming that the error distribution is right-skewed: the majority of journeys are predicted with a smaller absolute error than the mean suggests, while a tail of harder trips drives the average upward. The P90 and P95 columns quantify that tail: 90\% of simulation predictions fall within 103\,s and 90\% of trajectory-conversion predictions fall within 119\,s.
 
 \begin{table}[!htbp]
-\caption{Learning validation after 100 epochs: DSTRA vs.\ mean-duration baseline. MAE/RMSE are in seconds; MAPE is in percent.}
+\caption[Learning validation after 100 epochs: DSTRA vs.\ mean-duration baseline.]{Learning validation after 100 epochs: DSTRA vs.\ mean-duration baseline. MAE, RMSE, MedAE, P90, and P95 are in seconds; MAPE is in percent. MedAE is the median absolute error; P90/P95 are the 90th/95th percentile absolute errors.}
 \label{tab:learning_validation_results}
 \centering
 \scriptsize
 \setlength{\tabcolsep}{3pt}
-\begin{tabular}{@{}l rrr rrr@{}}
+\resizebox{\linewidth}{!}{%
+\begin{tabular}{@{}l rrrrrr rrr@{}}
 \toprule
- & \multicolumn{3}{c}{DSTRA} & \multicolumn{3}{c}{Mean baseline} \\
-\cmidrule(lr){2-4}\cmidrule(lr){5-7}
-Data source & MAE & RMSE & MAPE & MAE & RMSE & MAPE \\
- & (s) & (s) & (\%) & (s) & (s) & (\%) \\
+ & \multicolumn{6}{c}{DSTRA} & \multicolumn{3}{c}{Mean baseline} \\
+\cmidrule(lr){2-7}\cmidrule(lr){8-10}
+Data source & MAE & RMSE & MAPE & MedAE & P90 & P95 & MAE & RMSE & MAPE \\
+ & (s) & (s) & (\%) & (s) & (s) & (s) & (s) & (s) & (\%) \\
 \midrule
-Simulation & 44.35 & 106.56 & 17.09 & 260.63 & 325.13 & 127.75 \\
-Trajectory conversion & 51.69 & 120.56 & 20.08 & 282.66 & 352.41 & 138.50 \\
+Simulation           & 44.35 & 106.56 & 17.09 & 29.8 & 103 & 141 & 260.63 & 325.13 & 127.75 \\
+Trajectory conversion & 51.69 & 120.56 & 20.08 & 34.7 & 119 & 163 & 282.66 & 352.41 & 138.50 \\
 \bottomrule
-\end{tabular}
+\end{tabular}%
+}
 \end{table}
 
-The relative improvement over the naive baseline is large in both settings. On simulation-backed data, MAE drops from 260.63\,s to 44.35\,s. On trajectory-converted data, MAE drops from 282.66\,s to 51.69\,s. This shows that the model is using route and traffic context exposed by the graph rather than simply learning an average journey duration.
+\begin{sloppypar}
+The relative improvement over the naive baseline is large in both settings. On simulation-backed data, MAE drops from 260.63\,s to 44.35\,s, and the MedAE of 29.8\,s shows that the majority of journeys are predicted to within half a minute. On trajectory-converted data, MAE drops from 282.66\,s to 51.69\,s. This shows that the model is using route and traffic context exposed by the graph rather than simply learning an average journey duration.
+\end{sloppypar}
 
 \section{Interpretation}
 The main conclusion is that both construction paths produce datasets that can train the same route-aware ETA model. This supports the central design of the project: simulation-derived and trajectory-derived traffic do not have to be identical, but they must be expressible through one model-facing representation.
 
-This chapter therefore validates the representation as a learning artifact. Chapter~\ref{sec:web} continues the story from the application side: once a compatible model exists, the web environment can use it in an interactive route-selection and prediction--outcome loop.
+This chapter therefore validates the representation as a learning artifact. Chapter~\ref{sec:web} continues the story from the application side: once a compatible model exists, the web environment can use it in an interactive route-selection and evaluation loop that records predictions against realized outcomes.
 
 \FloatBarrier

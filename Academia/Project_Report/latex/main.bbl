@@ -1,0 +1,127 @@
+\begin{thebibliography}{18}
+\providecommand{\natexlab}[1]{#1}
+\providecommand{\url}[1]{\texttt{#1}}
+\expandafter\ifx\csname urlstyle\endcsname\relax
+  \providecommand{\doi}[1]{doi: #1}\else
+  \providecommand{\doi}{doi: \begingroup \urlstyle{rm}\Url}\fi
+
+\bibitem[ngs(2006)]{ngsim2006}
+{NGSIM} next generation simulation dataset.
+\newblock \url{https://ops.fhwa.dot.gov/trafficanalysistools/ngsim.htm}, 2006.
+\newblock U.S. FHWA program and trajectory dataset resources.
+
+\bibitem[nyc(2026)]{nyc_tlc}
+Nyc taxi \& limousine commission trip record data.
+\newblock \url{https://www.nyc.gov/site/tlc/about/tlc-trip-record-data.page},
+  2026.
+\newblock Official open data portal; accessed 2026.
+
+\bibitem[osm(2026)]{osm}
+Open{StreetMap} contributors.
+\newblock \url{https://www.openstreetmap.org}, 2026.
+\newblock Accessed 2026.
+
+\bibitem[Behrisch et~al.(2011)Behrisch, Bieker, Erdmann, and
+  Krajzewicz]{sumo2011}
+M.~Behrisch, L.~Bieker, J.~Erdmann, and D.~Krajzewicz.
+\newblock {SUMO}: Simulation of urban {MObility} -- an overview.
+\newblock In \emph{Proceedings of SIMUL}, 2011.
+
+\bibitem[Derrow-Pinion et~al.(2021)]{googlemapseta2021}
+A.~Derrow-Pinion et~al.
+\newblock {ETA} prediction with graph neural networks in {Google} {Maps}.
+\newblock In \emph{Proceedings of the 30th {ACM} International Conference on
+  Information and Knowledge Management}, pages 3767--3776, 2021.
+
+\bibitem[Guo et~al.(2019)Guo, Lin, Feng, Song, and Wan]{astgcn2019}
+S.~Guo, Y.~Lin, N.~Feng, C.~Song, and H.~Wan.
+\newblock Attention based spatial-temporal graph convolutional networks for
+  traffic flow forecasting.
+\newblock In \emph{Proceedings of the AAAI Conference on Artificial
+  Intelligence}, volume~33, pages 922--929, 2019.
+
+\bibitem[Huang et~al.(2022)Huang, Huang, Fang, Feng, Chen, Liu, Yuan, and
+  Wang]{dueta2022}
+Jizhou Huang, Zhengjie Huang, Xiaomin Fang, Shikun Feng, Xuyi Chen, Jiaxiang
+  Liu, Haitao Yuan, and Haifeng Wang.
+\newblock Dueta: Traffic congestion propagation pattern modeling via efficient
+  graph learning for eta prediction at baidu maps.
+\newblock In \emph{Proceedings of the 31st ACM International Conference on
+  Information and Knowledge Management (CIKM)}, pages 3174--3183, 2022.
+
+\bibitem[Li et~al.(2018)Li, Yu, Shahabi, and Liu]{dcrnn2018}
+Y.~Li, R.~Yu, C.~Shahabi, and Y.~Liu.
+\newblock Diffusion convolutional recurrent neural network: Data-driven traffic
+  forecasting.
+\newblock In \emph{Proceedings of ICLR}, 2018.
+
+\bibitem[L{\'o}pez et~al.(2018)]{traci2018}
+P.~A. L{\'o}pez et~al.
+\newblock Microscopic traffic simulation using {SUMO}, 2018.
+\newblock The SUMO traffic simulation in 21 days.
+
+\bibitem[Modica et~al.(2024)Modica, Tappia, Colicchia, and
+  Melacini]{modica2024eta}
+T.~Modica, E.~Tappia, C.~Colicchia, and M.~Melacini.
+\newblock Integrating arrival time estimation in truck scheduling: an
+  explorative study in grocery retailing.
+\newblock \emph{Production {\&} Manufacturing Research}, 12\penalty0 (1), 2024.
+\newblock \doi{10.1080/21693277.2024.2425678}.
+
+\bibitem[Moreira-Matias et~al.(2015)Moreira-Matias, Gama, Ferreira,
+  Mendes-Moreira, and Damas]{porto2015pkdd}
+L.~Moreira-Matias, J.~Gama, M.~Ferreira, J.~Mendes-Moreira, and L.~Damas.
+\newblock {ECML/PKDD} 2015 competition: Predict taxi service trajectory (i),
+  {Porto}, {Portugal}, {GPS} records (july 2013--june 2014).
+\newblock
+  \url{https://www.kaggle.com/c/pkdd-15-predict-taxi-service-trajectory-i},
+  2015.
+\newblock Accessed 2026.
+
+\bibitem[Tordjman and Voloch(2025)]{dstra_gnn}
+G.~Tordjman and N.~Voloch.
+\newblock Dynamic route-aware graph neural networks for accurate {ETA}
+  prediction, 2025.
+\newblock Attached in the report appendix.
+
+\bibitem[Voloch and Voloch-Bloch(2021)]{voloch2021}
+N.~Voloch and N.~Voloch-Bloch.
+\newblock Finding the fastest navigation route by real-time future traffic
+  estimations.
+\newblock In \emph{Proceedings of the {IEEE} International Conference on
+  Microwaves, Communications, Antennas and Electronic Systems ({COMCAS})},
+  2021.
+
+\bibitem[Voloch et~al.(2025)Voloch, Penkar, and Tordjman]{voloch2025}
+N.~Voloch, N.~Penkar, and G.~Tordjman.
+\newblock Estimating accurate traffic time by smart simulative route
+  predictions.
+\newblock In \emph{Proceedings of the 24th {IFIP} Conference on e-Business,
+  e-Services and e-Society ({I3E}), Limassol, Cyprus}, 2025.
+
+\bibitem[Wang et~al.(2021)Wang, Jiang, Jiang, Li, and Zhao]{libcity2021}
+J.~Wang, J.~Jiang, W.~Jiang, C.~Li, and W.~X. Zhao.
+\newblock {LibCity}: An open library for traffic prediction.
+\newblock In \emph{Proceedings of the 29th International Conference on Advances
+  in Geographic Information Systems}, pages 145--148, 2021.
+
+\bibitem[Yu et~al.(2018)Yu, Yin, and Zhu]{stgcn2018}
+B.~Yu, H.~Yin, and Z.~Zhu.
+\newblock Spatio-temporal graph convolutional networks: A deep learning
+  framework for traffic forecasting.
+\newblock In \emph{Proceedings of IJCAI}, 2018.
+
+\bibitem[Yu et~al.(2017)Yu, Gu, Li, and Li]{yu2017trafficpred}
+J.~J.~Q. Yu, Y.~Gu, H.~Li, and S.~Li.
+\newblock A survey on traffic prediction using big data.
+\newblock \emph{IEEE Transactions on Intelligent Transportation Systems},
+  18\penalty0 (10):\penalty0 2570--2586, 2017.
+
+\bibitem[Yuan et~al.(2010)Yuan, Zheng, Zhang, Xie, Xie, Sun, and
+  Huang]{tdrive2011}
+J.~Yuan, Y.~Zheng, C.~Zhang, W.~Xie, X.~Xie, G.~Sun, and Y.~Huang.
+\newblock {T}-drive: Driving directions based on taxi trajectories.
+\newblock In \emph{Proceedings of the 10th International Conference on
+  Ubiquitous Computing (UbiComp)}, pages 99--108, 2010.
+
+\end{thebibliography}

@@ -1,5 +1,5 @@
 @startuml
-title Web client — journey with ETA, persistence, and dashboard refresh (reference sequence)
+title Web client: journey with ETA, persistence, and dashboard refresh (reference sequence)
 
 skinparam sequenceMessageAlign center
 skinparam maxMessageSize 240

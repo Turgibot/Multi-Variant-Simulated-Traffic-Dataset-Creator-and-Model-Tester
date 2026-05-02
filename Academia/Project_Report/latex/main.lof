@@ -1,0 +1,47 @@
+\addvspace {10\p@ }
+\addvspace {10\p@ }
+\addvspace {10\p@ }
+\contentsline {figure}{\numberline {1}{\ignorespaces End-to-end workflow: simulation and trajectory paths merge in the desktop tool, export route-aware graph time series, and feed the web layer for testing and logged analysis.}}{13}{figure.3.1}%
+\contentsline {figure}{\numberline {2}{\ignorespaces Desktop project list page showing both supported paths and their bundled examples: the 3-zone city simulation project (left) and the Porto taxi conversion project (right).}}{15}{figure.3.2}%
+\contentsline {figure}{\numberline {3}{\ignorespaces Desktop software structure (component view). UI pages delegate heavy work to asynchronous workers, which call utility/service modules and produce a shared export bundle.}}{17}{figure.3.3}%
+\contentsline {figure}{\numberline {4}{\ignorespaces Desktop reference implementation: curated class diagram (pages, primary workers, and map view hierarchy). Not every helper or graphics item is shown.}}{17}{figure.3.4}%
+\contentsline {figure}{\numberline {5}{\ignorespaces Desktop tool: typical simulation preparation pipeline.}}{18}{figure.3.5}%
+\contentsline {figure}{\numberline {6}{\ignorespaces Desktop tool: trajectory conversion path sequence.}}{19}{figure.3.6}%
+\contentsline {figure}{\numberline {7}{\ignorespaces Desktop UI (simulation path, step\nobreakspace {}2): \textbf {Create Simulation Project}, specifying name, optional description, and folder for a new SUMO-based project.}}{21}{figure.3.7}%
+\contentsline {figure}{\numberline {8}{\ignorespaces Desktop UI (simulation path, step\nobreakspace {}3): dataset generation settings.}}{21}{figure.3.8}%
+\contentsline {figure}{\numberline {9}{\ignorespaces Desktop UI (simulation path, step\nobreakspace {}4): \textbf {Simulation Definition}, showing the map view for visual inspection of the network and attribute-based zones before demand and core settings.}}{22}{figure.3.9}%
+\contentsline {figure}{\numberline {10}{\ignorespaces Desktop UI (simulation path, step\nobreakspace {}5): \textbf {Vehicle Types}, showing per-class geometry, speeds, and display colors.}}{22}{figure.3.10}%
+\contentsline {figure}{\numberline {11}{\ignorespaces Desktop UI (simulation path, step\nobreakspace {}6): \textbf {Zone trip allocation}, configuring the share of total trips originating in each zone and, within each zone, the split across vehicle types (percentages must sum appropriately).}}{23}{figure.3.11}%
+\contentsline {figure}{\numberline {12}{\ignorespaces Desktop UI (simulation path, step\nobreakspace {}7): \textbf {Landmarks}, showing named edge groups in the network, default home/work/restaurant assignments, and \textbf {Visit} (count of random extra trips associated with a vehicle trip).}}{23}{figure.3.12}%
+\contentsline {figure}{\numberline {13}{\ignorespaces Desktop UI (simulation path, step\nobreakspace {}8): weekday schedule configuration.}}{24}{figure.3.13}%
+\contentsline {figure}{\numberline {14}{\ignorespaces Desktop UI (simulation path, step\nobreakspace {}9): core settings and DB generation gate.}}{24}{figure.3.14}%
+\contentsline {figure}{\numberline {15}{\ignorespaces Desktop UI (simulation path, step\nobreakspace {}10): DB ready, simulation enabled.}}{25}{figure.3.15}%
+\contentsline {figure}{\numberline {16}{\ignorespaces Desktop UI (simulation path, step\nobreakspace {}11): running simulation with live map redraw.}}{25}{figure.3.16}%
+\contentsline {figure}{\numberline {17}{\ignorespaces Desktop UI (simulation path, step\nobreakspace {}12): same run with \textbf {Run in background} enabled. The map stays greyed because vehicle positions are not redrawn, improving throughput.}}{26}{figure.3.17}%
+\contentsline {figure}{\numberline {18}{\ignorespaces Desktop UI (conversion path, step 1): create conversion project dialog.}}{26}{figure.3.18}%
+\contentsline {figure}{\numberline {19}{\ignorespaces Desktop UI (conversion path, step 2): map border and OSM download.}}{27}{figure.3.19}%
+\contentsline {figure}{\numberline {20}{\ignorespaces Desktop UI (conversion path, step 3): attach trajectory CSV files (main required, optional extras) for conversion after the SUMO network is ready.}}{27}{figure.3.20}%
+\contentsline {figure}{\numberline {21}{\ignorespaces Desktop UI (conversion path, step 4): main view with SUMO network only, used for initial visual validation before deeper route inspection.}}{28}{figure.3.21}%
+\contentsline {figure}{\numberline {22}{\ignorespaces Desktop UI (conversion path, step 5): same view with real map tiles under the SUMO network, helping alignment checks in geographic context.}}{28}{figure.3.22}%
+\contentsline {figure}{\numberline {23}{\ignorespaces Desktop UI (conversion path, step 6): trajectory inspection and route-matching controls.}}{29}{figure.3.23}%
+\contentsline {figure}{\numberline {24}{\ignorespaces Desktop UI (conversion path, step 7, optional): example route-display outcome after split-and-fix processing, showing segmented matching results.}}{29}{figure.3.24}%
+\contentsline {figure}{\numberline {25}{\ignorespaces Desktop UI (conversion path, step 8, optional): second route-display example emphasizing search-region/bounding behavior during map matching diagnostics.}}{30}{figure.3.25}%
+\contentsline {figure}{\numberline {26}{\ignorespaces Desktop UI (conversion path, step 9): final dataset-generation settings.}}{30}{figure.3.26}%
+\contentsline {figure}{\numberline {27}{\ignorespaces Web software structure (component view). The Vue client calls FastAPI endpoints, which orchestrate simulation/inference services and persist outcomes through SQLAlchemy models.}}{33}{figure.3.27}%
+\contentsline {figure}{\numberline {28}{\ignorespaces Web evaluation backend: curated class diagram (API entry points, simulation service, in-memory domain objects, ORM persistence, and inference stack). Individual route handlers are omitted for readability.}}{34}{figure.3.28}%
+\contentsline {figure}{\numberline {29}{\ignorespaces Web evaluation client: end-to-end journey lifecycle sequence.}}{35}{figure.3.29}%
+\contentsline {figure}{\numberline {30}{\ignorespaces Web UI (step 1): main evaluation window after load. The traffic simulation is already running in the center map; the left panel summarizes model-performance analysis, while the right panel lists recent journeys and their prediction/error records.}}{36}{figure.3.30}%
+\contentsline {figure}{\numberline {31}{\ignorespaces Web UI (step 2): map legend. It defines road styles, start/destination markers, vehicle classes, the highlighted user vehicle, and not-tracked vehicles.}}{36}{figure.3.31}%
+\contentsline {figure}{\numberline {32}{\ignorespaces Web UI (steps 3--4): route selection, journey start, and running journey record.}}{37}{figure.3.32}%
+\contentsline {figure}{\numberline {33}{\ignorespaces Web UI (steps 5--6): the vehicle reaches the destination, then journey \#2709 is marked completed in the recent-journeys panel. The prediction was 19 seconds before the actual arrival, giving 98.1\% accuracy for this journey.}}{38}{figure.3.33}%
+\contentsline {figure}{\numberline {34}{\ignorespaces Web UI (step 7): the same client on a Porto trajectory-derived network.}}{39}{figure.3.34}%
+\addvspace {10\p@ }
+\contentsline {figure}{\numberline {35}{\ignorespaces Static vs.\ dynamic graph layers. Static layer: black nodes A--D are junctions; grey edges are roads. Dynamic layer: green nodes are vehicles; dashed blue edges connect vehicles to other vehicles and to junctions.}}{43}{figure.4.35}%
+\contentsline {figure}{\numberline {36}{\ignorespaces Graph representation of a morning traffic snapshot. Blue nodes are static junctions, green nodes are dynamic vehicle nodes, grey lines are static road edges, and orange lines are dynamic edges that encode route-aware traffic relations.}}{43}{figure.4.36}%
+\addvspace {10\p@ }
+\contentsline {figure}{\numberline {37}{\ignorespaces Representative 100-epoch validation curves for both construction paths.}}{54}{figure.5.37}%
+\addvspace {10\p@ }
+\contentsline {figure}{\numberline {38}{\ignorespaces Web-tool journey plot for the simulation path: trip duration versus per-journey absolute ETA error, with aggregate MAE and RMSE reference lines.}}{57}{figure.6.38}%
+\contentsline {figure}{\numberline {39}{\ignorespaces Web-tool journey plot for the trajectory-conversion path: trip duration versus per-journey absolute ETA error, using the same logged-journey analysis as the simulation plot.}}{57}{figure.6.39}%
+\addvspace {10\p@ }
+\addvspace {10\p@ }
