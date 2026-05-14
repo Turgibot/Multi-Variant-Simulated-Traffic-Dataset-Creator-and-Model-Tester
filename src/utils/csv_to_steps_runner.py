@@ -14,6 +14,7 @@ import multiprocessing
 import os
 import sys
 import threading
+import time
 from pathlib import Path
 from queue import Queue
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
@@ -301,6 +302,11 @@ def load_and_sort_csv(
             total,
             "Sorting by timestamp...",
         )
+    print(
+        f"Executing sort: ordering {len(sort_entries)} trajectories by TIMESTAMP "
+        f"(then row index); output → {save_sorted_path}",
+        flush=True,
+    )
     sort_entries.sort(key=lambda x: (x[0], x[1]))
 
     if save_sorted_path is None:
@@ -330,15 +336,17 @@ def load_and_sort_csv(
 
 
 def _resolve_sumo_home(sumo_home_arg: Optional[Path]) -> Optional[Path]:
-    """Resolve SUMO_HOME: arg > env > /usr/shared/sumo > /usr/share/sumo."""
-    for candidate in (
-        sumo_home_arg,
-        (Path(os.environ["SUMO_HOME"]) if os.environ.get("SUMO_HOME") else None),
-        Path("/usr/shared/sumo"),
-        Path("/usr/share/sumo"),
-    ):
-        if candidate and (Path(candidate) / "tools").exists():
-            return Path(candidate)
+    """
+    Resolve SUMO root (must contain tools/ for sumolib).
+    Order: explicit path, then auto-detect ($SUMO_HOME, PyPI eclipse-sumo, which sumo, common paths).
+    """
+    if sumo_home_arg and (Path(sumo_home_arg) / "tools").exists():
+        return Path(sumo_home_arg).resolve()
+    from src.utils.sumo_detector import auto_detect_sumo_home
+
+    found = auto_detect_sumo_home()
+    if found and (Path(found) / "tools").exists():
+        return Path(found).resolve()
     return None
 
 
@@ -830,11 +838,13 @@ def run_csv_to_steps(
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
     cancelled_callback: Optional[Callable[[], bool]] = None,
     log_callback: Optional[Callable[[str], None]] = None,
+    print_trajectory_progress: bool = True,
 ) -> Tuple[int, int, str]:
     """
     Run CSV → Step conversion. Returns (steps_emitted, trajectories_processed, error_msg).
     progress_callback(current, total, message) - called during processing.
     log_callback(message) - optional, for status messages.
+    When print_trajectory_progress is True, throttled lines are printed to stdout (current/total).
     """
     def _log(msg: str) -> None:
         if log_callback:
@@ -892,9 +902,19 @@ def run_csv_to_steps(
     if total_traj is None or total_traj <= 0:
         total_traj = (last_traj - start_traj + 1) if last_traj else 1000
 
+    _traj_stdout_last = [0, 0.0]  # last printed count, monotonic time
+
     def _progress(c: int, t: int, m: str) -> None:
         if progress_callback:
             progress_callback(c, t, m)
+        if not print_trajectory_progress or not t:
+            return
+        now = time.monotonic()
+        step = max(50, min(2500, t // 50))
+        if c <= 1 or c >= t or c - _traj_stdout_last[0] >= step or now - _traj_stdout_last[1] >= 8.0:
+            print(f"Trajectory conversion progress: {c}/{t}", flush=True)
+            _traj_stdout_last[0] = c
+            _traj_stdout_last[1] = now
 
     if is_sorted:
         order_err = presorted_timestamp_order_error(
@@ -1007,6 +1027,17 @@ def run_csv_to_steps(
             label_path = labels_dir / f"label_{ts_val:012d}.json"
             with open(label_path, "w", encoding="utf-8") as f:
                 json.dump(label_data, f, indent=2)
+        n_veh = len(nodes)
+        id_list = [str(n.get("id", "")) for n in nodes if n.get("id")]
+        _max_ids = 40
+        if len(id_list) > _max_ids:
+            ids_str = ", ".join(id_list[:_max_ids]) + ", ..."
+        else:
+            ids_str = ", ".join(id_list)
+        print(
+            f"creating ds files of ts {ts_val} with {n_veh} vehicles : {ids_str}",
+            flush=True,
+        )
         steps_emitted[0] += 1
 
     json_queue: Optional[Queue] = None
@@ -1015,7 +1046,9 @@ def run_csv_to_steps(
     _mp_pool: Optional[multiprocessing.Pool] = None
 
     if use_parallel:
-        json_queue = Queue(maxsize=8)
+        # Larger queue reduces time spent blocked on put() while disk writer
+        # catches up; a tiny queue can stall the merge loop and pool result pickup.
+        json_queue = Queue(maxsize=128)
 
         def _json_writer() -> None:
             while True:
@@ -1116,9 +1149,17 @@ def run_csv_to_steps(
                 traj_first_ts is not None and traj_first_ts < next_ts_in_map
             )
             if load_now:
+                # Remove vehicles whose last GPS time is on/before the incoming trip's first
+                # simulated GPS time. Using CSV TIMESTAMP (traj_ts) alone is wrong: GPS uses
+                # starting_timestamp = base_ts + orig_offset*interval, which can differ from traj_ts.
+                traj_cut = traj_first_ts if traj_first_ts is not None else traj_ts
                 for vid in list(db.vehicles.keys()):
                     last_ts_val = vehicle_last_ts.get(vid)
-                    will_remove = last_ts_val is not None and last_ts_val < traj_ts
+                    will_remove = (
+                        last_ts_val is not None
+                        and traj_cut is not None
+                        and last_ts_val <= traj_cut
+                    )
                     if will_remove:
                         db.remove_vehicle(vid)
                         vehicle_last_ts.pop(vid, None)
@@ -1206,6 +1247,12 @@ def run_csv_to_steps(
         label_data = build_label_json(db, global_ts, vehicle_seg_last_ts)
         step_data = build_step_json(db, global_ts)
         _emit_step_json(global_ts, step_data, label_data)
+
+    if print_trajectory_progress and total_traj:
+        print(
+            f"Trajectory conversion finished: {traj_processed[0]}/{total_traj} trajectories converted.",
+            flush=True,
+        )
 
     if use_parallel and json_queue is not None and json_thread is not None:
         json_queue.put(None)

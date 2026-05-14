@@ -26,9 +26,9 @@
   "show_polygon": true,
   "draw_gps_points_path": true,
   "dataset_output_folder": "datasets",
-  "dataset_sorted": true,
+  "dataset_sorted": false,
   "dataset_save_sorted": "data/train_sorted.csv",
   "dataset_sampling_period": "30",
   "dataset_compress": false,
-  "dataset_workers": "10"
+  "dataset_workers": "16"
 }
