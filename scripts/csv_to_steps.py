@@ -14,6 +14,7 @@ import math
 import multiprocessing
 import os
 import sys
+import time
 import threading
 from pathlib import Path
 from queue import Queue
@@ -230,6 +231,11 @@ def load_and_sort_csv(
                     rows_with_raw.append((row, i, timestamp))
 
     # Sort by timestamp, then trip_num
+    print(
+        f"Executing sort: ordering {len(rows_with_raw)} trajectories by TIMESTAMP "
+        f"(then original row index); output → {save_sorted_path}",
+        flush=True,
+    )
     with tqdm(total=1, desc="Sorting", unit="step") as pbar:
         rows_with_raw.sort(key=lambda x: (x[2] if x[2] is not None else 0, x[1]))
         pbar.update(1)
@@ -786,15 +792,17 @@ def build_step_json(
 
 
 def _resolve_sumo_home(sumo_home_arg: Optional[Path]) -> Optional[Path]:
-    """Resolve SUMO_HOME: arg > env > /usr/shared/sumo > /usr/share/sumo."""
-    for candidate in (
-        sumo_home_arg,
-        (Path(os.environ["SUMO_HOME"]) if os.environ.get("SUMO_HOME") else None),
-        Path("/usr/shared/sumo"),
-        Path("/usr/share/sumo"),
-    ):
-        if candidate and (Path(candidate) / "tools").exists():
-            return Path(candidate)
+    """
+    Resolve SUMO root (must contain tools/ for sumolib).
+    Order: explicit --sumo-home, then auto-detect ($SUMO_HOME, PyPI eclipse-sumo, which sumo, common paths).
+    """
+    if sumo_home_arg and (Path(sumo_home_arg) / "tools").exists():
+        return Path(sumo_home_arg).resolve()
+    from src.utils.sumo_detector import auto_detect_sumo_home
+
+    found = auto_detect_sumo_home()
+    if found and (Path(found) / "tools").exists():
+        return Path(found).resolve()
     return None
 
 
@@ -939,13 +947,29 @@ def main():
         net = sumolib.net.readNet(str(args.network))
         junctions = build_junctions_map(net)
         road_edges = build_edges_map(net)
-    except ImportError:
-        pass
-    except Exception:
-        pass
+    except ImportError as e:
+        print(
+            "sumolib is not available. Install SUMO Python bindings, e.g.\n"
+            "  uv pip install -r requirements.txt\n"
+            "or set SUMO_HOME to a SUMO install that contains tools/ (with sumolib).",
+            file=sys.stderr,
+        )
+        print(f"ImportError: {e}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"Failed to load network {args.network}: {e}", file=sys.stderr)
+        junctions = {}
+        road_edges = {}
 
     if not junctions or not road_edges:
         sys.exit(1)
+
+    if not args.no_progress:
+        print(
+            f"Converting {args.csv} → {args.output}\n"
+            f"Network: {args.network}  SUMO tools: {sumo_home}",
+            flush=True,
+        )
 
     db = TrafficDB(junctions, road_edges)
 
@@ -988,6 +1012,31 @@ def main():
         is_sorted=args.is_sorted,
         save_sorted_path=save_sorted_path,
     )
+
+    total_traj = count_csv_rows(args.csv, args.start, args.last)
+    if args.last is not None and total_traj is not None:
+        total_traj = min(total_traj, args.last - args.start + 1)
+    if total_traj is None or total_traj <= 0:
+        total_traj = (args.last - args.start + 1) if args.last else 1000
+
+    traj_processed = [0]
+    _traj_prog_last = [0, 0.0]  # last printed count, monotonic time
+
+    def _report_traj_progress(trip_num: int) -> None:
+        """Throttled stdout: converted count vs requested total."""
+        if args.no_progress or not total_traj:
+            return
+        cur = traj_processed[0]
+        tot = total_traj
+        now = time.monotonic()
+        step = max(50, min(2500, tot // 50)) if tot else 50
+        if cur <= 1 or cur >= tot or cur - _traj_prog_last[0] >= step or now - _traj_prog_last[1] >= 8.0:
+            print(
+                f"Trajectory conversion progress: {cur}/{tot} (trip {trip_num})",
+                flush=True,
+            )
+            _traj_prog_last[0] = cur
+            _traj_prog_last[1] = now
 
     sampling_period = args.sampling_period
     global_ts = 0
@@ -1084,7 +1133,17 @@ def main():
             label_path = labels_dir / f"label_{ts_val:012d}.json"
             with open(label_path, "w", encoding="utf-8") as f:
                 json.dump(label_data, f, indent=2)
-        print(f"creating {step_path.name} and {label_path.name} at ts {ts_val}", flush=True)
+        n_veh = len(nodes)
+        id_list = [str(n.get("id", "")) for n in nodes if n.get("id")]
+        _max_ids = 40
+        if len(id_list) > _max_ids:
+            ids_str = ", ".join(id_list[:_max_ids]) + ", ..."
+        else:
+            ids_str = ", ".join(id_list)
+        print(
+            f"creating ds files of ts {ts_val} with {n_veh} vehicles : {ids_str}",
+            flush=True,
+        )
 
     json_queue: Optional[Queue] = None
     json_thread: Optional[threading.Thread] = None
@@ -1092,7 +1151,7 @@ def main():
     _mp_pool: Optional[multiprocessing.Pool] = None
 
     if use_parallel:
-        json_queue = Queue(maxsize=8)
+        json_queue = Queue(maxsize=128)
 
         def _json_writer() -> None:
             while True:
@@ -1140,6 +1199,8 @@ def main():
                     )
                     sys.exit(1)
                 last_ts = ts
+                traj_processed[0] += 1
+                _report_traj_progress(trip_num)
                 return item
         while True:
             try:
@@ -1162,6 +1223,8 @@ def main():
                     edges_data, edge_shapes, node_positions, y_min, y_max, use_polygon=False,
                 )
                 if rec:
+                    traj_processed[0] += 1
+                    _report_traj_progress(trip_num)
                     return (trip_num, polyline, ts, rec)
 
     def _emit_step_json(ts_val: int, data: Dict[str, Any], label_data: Dict[str, Any]) -> None:
@@ -1186,12 +1249,19 @@ def main():
                 traj_first_ts is not None and traj_first_ts < next_ts_in_map
             )
             if load_now:
+                # Align removal cutoff with simulated GPS timeline (first point of new trip), not
+                # raw CSV TIMESTAMP alone — see starting_timestamp in trajectory_converter.
+                traj_cut = traj_first_ts if traj_first_ts is not None else traj_ts
                 for vid in list(db.vehicles.keys()):
                     # Only remove if we've seen the vehicle's last point (trajectory ended).
                     # vehicle_last_ts[vid] is set when we pop the batch with its last point.
                     # If vid not in vehicle_last_ts, trajectory is still active - do NOT remove.
                     last_ts_val = vehicle_last_ts.get(vid)
-                    will_remove = last_ts_val is not None and last_ts_val < traj_ts
+                    will_remove = (
+                        last_ts_val is not None
+                        and traj_cut is not None
+                        and last_ts_val <= traj_cut
+                    )
                     if will_remove:
                         db.remove_vehicle(vid)
                         vehicle_last_ts.pop(vid, None)
@@ -1230,9 +1300,13 @@ def main():
                         print(f"vehicle {vid} added to db | route ts: {seg_first} .. {last_ts_str}", flush=True)
                     if vehicle_seg_last_ts.get(vid) == first_ts:
                         vehicle_last_ts[vid] = first_ts
-                ids = [v.get("id", "") for v in vehicle_infos]
-                print(f"poped ts {first_ts} with vehicles: {ids}", flush=True)
                 update_db_from_vehicle_infos(db, vehicle_infos)
+                ids = [v.get("id", "") for v in vehicle_infos if v.get("id")]
+                still = [vid for vid in ids if vid in db.vehicles]
+                print(
+                    f"popped ts {first_ts} — GPS batch ids: {ids}; still in DB: {still}",
+                    flush=True,
+                )
             global_ts = next_json_boundary
             _update_edge_demand(db)
             label_data = build_label_json(db, global_ts, vehicle_seg_last_ts)
@@ -1260,9 +1334,13 @@ def main():
                 print(f"vehicle {vid} added to db | route ts: {seg_first} .. {last_ts_str}", flush=True)
             if vehicle_seg_last_ts.get(vid) == first_ts:
                 vehicle_last_ts[vid] = first_ts
-        ids = [v.get("id", "") for v in vehicle_infos]
-        print(f"poped ts {first_ts} with vehicles: {ids}", flush=True)
         update_db_from_vehicle_infos(db, vehicle_infos)
+        ids = [v.get("id", "") for v in vehicle_infos if v.get("id")]
+        still = [vid for vid in ids if vid in db.vehicles]
+        print(
+            f"popped ts {first_ts} — GPS batch ids: {ids}; still in DB: {still}",
+            flush=True,
+        )
 
     while timestamp_to_vehicles and _first_ts_key() is not None:
         next_json_boundary = global_ts + sampling_period
@@ -1278,14 +1356,24 @@ def main():
                     print(f"vehicle {vid} added to db | route ts: {seg_first} .. {last_ts_str}", flush=True)
                 if vehicle_seg_last_ts.get(vid) == first_ts:
                     vehicle_last_ts[vid] = first_ts
-            ids = [v.get("id", "") for v in vehicle_infos]
-            print(f"poped ts {first_ts} with vehicles: {ids}", flush=True)
             update_db_from_vehicle_infos(db, vehicle_infos)
+            ids = [v.get("id", "") for v in vehicle_infos if v.get("id")]
+            still = [vid for vid in ids if vid in db.vehicles]
+            print(
+                f"popped ts {first_ts} — GPS batch ids: {ids}; still in DB: {still}",
+                flush=True,
+            )
         global_ts = next_json_boundary
         _update_edge_demand(db)
         label_data = build_label_json(db, global_ts, vehicle_seg_last_ts)
         step_data = build_step_json(db, global_ts)
         _emit_step_json(global_ts, step_data, label_data)
+
+    if not args.no_progress and total_traj:
+        print(
+            f"Trajectory conversion finished: {traj_processed[0]}/{total_traj} trajectories converted.",
+            flush=True,
+        )
 
     if use_parallel and json_queue is not None and json_thread is not None:
         json_queue.put(None)

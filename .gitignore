@@ -175,3 +175,6 @@ examples/porto_conversion/data/train.csv
 examples/3_zones_simulation/datasets_2days/**/*.json
 examples/3_zones_simulation/datasets_2days/**/*.csv
 examples/3_zones_simulation/simulation/3_zones_simulation.db-journal
+
+examples/porto_conversion/dataset*
+examples/porto_conversion/data/*.csv

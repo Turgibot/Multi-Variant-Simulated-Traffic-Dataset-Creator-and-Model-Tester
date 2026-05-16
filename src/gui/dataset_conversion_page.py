@@ -7,6 +7,7 @@ import json
 import math
 import os
 import subprocess
+import time
 import urllib.request
 from collections import defaultdict
 from pathlib import Path
@@ -628,6 +629,8 @@ class StepGenerationWorker(QThread):
         self.use_parallel = use_parallel
         self.workers = max(1, workers)
         self._cancelled = cancelled_callback
+        self._prog_last_emit_mono: float = 0.0
+        self._prog_last_emit_count: int = -1
 
     def run(self):
         steps, traj, err = run_csv_to_steps(
@@ -646,13 +649,30 @@ class StepGenerationWorker(QThread):
             progress_callback=self._on_progress,
             cancelled_callback=self._cancelled,
             log_callback=None,
+            print_trajectory_progress=False,
         )
         self.finished.emit(steps, traj, err)
 
     def _on_progress(self, current: int, total: int, message: str):
         if self._cancelled():
             return
-        self.progress.emit(current, total, message)
+        # Avoid flooding the GUI event queue: one Signal per trajectory × millions
+        # of rows freezes the window ("not responding"). Throttle to time + count.
+        now = time.monotonic()
+        count_step = max(250, min(5000, total // 400)) if total else 500
+        if self._prog_last_emit_count < 0:
+            self.progress.emit(current, total, message)
+            self._prog_last_emit_mono = now
+            self._prog_last_emit_count = current
+            return
+        due_count = current - self._prog_last_emit_count >= count_step
+        due_time = now - self._prog_last_emit_mono >= 2.0
+        is_first = current <= 1
+        is_done = total > 0 and current >= total
+        if is_first or is_done or due_count or due_time:
+            self.progress.emit(current, total, message)
+            self._prog_last_emit_mono = now
+            self._prog_last_emit_count = current
 
 
 class DatasetConversionPage(QWidget):
@@ -2739,6 +2759,8 @@ class DatasetConversionPage(QWidget):
             self.progress_bar.setMaximum(total)
         self.progress_bar.setValue(current)
         self.progress_status.setText(status)
+        # Progress is throttled in StepGenerationWorker; logging here is still
+        # cheaper than appending once per trajectory for multi-million CSVs.
         self.log(f"  {status}")
 
     def _on_dataset_gen_finished(self, steps_emitted: int, trajectories_processed: int, error_msg: str):
