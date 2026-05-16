@@ -6,6 +6,7 @@ import traceback
 from pathlib import Path
 import json
 import gzip
+from typing import List, Optional
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QMessageBox, QGroupBox, QTextEdit, QSlider, QCheckBox, QLineEdit, QFormLayout,
@@ -563,9 +564,14 @@ class SimulationPage(QWidget):
                 return
 
             cleared = service.clear_roads_and_zones()
+            reset = service.reset_vehicles_for_simulation_start()
             self.log_text.append(
                 f"Cleared roads/zones data: roads={cleared.get('roads_cleared', 0)}, "
                 f"zones={cleared.get('zones_cleared', 0)}"
+            )
+            self.log_text.append(
+                f"Reset vehicles for simulation start: "
+                f"parked={reset.get('vehicles_reset', 0)}"
             )
             self.status_label.setText("Status: Ready")
             self.status_label.setStyleSheet(
@@ -699,15 +705,28 @@ class SimulationPage(QWidget):
             }
         return roads
 
-    def _fetch_active_nodes_for_dataset(self):
+    def _fetch_active_nodes_for_dataset(
+        self,
+        snapshot_sec: int,
+        traci_vehicle_ids: Optional[List[str]] = None,
+    ):
+        query = (
+            "SELECT id, vehicle_type, length, width, height, speed, acceleration, current_x, current_y, "
+            "current_zone, current_edge, current_position, origin_name, origin_zone, origin_edge, "
+            "origin_position, origin_x, origin_y, origin_start_sec, route_json, route_length, "
+            "route_left_json, route_length_left, destination_name, destination_edge, destination_position, "
+            "destination_x, destination_y FROM vehicles WHERE status = 'in_route' "
+            "AND origin_start_sec IS NOT NULL AND origin_start_sec <= ?"
+        )
+        params: List = [int(snapshot_sec)]
+        if traci_vehicle_ids is not None:
+            if not traci_vehicle_ids:
+                return {}
+            placeholders = ",".join("?" for _ in traci_vehicle_ids)
+            query += f" AND id IN ({placeholders})"
+            params.extend(traci_vehicle_ids)
         with self._simulation_runner.sim_db.connect() as conn:
-            rows = conn.execute(
-                "SELECT id, vehicle_type, length, width, height, speed, acceleration, current_x, current_y, "
-                "current_zone, current_edge, current_position, origin_name, origin_zone, origin_edge, "
-                "origin_position, origin_x, origin_y, origin_start_sec, route_json, route_length, "
-                "route_left_json, route_length_left, destination_name, destination_edge, destination_position, "
-                "destination_x, destination_y FROM vehicles WHERE status = 'in_route'"
-            ).fetchall()
+            rows = conn.execute(query, params).fetchall()
         vehicles = {}
         for r in rows:
             vid = str(r[0])
@@ -826,7 +845,7 @@ class SimulationPage(QWidget):
             if hasattr(self, "dataset_progress_bar") and self.dataset_progress_bar is not None:
                 self.dataset_progress_bar.set_mapping(1, 1)
 
-    def _write_dataset_snapshot(self, snapshot_sec: int):
+    def _write_dataset_snapshot(self, snapshot_sec: int, traci_vehicle_ids: Optional[List[str]] = None):
         if not self.dataset_creation_enabled or not self._dataset_static_written:
             return
         if self._simulation_runner is None or self._dataset_snapshots_dir is None:
@@ -838,11 +857,7 @@ class SimulationPage(QWidget):
         denom = total_exp if total_exp > 0 else max(1, self._dataset_snapshots_boundary_count)
 
         road_edges = self._fetch_road_edges_for_dataset()
-        vehicles = self._fetch_active_nodes_for_dataset()
-        if not vehicles:
-            if hasattr(self, "dataset_progress_bar") and self.dataset_progress_bar is not None:
-                self.dataset_progress_bar.set_snapshots(self._dataset_snapshots_boundary_count, denom)
-            return
+        vehicles = self._fetch_active_nodes_for_dataset(snapshot_sec, traci_vehicle_ids)
         self._compute_edge_demand(road_edges, vehicles)
         road_edges_dynamic = [
             {
@@ -1161,9 +1176,22 @@ class SimulationPage(QWidget):
             self._simulation_runner = SimulationRunner(self.project_path, self.project_name)
             if self.dataset_creation_enabled:
                 self._write_dataset_static_file()
+                period = max(1, int(self._dataset_sampling_period_sec))
+                # First snapshot at the first simulation second (begin + 1), then every period.
+                self._next_dataset_snapshot_sec = int(start_sec) + 1
 
             traci.start(sumo_cmd)
             self.traci_connection = traci
+
+            try:
+                reset = service.reset_vehicles_for_simulation_start(traci)
+                self.log_text.append(
+                    f"Vehicle state reset at SUMO start: "
+                    f"parked={reset.get('vehicles_reset', 0)}, "
+                    f"coords_refreshed={reset.get('coordinates_refreshed', 0)}"
+                )
+            except Exception as exc:
+                self.log_text.append(f"Vehicle reset at SUMO start failed: {exc}")
 
             self.log_text.append("Simulation started successfully!")
             
@@ -1231,13 +1259,22 @@ class SimulationPage(QWidget):
                 except Exception as e:
                     self.log_text.append(f"Dispatch error: {e}")
 
+            try:
+                raw_ids = traci.vehicle.getIDList()
+                vehicle_ids = [str(v) for v in (raw_ids if isinstance(raw_ids, (list, tuple)) else [])]
+            except Exception:
+                vehicle_ids = []
+
             # 4. Periodic dataset snapshot export during run.
             if self.dataset_creation_enabled:
                 sim_time_sec = int(traci.simulation.getTime())
                 if self._next_dataset_snapshot_sec is None:
                     self._next_dataset_snapshot_sec = sim_time_sec
                 while sim_time_sec >= int(self._next_dataset_snapshot_sec):
-                    self._write_dataset_snapshot(int(self._next_dataset_snapshot_sec))
+                    self._write_dataset_snapshot(
+                        int(self._next_dataset_snapshot_sec),
+                        traci_vehicle_ids=vehicle_ids,
+                    )
                     self._next_dataset_snapshot_sec += int(self._dataset_sampling_period_sec)
 
             # Get current sim time and vehicle count for status
@@ -1248,11 +1285,6 @@ class SimulationPage(QWidget):
                 self.log_text.append("Reached configured end time. Stopping simulation and finalizing labels...")
                 self.stop_simulation(confirm=False)
                 return
-            try:
-                raw_ids = traci.vehicle.getIDList()
-                vehicle_ids = [str(v) for v in (raw_ids if isinstance(raw_ids, (list, tuple)) else [])]
-            except Exception:
-                vehicle_ids = []
             vehicle_count = len(vehicle_ids)
 
             # Update vehicle positions on map only when not running in background (skip rendering)

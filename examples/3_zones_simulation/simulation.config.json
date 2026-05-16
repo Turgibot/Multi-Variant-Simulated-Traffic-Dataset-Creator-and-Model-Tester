@@ -2,7 +2,7 @@
   "snapshot_dir": "/tmp/snapshots",
   "snapshot_interval_sec": 30,
   "vehicle_generation": {
-    "simulation_weeks": 1,
+    "simulation_weeks": 4,
     "total_num_vehicles": 403848,
     "dev_fraction": 1.0,
     "zone_allocation": {
@@ -534,7 +534,7 @@
         6,
         7
       ],
-      "vpm_rate": 22,
+      "vpm_rate": 1,
       "source_zones": [
         "A",
         "B",
@@ -609,34 +609,6 @@
         "visit2",
         "visit3",
         "work"
-      ]
-    },
-    {
-      "name": "Visiting mother",
-      "start_time": "08:00",
-      "end_time": "10:00",
-      "repeat_on_days": [
-        7
-      ],
-      "vpm_rate": 13,
-      "source_zones": [
-        "A",
-        "B"
-      ],
-      "origin": [
-        "home"
-      ],
-      "destination": [
-        "park1",
-        "park2",
-        "park3",
-        "park4",
-        "restaurantA",
-        "restaurantB",
-        "restaurantC",
-        "visit1",
-        "visit2",
-        "visit3"
       ]
     }
   ]

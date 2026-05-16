@@ -161,6 +161,83 @@ class SimulationDBService:
 
         return {"roads_cleared": road_count, "zones_cleared": zone_count}
 
+    def reset_vehicles_for_simulation_start(self, traci: Any = None) -> Dict[str, int]:
+        """
+        Return all vehicles to parked at home and clear in-progress trip state.
+
+        Called before each simulation run so stale in_route rows from a prior run
+        are not exported in dataset snapshots.
+        """
+        in_route_ids: List[str] = []
+        with self.sim_db.connect() as conn:
+            in_route_ids = [
+                str(r[0])
+                for r in conn.execute(
+                    "SELECT id FROM vehicles WHERE status = 'in_route'"
+                ).fetchall()
+            ]
+            cur = conn.execute(
+                """
+                UPDATE vehicles SET
+                    status = 'parked',
+                    speed = 0,
+                    acceleration = 0,
+                    route_json = '[]',
+                    route_length = 0,
+                    route_left_json = '[]',
+                    route_length_left = 0,
+                    origin_name = NULL,
+                    origin_zone = NULL,
+                    origin_edge = NULL,
+                    origin_position = NULL,
+                    origin_x = NULL,
+                    origin_y = NULL,
+                    origin_start_sec = NULL,
+                    destination_name = NULL,
+                    destination_zone = NULL,
+                    destination_edge = NULL,
+                    destination_position = NULL,
+                    destination_x = NULL,
+                    destination_y = NULL,
+                    destination_step = NULL,
+                    current_edge = json_extract(destinations_json, '$.home.edge'),
+                    current_position = COALESCE(
+                        CAST(json_extract(destinations_json, '$.home.position') AS REAL),
+                        current_position
+                    ),
+                    current_zone = home_zone
+                """
+            )
+            reset_count = int(cur.rowcount or 0)
+            conn.commit()
+
+        xy_fixed = 0
+        if traci is not None and in_route_ids:
+            placeholders = ",".join("?" for _ in in_route_ids)
+            with self.sim_db.connect() as conn:
+                rows = conn.execute(
+                    f"""
+                    SELECT id, current_edge, current_position
+                    FROM vehicles
+                    WHERE id IN ({placeholders})
+                      AND current_edge IS NOT NULL
+                    """,
+                    in_route_ids,
+                ).fetchall()
+                for vid, edge, pos in rows:
+                    try:
+                        x, y = traci.simulation.convert2D(str(edge), float(pos), 0)
+                        conn.execute(
+                            "UPDATE vehicles SET current_x = ?, current_y = ? WHERE id = ?",
+                            (float(x), float(y), str(vid)),
+                        )
+                        xy_fixed += 1
+                    except Exception:
+                        pass
+                conn.commit()
+
+        return {"vehicles_reset": reset_count, "coordinates_refreshed": xy_fixed}
+
     def prepare_initial_snapshot(
         self,
         progress_cb: Optional[Callable[[int, str], None]] = None,
