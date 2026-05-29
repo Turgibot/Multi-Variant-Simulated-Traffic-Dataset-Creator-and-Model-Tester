@@ -7,6 +7,13 @@ import math
 from collections import defaultdict
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+try:
+    import numpy as _np
+    _NUMPY = True
+except ImportError:
+    _np = None
+    _NUMPY = False
+
 # Type alias for edges_data: list of (edge_id, edge_data, shape_points)
 EdgesData = List[Tuple[str, Dict[str, Any], List[List[float]]]]
 
@@ -143,19 +150,21 @@ def project_point_onto_polyline_with_segment(
 
 
 def project_point_onto_polyline_with_segment_and_t(
-    px: float, py: float, shape_points: List[List[float]]
+    px: float, py: float, shape_points: List[List[float]], start_idx: int = 0
 ) -> Tuple[Tuple[float, float], int, float]:
     """Closest point on the polyline to (px, py). Returns ((proj_x, proj_y), segment_idx, t).
-    t is the fractional position along the segment (0=start, 1=end)."""
+    t is the fractional position along the segment (0=start, 1=end).
+    start_idx: begin scan from this segment (monotonic GPS projection optimisation — pass
+    max(0, prev_seg_idx - 1) for sequential GPS points ordered along the route)."""
     if len(shape_points) < 2:
         if len(shape_points) == 1:
             return ((float(shape_points[0][0]), float(shape_points[0][1])), 0, 0.0)
         return ((px, py), 0, 0.0)
     best = (px, py)
-    best_seg = 0
+    best_seg = max(0, start_idx)
     best_t = 0.0
     best_dist_sq = float("inf")
-    for i in range(len(shape_points) - 1):
+    for i in range(max(0, start_idx), len(shape_points) - 1):
         x1, y1 = shape_points[i][0], shape_points[i][1]
         x2, y2 = shape_points[i + 1][0], shape_points[i + 1][1]
         seg_dx, seg_dy = x2 - x1, y2 - y1
@@ -191,6 +200,46 @@ def build_edges_data(network_parser: Any) -> EdgesData:
         shape_points = [[float(p[0]), float(p[1])] for p in shape]
         edges_data.append((edge_id, edge_data, shape_points))
     return edges_data
+
+
+def build_base_adjacency(network_parser: Any) -> Dict[str, List[Tuple[str, str]]]:
+    """Pre-build adjacency list (node → [(to_node, edge_id)]) without weights.
+    Build once at worker init and pass to shortest_path_dijkstra to eliminate the
+    O(E) dict construction that otherwise happens on every pathfinding call."""
+    adj: Dict[str, List[Tuple[str, str]]] = {}
+    for eid, ed in network_parser.get_edges().items():
+        from_id = ed.get("from")
+        to_id = ed.get("to")
+        if from_id and to_id:
+            adj.setdefault(from_id, []).append((to_id, eid))
+    return adj
+
+
+def build_edge_shape_arrays(edges_data: EdgesData) -> Dict[str, Any]:
+    """Convert edge shapes to numpy float32 arrays for vectorised distance computation.
+    Returns {} if numpy is not available (scalar fallback remains active)."""
+    if not _NUMPY:
+        return {}
+    return {eid: _np.array(shape, dtype=_np.float32)
+            for eid, _, shape in edges_data if len(shape) >= 2}
+
+
+def point_to_polyline_distance_np(px: float, py: float, shape_arr: Any) -> float:
+    """Vectorised minimum distance from (px, py) to polyline. shape_arr: (n, 2) float32 array.
+    ~5-10× faster than the pure-Python version for typical edge shapes."""
+    p1 = shape_arr[:-1]   # (n-1, 2) segment starts
+    p2 = shape_arr[1:]    # (n-1, 2) segment ends
+    d = p2 - p1           # direction vectors (n-1, 2)
+    len_sq = (d * d).sum(axis=1)                             # (n-1,)
+    ap = _np.array([[px, py]], dtype=_np.float32) - p1       # (n-1, 2)
+    valid = len_sq > 0
+    t = _np.where(
+        valid,
+        _np.clip((ap * d).sum(axis=1) / _np.where(valid, len_sq, 1.0), 0.0, 1.0),
+        0.0,
+    )
+    proj = p1 + t[:, None] * d
+    return float(_np.hypot(proj[:, 0] - px, proj[:, 1] - py).min())
 
 
 def compute_green_orange_edges(
@@ -368,10 +417,12 @@ def shortest_path_dijkstra(
     node_positions: Optional[Dict[str, Tuple[float, float]]] = None,
     goal_xy: Optional[Tuple[float, float]] = None,
     edges_in_polygon: Optional[Set[str]] = None,
+    base_adj: Optional[Dict[str, List[Tuple[str, str]]]] = None,
 ) -> List[str]:
     """Shortest path from start edge to end edge. Edge weights: orange=1, green=10, other=1000.
     If edges_in_polygon is provided, only edges inside the polygon are used.
     If node_positions and goal_xy are provided, uses A* with heuristic = distance to goal (admissible).
+    base_adj: pre-built adjacency from build_base_adjacency(); eliminates O(E) dict construction per call.
     Returns list of edge_ids.
     """
     import heapq
@@ -379,24 +430,6 @@ def shortest_path_dijkstra(
     edges_dict = network_parser.get_edges()
     orange_ids = orange_ids or set()
     green_ids = green_ids or set()
-
-    def weight(eid: str) -> float:
-        if eid in orange_ids:
-            return 1
-        if eid in green_ids:
-            return 10
-        return 1000
-
-    adj: Dict[str, List[Tuple[str, str, float]]] = {}
-    for eid, ed in edges_dict.items():
-        if edges_in_polygon is not None and eid not in edges_in_polygon:
-            continue
-        from_id = ed.get("from")
-        to_id = ed.get("to")
-        if not from_id or not to_id:
-            continue
-        w = weight(eid)
-        adj.setdefault(from_id, []).append((to_id, eid, w))
 
     if start_edge_id not in edges_dict or end_edge_id not in edges_dict:
         return []
@@ -434,24 +467,67 @@ def shortest_path_dijkstra(
         heap = [(0, start_to, [])]
 
     seen: Set[str] = set()
-    while heap:
-        if use_astar:
-            f, g, node, path_edges = heapq.heappop(heap)
-        else:
-            cost, node, path_edges = heapq.heappop(heap)
-            g = cost
-        if node in seen:
-            continue
-        seen.add(node)
-        if node == end_from:
-            return [start_edge_id] + path_edges + [end_edge_id]
-        for neighbor, eid, w in adj.get(node, []):
-            if neighbor not in seen:
+
+    if base_adj is not None:
+        # Fast path: use pre-built adjacency, apply weights and polygon filter inline.
+        # Eliminates the O(E) dict construction that was previously done every call.
+        while heap:
+            if use_astar:
+                f, g, node, path_edges = heapq.heappop(heap)
+            else:
+                cost, node, path_edges = heapq.heappop(heap)
+                g = cost
+            if node in seen:
+                continue
+            seen.add(node)
+            if node == end_from:
+                return [start_edge_id] + path_edges + [end_edge_id]
+            for neighbor, eid in base_adj.get(node, []):
+                if neighbor in seen:
+                    continue
+                if edges_in_polygon is not None and eid not in edges_in_polygon:
+                    continue
+                w = 1 if eid in orange_ids else (10 if eid in green_ids else 1000)
                 g_new = g + w
                 if use_astar:
-                    h_new = heuristic(neighbor)
-                    f_new = g_new + h_new
-                    heapq.heappush(heap, (f_new, g_new, neighbor, path_edges + [eid]))
+                    heapq.heappush(heap, (g_new + heuristic(neighbor), g_new, neighbor, path_edges + [eid]))
                 else:
                     heapq.heappush(heap, (g_new, neighbor, path_edges + [eid]))
+    else:
+        # Fallback: build adjacency list here (original behaviour, no pre-built adj).
+        def weight(eid: str) -> float:
+            if eid in orange_ids:
+                return 1
+            if eid in green_ids:
+                return 10
+            return 1000
+
+        adj: Dict[str, List[Tuple[str, str, float]]] = {}
+        for eid, ed in edges_dict.items():
+            if edges_in_polygon is not None and eid not in edges_in_polygon:
+                continue
+            from_id = ed.get("from")
+            to_id = ed.get("to")
+            if not from_id or not to_id:
+                continue
+            adj.setdefault(from_id, []).append((to_id, eid, weight(eid)))
+
+        while heap:
+            if use_astar:
+                f, g, node, path_edges = heapq.heappop(heap)
+            else:
+                cost, node, path_edges = heapq.heappop(heap)
+                g = cost
+            if node in seen:
+                continue
+            seen.add(node)
+            if node == end_from:
+                return [start_edge_id] + path_edges + [end_edge_id]
+            for neighbor, eid, w in adj.get(node, []):
+                if neighbor not in seen:
+                    g_new = g + w
+                    if use_astar:
+                        heapq.heappush(heap, (g_new + heuristic(neighbor), g_new, neighbor, path_edges + [eid]))
+                    else:
+                        heapq.heappush(heap, (g_new, neighbor, path_edges + [eid]))
     return []

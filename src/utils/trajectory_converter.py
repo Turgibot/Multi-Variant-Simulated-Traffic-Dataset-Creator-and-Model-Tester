@@ -14,6 +14,8 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from src.utils.network_parser import NetworkParser
 from src.utils.route_finding import (
     EdgeSpatialIndex,
+    build_base_adjacency,
+    build_edge_shape_arrays,
     build_edges_data,
     build_node_positions,
     compute_green_orange_edges,
@@ -181,6 +183,8 @@ def convert_trajectory(
     offset_y: float = 0.0,
     spatial_index: Optional[Any] = None,
     cancelled_callback: Optional[Any] = None,
+    base_adj: Optional[Any] = None,
+    edge_shape_arrays: Optional[Any] = None,
 ) -> Optional[Dict]:
     """
     Convert a single trajectory to JSON record. Returns None if no valid route.
@@ -269,6 +273,7 @@ def convert_trajectory(
                 node_positions=node_positions,
                 goal_xy=goal_xy,
                 edges_in_polygon=edges_allowed,
+                base_adj=base_adj,
             )
             if not candidate_path:
                 continue
@@ -309,11 +314,13 @@ def convert_trajectory(
         starting_timestamp = base_ts + orig_offset * GPS_INTERVAL_SEC
         sumo_route_points: List[Dict[str, Any]] = []
         prev_cumulative = 0.0
+        scan_from = 0  # Opt 3: monotonic scan — GPS points ordered along route
 
         for i, (px, py) in enumerate(sumo_points_flipped):
             (proj_x, proj_y), seg_idx, t = project_point_onto_polyline_with_segment_and_t(
-                px, py, path_points_flat
+                px, py, path_points_flat, start_idx=scan_from
             )
+            scan_from = max(0, seg_idx - 1)  # allow 1-segment back-look for safety
             cum_before = sum(segment_lengths[:seg_idx]) if seg_idx > 0 else 0.0
             seg_len = segment_lengths[seg_idx] if seg_idx < len(segment_lengths) else 0.0
             cumulative_dist = cum_before + t * seg_len
