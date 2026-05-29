@@ -5,16 +5,14 @@
   "map_bbox_north": "41.219752",
   "map_bbox_east": "-8.481458",
   "main_csv_path": "data/train.csv",
-  "optional_csv_paths": [
-    "data/test.csv"
-  ],
+  "optional_csv_paths": [],
   "train_csv_path": "data/train.csv",
   "num_zones": 10,
   "train_trip_count": 1710670,
   "trip_count_cache": {
     "path": "/home/guy/Projects/Multi-Variant-Simulated-Traffic-Dataset-Creator-and-Model-Tester/examples/porto_conversion/data/train.csv",
-    "size": 1942848724,
-    "mtime": 1775287733,
+    "size": 1919966166,
+    "mtime": 1779972185,
     "count": 1710670
   },
   "show_osm_map": false,
@@ -30,5 +28,5 @@
   "dataset_save_sorted": "data/train_sorted.csv",
   "dataset_sampling_period": "30",
   "dataset_compress": false,
-  "dataset_workers": "16"
+  "dataset_workers": "4"
 }

@@ -176,6 +176,7 @@ class SimulationDBService:
                     "SELECT id FROM vehicles WHERE status = 'in_route'"
                 ).fetchall()
             ]
+            conn.execute("DELETE FROM vehicle_trips")
             cur = conn.execute(
                 """
                 UPDATE vehicles SET

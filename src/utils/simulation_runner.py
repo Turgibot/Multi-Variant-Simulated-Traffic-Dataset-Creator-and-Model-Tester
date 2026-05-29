@@ -102,6 +102,16 @@ class SimulationRunner:
                             vid,
                         ),
                     )
+                    # Record arrival time on the open trip row for this vehicle.
+                    conn.execute(
+                        """UPDATE vehicle_trips SET destination_step = ?
+                           WHERE trip_row_id = (
+                               SELECT trip_row_id FROM vehicle_trips
+                               WHERE vehicle_id = ? AND destination_step IS NULL
+                               ORDER BY trip_row_id DESC LIMIT 1
+                           )""",
+                        (current_step, vid),
+                    )
                     # Remove from current road's vehicles_on_road
                     if road_row and road_row[2]:
                         try:
@@ -330,7 +340,7 @@ class SimulationRunner:
                         origin_zone,
                         float(ox),
                         float(oy),
-                        depart,
+                        current_step,
                         destination_label,
                         dest_edge,
                         dest_position,
@@ -346,6 +356,19 @@ class SimulationRunner:
                         origin_zone,
                         vehicle_id,
                     ),
+                )
+
+                # Record this trip in vehicle_trips for accurate per-trip label generation.
+                trip_seq = conn.execute(
+                    "SELECT COUNT(*) FROM vehicle_trips WHERE vehicle_id = ?", (vehicle_id,)
+                ).fetchone()[0]
+                conn.execute(
+                    """INSERT INTO vehicle_trips
+                       (vehicle_id, trip_seq, origin_start_sec,
+                        origin_name, destination_name, origin_edge, destination_edge)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (vehicle_id, trip_seq, current_step,
+                     origin_label, destination_label, origin_edge, dest_edge),
                 )
 
                 # Add vehicle to origin road's vehicles_on_road

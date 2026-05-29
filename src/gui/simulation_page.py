@@ -719,12 +719,15 @@ class SimulationPage(QWidget):
             "AND origin_start_sec IS NOT NULL AND origin_start_sec <= ?"
         )
         params: List = [int(snapshot_sec)]
+        sim_start = int(getattr(self, "_sim_start_sec", 0))
         if traci_vehicle_ids is not None:
-            if not traci_vehicle_ids:
+            if not traci_vehicle_ids and int(snapshot_sec) > sim_start:
+                # No vehicles in TraCI and not the first snapshot — nothing to record.
                 return {}
-            placeholders = ",".join("?" for _ in traci_vehicle_ids)
-            query += f" AND id IN ({placeholders})"
-            params.extend(traci_vehicle_ids)
+            if traci_vehicle_ids:
+                placeholders = ",".join("?" for _ in traci_vehicle_ids)
+                query += f" AND id IN ({placeholders})"
+                params.extend(traci_vehicle_ids)
         with self._simulation_runner.sim_db.connect() as conn:
             rows = conn.execute(query, params).fetchall()
         vehicles = {}
@@ -892,23 +895,39 @@ class SimulationPage(QWidget):
             return
         if self._simulation_runner is None or self._dataset_labels_dir is None:
             return
+        # Query per-trip records so multi-trip vehicles produce correct ETAs at each snapshot.
         with self._simulation_runner.sim_db.connect() as conn:
-            rows = conn.execute(
-                "SELECT id, destination_step FROM vehicles WHERE destination_step IS NOT NULL"
+            trips = conn.execute(
+                "SELECT vehicle_id, origin_start_sec, destination_step FROM vehicle_trips"
             ).fetchall()
-        arrival_step_by_vehicle = {str(r[0]): int(r[1]) for r in rows if r[1] is not None}
         suffix = ".json.gz" if self.compress_dataset_output else ".json"
         if hasattr(self, "dataset_progress_bar") and self.dataset_progress_bar is not None:
             self.dataset_progress_bar.set_labels(0, len(self._dataset_snapshot_timestamps))
         created = 0
+        sim_start = int(getattr(self, "_sim_start_sec", 0))
         for snapshot_sec in self._dataset_snapshot_timestamps:
+            snap = int(snapshot_sec)
             labels = []
-            for vid, dest_step in arrival_step_by_vehicle.items():
-                # Vehicles with eta==0 have completed their trip and should not appear
-                # in snapshots or labels for this timestamp.
-                if int(dest_step) <= int(snapshot_sec):
+            for vehicle_id, start_sec, dest_step in trips:
+                if start_sec is None:
                     continue
-                labels.append({"id": vid, "eta": int(dest_step) - int(snapshot_sec)})
+                start = int(start_sec)
+                # Match step-file semantics: a vehicle enters SUMO at depart = origin_start_sec + 1.
+                # At sim_start (step 0) we capture a pre-departure view (<=), so include vehicles
+                # dispatched at that exact step. For all later snapshots use strict < so that
+                # vehicles dispatched at step T only appear in labels from T+1 onward (matching
+                # when they actually enter SUMO and appear in the step file).
+                if snap == sim_start:
+                    if start > snap:
+                        continue
+                else:
+                    if start >= snap:
+                        continue
+                if dest_step is not None and int(dest_step) <= snap:
+                    continue  # trip already completed before this snapshot
+                if dest_step is None:
+                    continue  # trip never completed — no ground-truth ETA
+                labels.append({"id": str(vehicle_id), "eta": int(dest_step) - snap})
             label_payload = {"timestamp": int(snapshot_sec), "labels": labels}
             path = self._dataset_labels_dir / f"label_{int(snapshot_sec):012d}{suffix}"
             self._write_json_file(path, label_payload)
@@ -916,7 +935,7 @@ class SimulationPage(QWidget):
             self.log_text.append(f"Dataset label created: {path.name}")
             if hasattr(self, "dataset_progress_bar") and self.dataset_progress_bar is not None:
                 self.dataset_progress_bar.set_labels(created, len(self._dataset_snapshot_timestamps))
-            self.log_text.append(f"Dataset labels created for {len(self._dataset_snapshot_timestamps)} snapshot(s).")
+        self.log_text.append(f"Dataset labels created for {len(self._dataset_snapshot_timestamps)} snapshot(s).")
 
     def _finalize_dataset_snapshot_progress(self):
         """Mark the snapshot segment full when the run ends (handles skipped empty snapshots and early stop)."""
@@ -1177,8 +1196,9 @@ class SimulationPage(QWidget):
             if self.dataset_creation_enabled:
                 self._write_dataset_static_file()
                 period = max(1, int(self._dataset_sampling_period_sec))
-                # First snapshot at the first simulation second (begin + 1), then every period.
-                self._next_dataset_snapshot_sec = int(start_sec) + 1
+                self._sim_start_sec = int(start_sec)
+                # First snapshot at step 0 (dispatch step), then every period.
+                self._next_dataset_snapshot_sec = int(start_sec)
 
             traci.start(sumo_cmd)
             self.traci_connection = traci

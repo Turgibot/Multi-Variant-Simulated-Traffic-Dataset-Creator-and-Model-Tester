@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Optional, Tuple
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 def compute_sha256_for_bytes(data: bytes) -> str:
@@ -236,6 +236,23 @@ class SimulationDB:
                 ON vehicle_schedule_assignments(simulation_step);
             CREATE INDEX IF NOT EXISTS idx_route_candidates_vehicle
                 ON route_candidates(vehicle_id);
+
+            CREATE TABLE IF NOT EXISTS vehicle_trips (
+                trip_row_id      INTEGER PRIMARY KEY AUTOINCREMENT,
+                vehicle_id       TEXT    NOT NULL,
+                trip_seq         INTEGER NOT NULL DEFAULT 0,
+                origin_start_sec INTEGER NOT NULL,
+                destination_step INTEGER DEFAULT NULL,
+                origin_name      TEXT,
+                destination_name TEXT,
+                origin_edge      TEXT,
+                destination_edge TEXT,
+                FOREIGN KEY(vehicle_id) REFERENCES vehicles(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_vtrips_vehicle
+                ON vehicle_trips(vehicle_id);
+            CREATE INDEX IF NOT EXISTS idx_vtrips_start
+                ON vehicle_trips(origin_start_sec);
             """
         )
 

@@ -306,7 +306,7 @@
         4,
         5
       ],
-      "vpm_rate": 7,
+      "vpm_rate": 10,
       "source_zones": [
         "A",
         "B",
@@ -330,7 +330,7 @@
         4,
         5
       ],
-      "vpm_rate": 20,
+      "vpm_rate": 22,
       "source_zones": [
         "A",
         "C"
@@ -586,7 +586,7 @@
         6,
         7
       ],
-      "vpm_rate": 1,
+      "vpm_rate": 2,
       "source_zones": [
         "A",
         "B",

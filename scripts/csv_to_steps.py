@@ -18,7 +18,7 @@ import time
 import threading
 from pathlib import Path
 from queue import Queue
-from typing import Any, Dict, Iterator, List, Optional, Tuple
+from typing import Any, Dict, FrozenSet, Iterator, List, Optional, Tuple
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -727,13 +727,15 @@ def build_label_json(
     db: TrafficDB,
     snapshot_timestamp: int,
     vehicle_seg_last_ts: Dict[str, int],
+    valid_vids: FrozenSet[str],
 ) -> Dict[str, Any]:
     """
     Build label JSON: ETA per vehicle in seconds remaining.
     ETA = destination_timestamp - snapshot_timestamp.
+    Only vehicles in valid_vids are included — must match build_step_json output exactly.
     """
     labels = []
-    for vid in db.vehicles:
+    for vid in valid_vids:
         dest_ts = vehicle_seg_last_ts.get(vid)
         if dest_ts is not None:
             eta = max(0, dest_ts - snapshot_timestamp)
@@ -763,16 +765,19 @@ def build_static_json(db: TrafficDB) -> Dict[str, Any]:
 def build_step_json(
     db: TrafficDB,
     snapshot_timestamp: int,
+    valid_vids: FrozenSet[str],
 ) -> Dict[str, Any]:
     """
     Build step snapshot JSON: vehicles only, road edge dynamic fields, dynamic edges.
     Static data (junctions, road edge static features) is in static.json.
+    Only vehicles in valid_vids are included — must match build_label_json output exactly.
     """
-    dynamic_edges = create_dynamic_edges(db.road_edges, db.vehicles)
+    valid_vehicles = {vid: v for vid, v in db.vehicles.items() if vid in valid_vids}
+    dynamic_edges = create_dynamic_edges(db.road_edges, valid_vehicles)
     road_edges_dynamic = [
         {
             "id": e["id"],
-            "vehicles_on_road": e.get("vehicles_on_road", []),
+            "vehicles_on_road": [v for v in e.get("vehicles_on_road", []) if v in valid_vids],
             "edge_demand": e.get("edge_demand", 0.0),
             "avg_speed": e.get("avg_speed", 0.0),
             "density": e.get("density", 0.0),
@@ -785,7 +790,7 @@ def build_step_json(
     ]
     return {
         "step": snapshot_timestamp,
-        "nodes": list(db.vehicles.values()),
+        "nodes": list(valid_vehicles.values()),
         "road_edges_dynamic": road_edges_dynamic,
         "dynamic_edges": dynamic_edges,
     }
@@ -1234,140 +1239,134 @@ def main():
             _write_step_json(ts_val, data, label_data)
 
     conversion_done = False
-    while True:
-        next_ts_in_map = _first_ts_key()
 
-        if pending_traj is None and not conversion_done:
-            pending_traj = _get_next_trajectory()
+    def _expire_stale_vehicles(traj_cut: Optional[int]) -> None:
+        """Remove DB vehicles whose last GPS event fell at or before traj_cut."""
+        if traj_cut is None:
+            return
+        for vid in list(db.vehicles.keys()):
+            last_ts_val = vehicle_last_ts.get(vid)
+            if last_ts_val is not None and last_ts_val <= traj_cut:
+                db.remove_vehicle(vid)
+                vehicle_last_ts.pop(vid, None)
+
+    def _load_trajectories_through(boundary: int) -> None:
+        """
+        Pull converted trajectories and load them until the next unloaded one starts
+        strictly after `boundary`. Guarantees every vehicle whose trip begins within
+        [0, boundary] is in timestamp_to_vehicles before the snapshot at boundary is built.
+        """
+        nonlocal pending_traj, conversion_done
+        while not conversion_done:
             if pending_traj is None:
-                conversion_done = True
-
-        if pending_traj is not None:
-            _, _, traj_ts, rec = pending_traj
-            traj_first_ts = _traj_first_ts(rec, traj_ts or 0)
-            load_now = next_ts_in_map is None or (
-                traj_first_ts is not None and traj_first_ts < next_ts_in_map
-            )
-            if load_now:
-                # Align removal cutoff with simulated GPS timeline (first point of new trip), not
-                # raw CSV TIMESTAMP alone — see starting_timestamp in trajectory_converter.
-                traj_cut = traj_first_ts if traj_first_ts is not None else traj_ts
-                for vid in list(db.vehicles.keys()):
-                    # Only remove if we've seen the vehicle's last point (trajectory ended).
-                    # vehicle_last_ts[vid] is set when we pop the batch with its last point.
-                    # If vid not in vehicle_last_ts, trajectory is still active - do NOT remove.
-                    last_ts_val = vehicle_last_ts.get(vid)
-                    will_remove = (
-                        last_ts_val is not None
-                        and traj_cut is not None
-                        and last_ts_val <= traj_cut
-                    )
-                    if will_remove:
-                        db.remove_vehicle(vid)
-                        vehicle_last_ts.pop(vid, None)
-                _load_trajectory(*pending_traj)
-                pending_traj = None
-                continue
-
-        if next_ts_in_map is None:
-            if pending_traj is not None:
-                _load_trajectory(*pending_traj)
-                pending_traj = None
-                continue
-            if conversion_done:
-                break
-            if use_parallel:
                 pending_traj = _get_next_trajectory()
                 if pending_traj is None:
                     conversion_done = True
-                    continue
+                    return
+            _, _, traj_ts, rec = pending_traj
+            traj_first_ts = _traj_first_ts(rec, traj_ts or 0)
+            if traj_first_ts is not None and traj_first_ts > boundary:
+                return  # keep pending_traj for the next snapshot window
+            traj_cut = traj_first_ts if traj_first_ts is not None else traj_ts
+            _expire_stale_vehicles(traj_cut)
+            _load_trajectory(*pending_traj)
+            pending_traj = None
+
+    def _process_batch_up_to(boundary: int) -> None:
+        """Pop all GPS batches with ts <= boundary and apply updates to the DB."""
+        while timestamp_to_vehicles and _first_ts_key() is not None and _first_ts_key() <= boundary:
+            first_ts, vehicle_infos = _pop_first()
+            for info in vehicle_infos:
+                vid = info.get("id", "")
+                if vid in vehicle_pending and vehicle_pending[vid][1] == first_ts:
+                    _node, seg_first, seg_last = vehicle_pending[vid]
+                    # Only add to DB if destination timestamp is known; otherwise
+                    # the vehicle would appear in a step file with no matching label.
+                    if seg_last is not None:
+                        db.add_vehicle(vid, _node)
+                        print(f"vehicle {vid} added to db | route ts: {seg_first} .. {seg_last}", flush=True)
+                    del vehicle_pending[vid]
+                if vehicle_seg_last_ts.get(vid) == first_ts:
+                    vehicle_last_ts[vid] = first_ts
+            update_db_from_vehicle_infos(db, vehicle_infos)
+            ids = [v.get("id", "") for v in vehicle_infos if v.get("id")]
+            still = [vid for vid in ids if vid in db.vehicles]
+            print(f"popped ts {first_ts} — GPS batch ids: {ids}; still in DB: {still}", flush=True)
+
+    def _emit_current_state(ts_val: int) -> None:
+        """Compute valid_vids once and pass it to both builders so step and label always match."""
+        valid_vids = frozenset(db.vehicles) & frozenset(vehicle_seg_last_ts)
+        step_data = build_step_json(db, ts_val, valid_vids)
+        label_data = build_label_json(db, ts_val, vehicle_seg_last_ts, valid_vids)
+        _emit_step_json(ts_val, step_data, label_data)
+
+    # Seed: load trajectories until at least one event is in the map
+    while not timestamp_to_vehicles and not conversion_done:
+        if pending_traj is None:
+            pending_traj = _get_next_trajectory()
+            if pending_traj is None:
+                conversion_done = True
+                break
+        _, _, traj_ts, rec = pending_traj
+        traj_first_ts = _traj_first_ts(rec, traj_ts or 0)
+        _expire_stale_vehicles(traj_first_ts if traj_first_ts is not None else traj_ts)
+        _load_trajectory(*pending_traj)
+        pending_traj = None
+
+    while True:
+        next_ts_in_map = _first_ts_key()
+
+        if next_ts_in_map is None:
+            if conversion_done:
+                break
+            # Map is empty. Load pending_traj unconditionally to seed new events —
+            # even if it starts after the current boundary. Without this, a pending_traj
+            # whose first_ts > boundary causes an infinite spin.
+            if pending_traj is not None:
+                _, _, traj_ts, rec = pending_traj
+                traj_first_ts = _traj_first_ts(rec, traj_ts or 0)
+                _expire_stale_vehicles(traj_first_ts if traj_first_ts is not None else traj_ts)
+                _load_trajectory(*pending_traj)
+                pending_traj = None
+                continue
+            pending_traj = _get_next_trajectory()
+            if pending_traj is None:
+                conversion_done = True
             continue
 
         if global_ts == 0:
             global_ts = next_ts_in_map
         next_json_boundary = global_ts + sampling_period
 
-        if next_ts_in_map <= next_json_boundary:
-            while timestamp_to_vehicles and _first_ts_key() is not None and _first_ts_key() <= next_json_boundary:
-                first_ts, vehicle_infos = _pop_first()
-                for info in vehicle_infos:
-                    vid = info.get("id", "")
-                    if vid in vehicle_pending and vehicle_pending[vid][1] == first_ts:
-                        _node, seg_first, seg_last = vehicle_pending[vid]
-                        db.add_vehicle(vid, _node)
-                        del vehicle_pending[vid]
-                        last_ts_str = str(seg_last) if seg_last is not None else "?"
-                        print(f"vehicle {vid} added to db | route ts: {seg_first} .. {last_ts_str}", flush=True)
-                    if vehicle_seg_last_ts.get(vid) == first_ts:
-                        vehicle_last_ts[vid] = first_ts
-                update_db_from_vehicle_infos(db, vehicle_infos)
-                ids = [v.get("id", "") for v in vehicle_infos if v.get("id")]
-                still = [vid for vid in ids if vid in db.vehicles]
-                print(
-                    f"popped ts {first_ts} — GPS batch ids: {ids}; still in DB: {still}",
-                    flush=True,
-                )
-            global_ts = next_json_boundary
-            _update_edge_demand(db)
-            label_data = build_label_json(db, global_ts, vehicle_seg_last_ts)
-            step_data = build_step_json(db, global_ts)
-            _emit_step_json(global_ts, step_data, label_data)
+        # Before emitting the snapshot at next_json_boundary, load every trajectory
+        # whose first GPS timestamp falls within the current window. This prevents
+        # vehicles from being absent because their pool result arrived late.
+        _load_trajectories_through(next_json_boundary)
+
+        next_ts_in_map = _first_ts_key()
+        if next_ts_in_map is None:
+            if conversion_done:
+                break
             continue
 
-        # next_ts_in_map > next_json_boundary: emit JSON for each skipped boundary before popping
-        while next_json_boundary < next_ts_in_map:
-            global_ts = next_json_boundary
-            _update_edge_demand(db)
-            label_data = build_label_json(db, global_ts, vehicle_seg_last_ts)
-            step_data = build_step_json(db, global_ts)
-            _emit_step_json(global_ts, step_data, label_data)
-            next_json_boundary = global_ts + sampling_period
+        if next_ts_in_map > next_json_boundary:
+            # No events in [global_ts, next_json_boundary]. Fast-forward over the gap
+            # to avoid spinning through hundreds of empty sampling periods.
+            gap_steps = max(0, (next_ts_in_map - next_json_boundary) // sampling_period - 1)
+            global_ts = next_json_boundary + gap_steps * sampling_period
+            continue
 
-        first_ts, vehicle_infos = _pop_first()
-        for info in vehicle_infos:
-            vid = info.get("id", "")
-            if vid in vehicle_pending and vehicle_pending[vid][1] == first_ts:
-                _node, seg_first, seg_last = vehicle_pending[vid]
-                db.add_vehicle(vid, _node)
-                del vehicle_pending[vid]
-                last_ts_str = str(seg_last) if seg_last is not None else "?"
-                print(f"vehicle {vid} added to db | route ts: {seg_first} .. {last_ts_str}", flush=True)
-            if vehicle_seg_last_ts.get(vid) == first_ts:
-                vehicle_last_ts[vid] = first_ts
-        update_db_from_vehicle_infos(db, vehicle_infos)
-        ids = [v.get("id", "") for v in vehicle_infos if v.get("id")]
-        still = [vid for vid in ids if vid in db.vehicles]
-        print(
-            f"popped ts {first_ts} — GPS batch ids: {ids}; still in DB: {still}",
-            flush=True,
-        )
+        _process_batch_up_to(next_json_boundary)
+        global_ts = next_json_boundary
+        _update_edge_demand(db)
+        _emit_current_state(global_ts)
 
     while timestamp_to_vehicles and _first_ts_key() is not None:
         next_json_boundary = global_ts + sampling_period
-        while timestamp_to_vehicles and _first_ts_key() is not None and _first_ts_key() <= next_json_boundary:
-            first_ts, vehicle_infos = _pop_first()
-            for info in vehicle_infos:
-                vid = info.get("id", "")
-                if vid in vehicle_pending and vehicle_pending[vid][1] == first_ts:
-                    _node, seg_first, seg_last = vehicle_pending[vid]
-                    db.add_vehicle(vid, _node)
-                    del vehicle_pending[vid]
-                    last_ts_str = str(seg_last) if seg_last is not None else "?"
-                    print(f"vehicle {vid} added to db | route ts: {seg_first} .. {last_ts_str}", flush=True)
-                if vehicle_seg_last_ts.get(vid) == first_ts:
-                    vehicle_last_ts[vid] = first_ts
-            update_db_from_vehicle_infos(db, vehicle_infos)
-            ids = [v.get("id", "") for v in vehicle_infos if v.get("id")]
-            still = [vid for vid in ids if vid in db.vehicles]
-            print(
-                f"popped ts {first_ts} — GPS batch ids: {ids}; still in DB: {still}",
-                flush=True,
-            )
+        _process_batch_up_to(next_json_boundary)
         global_ts = next_json_boundary
         _update_edge_demand(db)
-        label_data = build_label_json(db, global_ts, vehicle_seg_last_ts)
-        step_data = build_step_json(db, global_ts)
-        _emit_step_json(global_ts, step_data, label_data)
+        _emit_current_state(global_ts)
 
     if not args.no_progress and total_traj:
         print(
