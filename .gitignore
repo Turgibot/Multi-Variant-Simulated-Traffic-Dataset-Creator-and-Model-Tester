@@ -179,4 +179,5 @@ examples/3_zones_simulation/simulation/3_zones_simulation.db-journal
 examples/porto_conversion/dataset*
 examples/porto_conversion/data/*.csv
 examples/3_zones_simulation/dataset_1_week/labels/label_000000000000.json
-examples/porto_conversion/data/*.parquet
+# *.parquet files are tracked via Git LFS
+Academia/
