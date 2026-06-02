@@ -122,17 +122,18 @@ def _write_snapshot(
 # Input streaming
 # ---------------------------------------------------------------------------
 
-def _stream_parquet_rows(parquet_path: Path) -> Iterator[Tuple[int, List, int]]:
+def _stream_parquet_rows(parquet_path: Path, id_start: int = 1) -> Iterator[Tuple[int, List, int]]:
     """
     Yield (row_num, polyline_list, timestamp) from a .parquet file.
     Skips rows with missing_data=True or unparseable polylines.
     Validates that timestamps are non-decreasing.
+    id_start offsets the row counter so IDs are unique across splits.
     """
     import pandas as pd
 
     df = pd.read_parquet(str(parquet_path), columns=["timestamp", "polyline", "missing_data"])
     last_ts: Optional[int] = None
-    for row_num, row in enumerate(df.itertuples(index=False), 1):
+    for row_num, row in enumerate(df.itertuples(index=False), id_start):
         if row.missing_data:
             continue
         try:
@@ -171,10 +172,10 @@ def _stream_csv_rows_simple(
                 yield row_num, polyline, timestamp
 
 
-def stream_input(input_path: Path) -> Iterator[Tuple[int, List, Optional[int]]]:
+def stream_input(input_path: Path, id_start: int = 1) -> Iterator[Tuple[int, List, Optional[int]]]:
     """Auto-detect parquet vs CSV and return a row stream."""
     if input_path.suffix.lower() == ".parquet":
-        return _stream_parquet_rows(input_path)
+        return _stream_parquet_rows(input_path, id_start=id_start)
     return _stream_csv_rows_simple(input_path)
 
 
@@ -497,15 +498,15 @@ def _update_edge_demand(db: TrafficDB) -> None:
         if current_edge:
             e = db.road_edges.get(current_edge, {})
             length = e.get("length", 0.0)
-            speed = e.get("avg_speed", 0.0) or e.get("speed", 1.0) or 1.0
+            speed = max(abs(e.get("avg_speed", 0.0) or e.get("speed", 1.0) or 1.0), 0.1)
             t += max(0.0, length - current_position) / speed
         for edge_id in route_left:
             e = db.road_edges.get(edge_id, {})
             if not e:
                 continue
             length = e.get("length", 0.0)
-            speed = e.get("avg_speed", 0.0) or e.get("speed", 1.0) or 1.0
-            e["edge_demand"] = e.get("edge_demand", 0.0) + 1.0 / (1.0 + t / EDGE_DEMAND_TAU_SEC)
+            speed = max(abs(e.get("avg_speed", 0.0) or e.get("speed", 1.0) or 1.0), 0.1)
+            e["edge_demand"] = e.get("edge_demand", 0.0) + 1.0 / max(1e-9, 1.0 + t / EDGE_DEMAND_TAU_SEC)
             t += length / speed
 
 
@@ -707,6 +708,13 @@ def parse_args():
         metavar="N",
         help="Stop after processing N input rows (useful for validation runs)",
     )
+    parser.add_argument(
+        "--id-start",
+        type=int,
+        default=1,
+        metavar="N",
+        help="Starting ID for vehicle numbering (default: 1). Use to avoid ID collisions across splits.",
+    )
     return parser.parse_args()
 
 
@@ -865,7 +873,7 @@ def main():
             update_db_from_vehicle_infos(db, vehicle_infos)
 
     # --- Conversion pipeline ---
-    row_stream = stream_input(args.input)
+    row_stream = stream_input(args.input, id_start=args.id_start)
     if args.limit is not None:
         row_stream = itertools.islice(row_stream, args.limit)
         print(f"--limit {args.limit}: will stop after {args.limit} input rows.", flush=True)

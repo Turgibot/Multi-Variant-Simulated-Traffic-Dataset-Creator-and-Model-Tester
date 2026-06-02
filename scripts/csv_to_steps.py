@@ -147,16 +147,17 @@ def count_csv_rows(
 def _stream_sorted_rows(
     sorted_csv_path: Path,
     ts_idx: Optional[int],
+    id_start: int = 1,
 ) -> Iterator[Tuple[int, List, Optional[int]]]:
     """
     Stream (trip_num, polyline, timestamp) one row at a time from sorted file.
-    trip_num is the 1-based row index in the sorted file.
+    trip_num starts at id_start to allow unique IDs across splits.
     O(1) memory - never loads full dataset.
     """
     with open(sorted_csv_path, "r", encoding="utf-8", newline="") as csv_f:
         reader = csv.reader(csv_f)
         next(reader, None)  # skip header
-        for i, row in enumerate(reader, 1):
+        for i, row in enumerate(reader, id_start):
             polyline, timestamp = _parse_csv_row(row, ts_idx)
             if polyline:
                 yield i, polyline, timestamp
@@ -167,22 +168,26 @@ def _stream_csv_rows(
     start_traj: int,
     last_traj: Optional[int],
     ts_idx: Optional[int],
+    id_start: int = 1,
 ) -> Iterator[Tuple[int, List, Optional[int]]]:
     """
     Stream (trip_num, polyline, timestamp) one row at a time from CSV.
     Use when data is already sorted. O(1) memory.
+    trip_num starts at id_start to allow unique IDs across splits.
     """
     with open(csv_path, "r", encoding="utf-8", newline="") as f:
         reader = csv.reader(f)
         next(reader, None)  # skip header
-        for i, row in enumerate(reader, 1):
-            if i < start_traj:
+        next_id = id_start
+        for row_num, row in enumerate(reader, 1):
+            if row_num < start_traj:
                 continue
-            if last_traj is not None and i > last_traj:
+            if last_traj is not None and row_num > last_traj:
                 break
             polyline, timestamp = _parse_csv_row(row, ts_idx)
             if polyline:
-                yield i, polyline, timestamp
+                yield next_id, polyline, timestamp
+                next_id += 1
 
 
 def load_and_sort_csv(
@@ -191,6 +196,7 @@ def load_and_sort_csv(
     last_traj: Optional[int],
     is_sorted: bool,
     save_sorted_path: Optional[Path],
+    id_start: int = 1,
 ) -> Iterator[Tuple[int, List, Optional[int]]]:
     """
     Sort CSV by timestamp, then return an iterator that streams one row at a time.
@@ -213,7 +219,7 @@ def load_and_sort_csv(
                 break
 
     if is_sorted:
-        return _stream_csv_rows(csv_path, start_traj, last_traj, ts_idx)
+        return _stream_csv_rows(csv_path, start_traj, last_traj, ts_idx, id_start=id_start)
 
     total = count_csv_rows(csv_path, start_traj, last_traj)
     with open(csv_path, "r", encoding="utf-8") as f:
@@ -251,7 +257,7 @@ def load_and_sort_csv(
             writer.writerow(raw_row)
 
     # rows_with_raw goes out of scope here - memory freed
-    return _stream_sorted_rows(save_sorted_path, ts_idx)
+    return _stream_sorted_rows(save_sorted_path, ts_idx, id_start=id_start)
 
 
 def parse_args():
@@ -343,6 +349,13 @@ def parse_args():
         "--compress",
         action="store_true",
         help="Use gzip compression and compact JSON. Default: readable JSON (.json, indented).",
+    )
+    parser.add_argument(
+        "--id-start",
+        type=int,
+        default=1,
+        metavar="N",
+        help="Starting ID for vehicle numbering (default: 1). Use to avoid ID collisions across splits.",
     )
     return parser.parse_args()
 
@@ -705,7 +718,7 @@ def _update_edge_demand(db: TrafficDB) -> None:
         if current_edge and len(route_left) > 0:
             e = db.road_edges.get(current_edge, {})
             length = e.get("length", 0.0)
-            speed = e.get("avg_speed", 0.0) or e.get("speed", 1.0) or 1.0
+            speed = max(abs(e.get("avg_speed", 0.0) or e.get("speed", 1.0) or 1.0), 0.1)
             remaining = max(0.0, length - current_position)
             t += remaining / speed
 
@@ -715,9 +728,9 @@ def _update_edge_demand(db: TrafficDB) -> None:
             if not e:
                 continue
             length = e.get("length", 0.0)
-            speed = e.get("avg_speed", 0.0) or e.get("speed", 1.0) or 1.0
+            speed = max(abs(e.get("avg_speed", 0.0) or e.get("speed", 1.0) or 1.0), 0.1)
 
-            contribution = 1.0 / (1.0 + t / EDGE_DEMAND_TAU_SEC)
+            contribution = 1.0 / max(1e-9, 1.0 + t / EDGE_DEMAND_TAU_SEC)
             e["edge_demand"] = e.get("edge_demand", 0.0) + contribution
 
             t += length / speed
@@ -1016,6 +1029,7 @@ def main():
         last_traj=args.last,
         is_sorted=args.is_sorted,
         save_sorted_path=save_sorted_path,
+        id_start=args.id_start,
     )
 
     total_traj = count_csv_rows(args.csv, args.start, args.last)

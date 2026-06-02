@@ -38,8 +38,10 @@ except ImportError:
 from src.utils.route_finding import (
     EdgeSpatialIndex,
     build_base_adjacency,
+    build_edge_angles,
     build_edge_shape_arrays,
     build_edges_data,
+    build_edges_lookup,
     build_node_positions,
     project_point_onto_polyline_with_segment_and_t,
 )
@@ -66,10 +68,12 @@ def _mp_init_worker(net_path: str) -> None:
     edge_shapes = {eid: shape for eid, _ed, shape in edges_data}
     node_positions = build_node_positions(np_local)
     spatial_index = EdgeSpatialIndex(edges_data, cell_size=500.0)
-    base_adj = build_base_adjacency(np_local)          # Opt 1: pre-built adjacency
+    base_adj     = build_base_adjacency(np_local)   # no O(E) dict alloc per Dijkstra call
+    edge_angles  = build_edge_angles(edges_data)    # no atan2 per edge per segment
+    edges_lookup = build_edges_lookup(edges_data)   # O(1) candidate lookup vs O(E) list scan
     _mp_worker_state = (
         np_local, edges_data, edge_shapes, node_positions,
-        y_min, y_max, spatial_index, base_adj,
+        y_min, y_max, spatial_index, base_adj, edge_angles, edges_lookup,
     )
 
 
@@ -82,11 +86,11 @@ def _mp_convert_one(
     trip_num, polyline, ts = task
     if ts is None:
         return None
-    np_local, edges_data, edge_shapes, node_positions, y_min, y_max, spatial_index, base_adj = _mp_worker_state
+    np_local, edges_data, edge_shapes, node_positions, y_min, y_max, spatial_index, base_adj, edge_angles, edges_lookup = _mp_worker_state
     rec = convert_trajectory(
         trip_num, polyline, ts, np_local, edges_data, edge_shapes,
         node_positions, y_min, y_max, use_polygon=False, spatial_index=spatial_index,
-        base_adj=base_adj,
+        base_adj=base_adj, edge_angles=edge_angles, edges_lookup=edges_lookup,
     )
     if rec:
         return (trip_num, polyline, ts, rec)
@@ -129,17 +133,18 @@ def _write_snapshot(
 # Input streaming
 # ---------------------------------------------------------------------------
 
-def _stream_parquet_rows(parquet_path: Path) -> Iterator[Tuple[int, List, int]]:
+def _stream_parquet_rows(parquet_path: Path, id_start: int = 1) -> Iterator[Tuple[int, List, int]]:
     """
     Yield (row_num, polyline_list, timestamp) from a .parquet file.
     Skips rows with missing_data=True or unparseable polylines.
     Validates that timestamps are non-decreasing.
+    id_start offsets the row counter so IDs are unique across splits.
     """
     import pandas as pd
 
     df = pd.read_parquet(str(parquet_path), columns=["timestamp", "polyline", "missing_data"])
     last_ts: Optional[int] = None
-    for row_num, row in enumerate(df.itertuples(index=False), 1):
+    for row_num, row in enumerate(df.itertuples(index=False), id_start):
         if row.missing_data:
             continue
         try:
@@ -178,10 +183,10 @@ def _stream_csv_rows_simple(
                 yield row_num, polyline, timestamp
 
 
-def stream_input(input_path: Path) -> Iterator[Tuple[int, List, Optional[int]]]:
+def stream_input(input_path: Path, id_start: int = 1) -> Iterator[Tuple[int, List, Optional[int]]]:
     """Auto-detect parquet vs CSV and return a row stream."""
     if input_path.suffix.lower() == ".parquet":
-        return _stream_parquet_rows(input_path)
+        return _stream_parquet_rows(input_path, id_start=id_start)
     return _stream_csv_rows_simple(input_path)
 
 
@@ -504,15 +509,15 @@ def _update_edge_demand(db: TrafficDB) -> None:
         if current_edge:
             e = db.road_edges.get(current_edge, {})
             length = e.get("length", 0.0)
-            speed = e.get("avg_speed", 0.0) or e.get("speed", 1.0) or 1.0
+            speed = max(abs(e.get("avg_speed", 0.0) or e.get("speed", 1.0) or 1.0), 0.1)
             t += max(0.0, length - current_position) / speed
         for edge_id in route_left:
             e = db.road_edges.get(edge_id, {})
             if not e:
                 continue
             length = e.get("length", 0.0)
-            speed = e.get("avg_speed", 0.0) or e.get("speed", 1.0) or 1.0
-            e["edge_demand"] = e.get("edge_demand", 0.0) + 1.0 / (1.0 + t / EDGE_DEMAND_TAU_SEC)
+            speed = max(abs(e.get("avg_speed", 0.0) or e.get("speed", 1.0) or 1.0), 0.1)
+            e["edge_demand"] = e.get("edge_demand", 0.0) + 1.0 / max(1e-9, 1.0 + t / EDGE_DEMAND_TAU_SEC)
             t += length / speed
 
 
@@ -714,6 +719,13 @@ def parse_args():
         metavar="N",
         help="Stop after processing N input rows (useful for validation runs)",
     )
+    parser.add_argument(
+        "--id-start",
+        type=int,
+        default=1,
+        metavar="N",
+        help="Starting ID for vehicle numbering (default: 1). Use to avoid ID collisions across splits.",
+    )
     return parser.parse_args()
 
 
@@ -872,7 +884,7 @@ def main():
             update_db_from_vehicle_infos(db, vehicle_infos)
 
     # --- Conversion pipeline ---
-    row_stream = stream_input(args.input)
+    row_stream = stream_input(args.input, id_start=args.id_start)
     if args.limit is not None:
         row_stream = itertools.islice(row_stream, args.limit)
         print(f"--limit {args.limit}: will stop after {args.limit} input rows.", flush=True)
