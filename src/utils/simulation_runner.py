@@ -9,9 +9,44 @@ from __future__ import annotations
 import json
 import sqlite3
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from src.utils.simulation_db import SimulationDB
+
+
+def _recompute_road_stats(conn: sqlite3.Connection, edge_id: str) -> None:
+    """Recompute density and avg_speed from vehicles_on_road_json and vehicle speeds."""
+    row = conn.execute(
+        "SELECT vehicles_on_road_json, length, num_lanes FROM roads WHERE id = ?",
+        (edge_id,),
+    ).fetchone()
+    if not row:
+        return
+    try:
+        on_road = json.loads(row[0]) if row[0] else []
+        if not isinstance(on_road, list):
+            on_road = []
+    except Exception:
+        on_road = []
+    length = float(row[1] or 1.0)
+    num_lanes = float(row[2] or 1)
+    n = len(on_road)
+    if n == 0:
+        density = 0.0
+        avg_speed = 0.0
+    else:
+        density = n / (length * num_lanes) if length * num_lanes > 0 else 0.0
+        placeholders = ",".join("?" for _ in on_road)
+        speed_rows = conn.execute(
+            f"SELECT speed FROM vehicles WHERE id IN ({placeholders})",
+            on_road,
+        ).fetchall()
+        speeds = [float(r[0] or 0.0) for r in speed_rows]
+        avg_speed = sum(speeds) / len(speeds) if speeds else 0.0
+    conn.execute(
+        "UPDATE roads SET density = ?, avg_speed = ? WHERE id = ?",
+        (density, avg_speed, edge_id),
+    )
 
 
 class SimulationRunner:
@@ -35,6 +70,7 @@ class SimulationRunner:
             return
 
         with self.sim_db.connect() as conn:
+            affected_edges: Set[str] = set()
             for vid in vehicle_ids:
                 row = conn.execute(
                     "SELECT id, status, current_edge, destination_edge FROM vehicles WHERE id = ?",
@@ -122,6 +158,7 @@ class SimulationRunner:
                                     "UPDATE roads SET vehicles_on_road_json = ? WHERE id = ?",
                                     (json.dumps(on_road, ensure_ascii=False), current_edge),
                                 )
+                                affected_edges.add(current_edge)
                         except Exception:
                             pass
                 else:
@@ -170,6 +207,9 @@ class SimulationRunner:
                                 )
                         except Exception:
                             pass
+                    affected_edges.add(current_edge)
+                    if prev_edge and prev_edge != current_edge:
+                        affected_edges.add(prev_edge)
 
                     # Remove from previous road if changed
                     if prev_edge and prev_edge != current_edge:
@@ -189,8 +229,12 @@ class SimulationRunner:
                                             prev_edge,
                                         ),
                                     )
+                                    affected_edges.add(prev_edge)
                             except Exception:
                                 pass
+
+            for edge_id in affected_edges:
+                _recompute_road_stats(conn, edge_id)
 
             conn.commit()
 
@@ -386,6 +430,7 @@ class SimulationRunner:
                                 "UPDATE roads SET vehicles_on_road_json = ? WHERE id = ?",
                                 (json.dumps(on_road, ensure_ascii=False), origin_edge),
                             )
+                            _recompute_road_stats(conn, origin_edge)
                     except Exception:
                         pass
 

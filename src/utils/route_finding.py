@@ -202,6 +202,21 @@ def build_edges_data(network_parser: Any) -> EdgesData:
     return edges_data
 
 
+def build_edge_angles(edges_data: EdgesData) -> Dict[str, float]:
+    """Pre-compute direction angle for every edge. Build once at worker init.
+    angle = atan2(y_start - y_end, x_end - x_start).
+    Note: flip_y cancels in the difference (y_start_f - y_end_f = y_end - y_start inverted,
+    but atan2(y_start-y_end, x_end-x_start) is equivalent to the in-loop computation
+    atan2(flip_y(y_end)-flip_y(y_start), x_end-x_start)) — so no y_min/y_max dependency."""
+    angles: Dict[str, float] = {}
+    for eid, _, shape_points in edges_data:
+        if len(shape_points) >= 2:
+            x_start, y_start = shape_points[0][0], shape_points[0][1]
+            x_end,   y_end   = shape_points[-1][0], shape_points[-1][1]
+            angles[eid] = math.atan2(y_start - y_end, x_end - x_start)
+    return angles
+
+
 def build_base_adjacency(network_parser: Any) -> Dict[str, List[Tuple[str, str]]]:
     """Pre-build adjacency list (node → [(to_node, edge_id)]) without weights.
     Build once at worker init and pass to shortest_path_dijkstra to eliminate the
@@ -242,6 +257,12 @@ def point_to_polyline_distance_np(px: float, py: float, shape_arr: Any) -> float
     return float(_np.hypot(proj[:, 0] - px, proj[:, 1] - py).min())
 
 
+def build_edges_lookup(edges_data: EdgesData) -> Dict[str, Tuple[Any, List[List[float]]]]:
+    """Pre-build {edge_id: (edge_data, shape_points)} for O(1) per-segment candidate lookup.
+    Build once at worker init; pass as edges_lookup to compute_green_orange_edges."""
+    return {eid: (ed, sp) for eid, ed, sp in edges_data}
+
+
 def compute_green_orange_edges(
     edges_data: EdgesData,
     sumo_points_flipped: List[Tuple[float, float]],
@@ -252,31 +273,27 @@ def compute_green_orange_edges(
     angle_weight: float = 5.0,
     spatial_index: Optional[Any] = None,
     filter_radius: float = 800.0,
+    edge_angles: Optional[Dict[str, float]] = None,
+    edges_lookup: Optional[Dict[str, Any]] = None,
 ) -> Tuple[Set[str], Set[str], Optional[str], Optional[str], List[str]]:
     """Compute orange/green edge IDs and start/end edge for route finding (no drawing).
     sumo_points_flipped: trajectory points in display coords (Y-flipped).
     Returns (orange_edge_ids, green_edge_ids, start_edge_id, end_edge_id, start_edge_candidates).
-    Same logic as view_network draw_green_edges_for_segments.
-    When spatial_index is provided, filters edges to candidates near trajectory for speed.
+
+    edge_angles:   pre-built from build_edge_angles()  — eliminates atan2 per edge per segment.
+    edges_lookup:  pre-built from build_edges_lookup() — O(1) candidate lookup vs O(E) list scan.
+    spatial_index: queried per-segment (2 endpoint queries) so candidates stay small per segment.
     """
     if not sumo_points_flipped or len(sumo_points_flipped) < 2:
         return (set(), set(), None, None, [])
 
-    def flip_y(y: float) -> float:
-        return y_max + y_min - y
+    # Fix 3: inline flip_y — eliminates 932M closure call frames.
+    y_const = y_max + y_min
 
-    # Optional: filter edges by spatial index for faster processing
-    if spatial_index is not None:
-        candidate_ids: Set[str] = set()
-        for px, py in sumo_points_flipped:
-            py_sumo = flip_y(py)
-            candidate_ids.update(spatial_index.get_candidates_in_radius(px, py_sumo, filter_radius))
-        edge_id_set = {eid for eid, _, _ in edges_data}
-        candidate_ids &= edge_id_set
-        if candidate_ids:
-            edges_data = [(eid, ed, sp) for eid, ed, sp in edges_data if eid in candidate_ids]
-        if not edges_data:
-            return (set(), set(), None, None, [])
+    # Build lookup if not pre-supplied (fallback for callers that don't pre-build at init).
+    _lookup: Optional[Dict[str, Any]] = edges_lookup if edges_lookup is not None else (
+        {eid: (ed, sp) for eid, ed, sp in edges_data} if spatial_index is not None else None
+    )
 
     all_orange_ids: Set[str] = set()
     all_green_ids: Set[str] = set()
@@ -285,15 +302,35 @@ def compute_green_orange_edges(
     start_edge_candidates: List[str] = []
 
     num_segments = len(sumo_points_flipped) - 1
+    _two_pi = 2 * math.pi
+    _atan2 = math.atan2
+
     for seg_idx in range(num_segments):
         seg_x1, seg_y1 = sumo_points_flipped[seg_idx]
         seg_x2, seg_y2 = sumo_points_flipped[seg_idx + 1]
-        seg_y1_sumo = flip_y(seg_y1)
-        seg_y2_sumo = flip_y(seg_y2)
+        # Fix 3: inline flip_y
+        seg_y1_sumo = y_const - seg_y1
+        seg_y2_sumo = y_const - seg_y2
 
         dx_seg = seg_x2 - seg_x1
         dy_seg = seg_y2 - seg_y1
-        segment_angle = math.atan2(dy_seg, dx_seg)
+        segment_angle = _atan2(dy_seg, dx_seg)
+
+        # Fix 1: per-segment spatial filtering — query only this segment's two endpoints.
+        # Previously the entire trajectory was unioned before the loop (up to 5000 candidates).
+        # Using edges_lookup for O(candidates) reconstruction instead of O(E) list scan.
+        if spatial_index is not None and _lookup is not None:
+            seg_cand_ids = (
+                spatial_index.get_candidates_in_radius(seg_x1, seg_y1_sumo, filter_radius)
+                | spatial_index.get_candidates_in_radius(seg_x2, seg_y2_sumo, filter_radius)
+            )
+            seg_edges = []
+            for eid in seg_cand_ids:
+                entry = _lookup.get(eid)
+                if entry is not None:
+                    seg_edges.append((eid, entry[0], entry[1]))
+        else:
+            seg_edges = edges_data
 
         matching: List[Tuple[float, str, Any, List[List[float]], float, float]] = []
         closest_to_p1 = None
@@ -301,19 +338,22 @@ def compute_green_orange_edges(
         closest_to_p2 = None
         closest_to_p2_dist = float("inf")
 
-        for edge_id, edge_data, shape_points in edges_data:
+        for edge_id, edge_data, shape_points in seg_edges:
             if len(shape_points) < 2:
                 continue
-            x_start, y_start = shape_points[0][0], shape_points[0][1]
-            x_end, y_end = shape_points[-1][0], shape_points[-1][1]
-            y_start_f = flip_y(y_start)
-            y_end_f = flip_y(y_end)
-            dx_edge = x_end - x_start
-            dy_edge = y_end_f - y_start_f
-            edge_angle = math.atan2(dy_edge, dx_edge)
+
+            # Fix 2: use cached angle; fall back to inline computation if not provided.
+            if edge_angles is not None:
+                edge_angle = edge_angles[edge_id]
+            else:
+                x_start, y_start = shape_points[0][0], shape_points[0][1]
+                x_end,   y_end   = shape_points[-1][0], shape_points[-1][1]
+                # Fix 3 inline: dy_edge = flip_y(y_end) - flip_y(y_start) = y_start - y_end
+                edge_angle = _atan2(y_start - y_end, x_end - x_start)
+
             angle_diff = abs(segment_angle - edge_angle)
             if angle_diff > math.pi:
-                angle_diff = 2 * math.pi - angle_diff
+                angle_diff = _two_pi - angle_diff
             if angle_diff > direction_threshold:
                 continue
 
@@ -330,13 +370,13 @@ def compute_green_orange_edges(
                 closest_to_p2 = (edge_id, edge_data, shape_points)
 
         if closest_to_p1:
-            eid, _ed, _sp = closest_to_p1
+            eid = closest_to_p1[0]
             all_orange_ids.add(eid)
             if seg_idx == 0:
                 start_edge_id = eid
                 start_edge_candidates = [m[1] for m in sorted(matching, key=lambda m: m[4])[:5]]
         if closest_to_p2:
-            eid, _ed, _sp = closest_to_p2
+            eid = closest_to_p2[0]
             all_orange_ids.add(eid)
             if seg_idx == num_segments - 1:
                 end_edge_id = eid
@@ -346,24 +386,33 @@ def compute_green_orange_edges(
             if eid not in all_orange_ids:
                 all_green_ids.add(eid)
 
-    # Fallbacks if start/end not set from segments
+    # Fallbacks if start/end not resolved — O(candidates) lookup via _lookup dict.
+    def _fb_edges(px: float, py_sumo: float) -> EdgesData:
+        if spatial_index is not None and _lookup is not None:
+            cids = spatial_index.get_candidates_in_radius(px, py_sumo, filter_radius)
+            cands = [(eid, entry[0], entry[1]) for eid in cids if (entry := _lookup.get(eid)) is not None]
+            return cands if cands else edges_data
+        return edges_data
+
     if start_edge_id is None and sumo_points_flipped:
-        px, py = sumo_points_flipped[0][0], flip_y(sumo_points_flipped[0][1])
-        by_dist: List[Tuple[float, str]] = []
-        for edge_id, _ed, shape_points in edges_data:
-            d = point_to_polyline_distance(px, py, shape_points)
-            by_dist.append((d, edge_id))
-        by_dist.sort(key=lambda x: x[0])
+        px = sumo_points_flipped[0][0]
+        py_sumo = y_const - sumo_points_flipped[0][1]
+        by_dist = sorted(
+            [(point_to_polyline_distance(px, py_sumo, sp), eid) for eid, _, sp in _fb_edges(px, py_sumo)],
+            key=lambda x: x[0],
+        )
         start_edge_candidates = [eid for _, eid in by_dist[:5]]
         start_edge_id = start_edge_candidates[0] if start_edge_candidates else None
+
     if end_edge_id is None and len(sumo_points_flipped) >= 2:
-        px, py = sumo_points_flipped[-1][0], flip_y(sumo_points_flipped[-1][1])
+        px = sumo_points_flipped[-1][0]
+        py_sumo = y_const - sumo_points_flipped[-1][1]
         best_dist = float("inf")
-        for edge_id, _ed, shape_points in edges_data:
-            d = point_to_polyline_distance(px, py, shape_points)
+        for eid, _, sp in _fb_edges(px, py_sumo):
+            d = point_to_polyline_distance(px, py_sumo, sp)
             if d < best_dist:
                 best_dist = d
-                end_edge_id = edge_id
+                end_edge_id = eid
 
     if start_edge_id and not start_edge_candidates:
         start_edge_candidates = [start_edge_id]

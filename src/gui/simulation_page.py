@@ -862,20 +862,25 @@ class SimulationPage(QWidget):
         road_edges = self._fetch_road_edges_for_dataset()
         vehicles = self._fetch_active_nodes_for_dataset(snapshot_sec, traci_vehicle_ids)
         self._compute_edge_demand(road_edges, vehicles)
-        road_edges_dynamic = [
-            {
-                "id": e["id"],
-                "vehicles_on_road": e.get("vehicles_on_road", []),
-                "edge_demand": e.get("edge_demand", 0.0),
-                "avg_speed": e.get("avg_speed", 0.0),
-                "density": e.get("density", 0.0),
-            }
-            for e in road_edges.values()
-            if e.get("vehicles_on_road")
-            or e.get("edge_demand", 0.0) != 0.0
-            or e.get("avg_speed", 0.0) != 0.0
-            or e.get("density", 0.0) != 0.0
-        ]
+        valid_vids = set(vehicles.keys())
+        road_edges_dynamic = []
+        for e in road_edges.values():
+            vehicles_on_road = [v for v in e.get("vehicles_on_road", []) if v in valid_vids]
+            if (
+                vehicles_on_road
+                or e.get("edge_demand", 0.0) != 0.0
+                or e.get("avg_speed", 0.0) != 0.0
+                or e.get("density", 0.0) != 0.0
+            ):
+                road_edges_dynamic.append(
+                    {
+                        "id": e["id"],
+                        "vehicles_on_road": vehicles_on_road,
+                        "edge_demand": e.get("edge_demand", 0.0),
+                        "avg_speed": e.get("avg_speed", 0.0),
+                        "density": e.get("density", 0.0),
+                    }
+                )
         step_payload = {
             "step": int(snapshot_sec),
             "nodes": list(vehicles.values()),

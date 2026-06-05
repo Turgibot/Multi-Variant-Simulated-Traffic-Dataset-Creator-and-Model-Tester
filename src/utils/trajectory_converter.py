@@ -15,8 +15,10 @@ from src.utils.network_parser import NetworkParser
 from src.utils.route_finding import (
     EdgeSpatialIndex,
     build_base_adjacency,
+    build_edge_angles,
     build_edge_shape_arrays,
     build_edges_data,
+    build_edges_lookup,
     build_node_positions,
     compute_green_orange_edges,
     project_point_onto_polyline,
@@ -185,6 +187,8 @@ def convert_trajectory(
     cancelled_callback: Optional[Any] = None,
     base_adj: Optional[Any] = None,
     edge_shape_arrays: Optional[Any] = None,
+    edge_angles: Optional[Any] = None,
+    edges_lookup: Optional[Any] = None,
 ) -> Optional[Dict]:
     """
     Convert a single trajectory to JSON record. Returns None if no valid route.
@@ -249,6 +253,8 @@ def convert_trajectory(
             top_per_segment=5,
             spatial_index=spatial_index,
             filter_radius=400.0,
+            edge_angles=edge_angles,
+            edges_lookup=edges_lookup,
         )
         if not start_id or not end_id:
             continue

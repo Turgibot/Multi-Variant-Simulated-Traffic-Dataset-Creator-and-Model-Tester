@@ -28,5 +28,5 @@
   "dataset_save_sorted": "data/train_sorted.csv",
   "dataset_sampling_period": "30",
   "dataset_compress": false,
-  "dataset_workers": "4"
+  "dataset_workers": "1"
 }
