@@ -19,7 +19,7 @@ from src.gui.debug_trajectory_page import DebugTrajectoryPage
 from src.gui.project_dialog import NewProjectDialog
 from src.gui.route_generation_page import RouteGenerationPage
 from src.gui.simulation_page import SimulationPage
-from src.utils.project_paths import to_display_path
+from src.utils.project_paths import resolve_dataset_output_layout, to_display_path
 from src.utils.project_manager import ProjectManager, _get_project_root, get_app_icon_png_path
 from src.utils.sumo_config_manager import SUMOConfigManager
 
@@ -837,14 +837,9 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Error", "SUMO configuration file is not set for this project.")
             return
 
-        output_folder = config_manager.get_dataset_output_folder()
-        if not output_folder:
-            output_folder = str((Path(project_path) / "datasets").resolve())
-            Path(output_folder).mkdir(parents=True, exist_ok=True)
-            try:
-                config_manager.set_dataset_output_folder(output_folder)
-            except Exception:
-                pass
+        layout = resolve_dataset_output_layout(project_path)
+        output_folder = str(layout["output_folder"])
+        Path(output_folder).mkdir(parents=True, exist_ok=True)
 
         self.open_simulation(project_name, sumocfg_path, output_folder)
     
@@ -894,6 +889,7 @@ class MainWindow(QMainWindow):
             self.simulation_page.sumocfg_path = sumocfg_path
             self.simulation_page.output_folder = output_folder
             self.simulation_page.config_manager = SUMOConfigManager(project_path)
+            self.simulation_page._refresh_dataset_output_from_config()
             if not self.simulation_page.simulation_running:
                 self.simulation_page.load_network()
 

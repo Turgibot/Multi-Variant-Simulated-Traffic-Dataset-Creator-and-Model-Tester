@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (QFileDialog, QFrame, QGroupBox, QHBoxLayout,
                                QLabel, QLineEdit, QMessageBox, QPushButton,
                                QScrollArea, QTextEdit, QVBoxLayout, QWidget)
 
-from src.utils.project_paths import resolve_path, to_display_path
+from src.utils.project_paths import resolve_dataset_output_layout, resolve_path, to_display_path
 from src.utils.sumo_config_manager import SUMOConfigManager
 from src.utils.sumo_detector import effective_sumo_home
 
@@ -573,14 +573,9 @@ class DatasetGenerationPage(QWidget):
     def run_simulation(self):
         """Run SUMO simulation - navigate to simulation page."""
         sumocfg_path = str(resolve_path(self.sumocfg_input.text().strip(), self.project_path))
-        output_folder = self.config_manager.get_dataset_output_folder()
-        if not output_folder:
-            output_folder = str((Path(self.project_path) / "datasets").resolve())
-            Path(output_folder).mkdir(parents=True, exist_ok=True)
-            try:
-                self.config_manager.set_dataset_output_folder(output_folder)
-            except Exception:
-                pass
+        layout = resolve_dataset_output_layout(self.project_path)
+        output_folder = str(layout["output_folder"])
+        Path(output_folder).mkdir(parents=True, exist_ok=True)
 
         eh = effective_sumo_home(self.config_manager.get_sumo_home() or "")
         if not sumocfg_path or not eh:

@@ -7,8 +7,9 @@ to that root when possible; paths outside the project stay absolute (or use ~ fo
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
-from typing import Union
+from typing import Dict, Union
 
 PathLike = Union[str, Path]
 
@@ -92,3 +93,74 @@ def compact_path(path: PathLike, project_root: PathLike) -> str:
         return "." if out == "" else out
     except ValueError:
         return str(p)
+
+
+def resolve_dataset_output_layout(project_path: PathLike) -> Dict[str, object]:
+    """
+    Resolve dataset output paths for simulation export.
+
+    Uses output_dir from simulation.config.json when set; otherwise falls back to
+    dataset_output_folder in sumo_config.json (default: <project>/datasets).
+    """
+    project = Path(project_path).expanduser()
+    try:
+        project = project.resolve()
+    except OSError:
+        project = Path(project_path).expanduser()
+
+    snapshot_interval_sec = 30
+    output_dir_raw = ""
+    sim_config_path = project / "simulation.config.json"
+    if sim_config_path.exists():
+        try:
+            with open(sim_config_path, "r", encoding="utf-8") as f:
+                sim_config = json.load(f)
+            if isinstance(sim_config, dict):
+                output_dir_raw = read_output_dir_from_sim_config(sim_config, project)
+                snapshot_interval_sec = int(sim_config.get("snapshot_interval_sec", 30))
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            pass
+
+    if output_dir_raw:
+        output_folder = resolve_path(output_dir_raw, project)
+        snapshots_dir = output_folder / "snapshots"
+    else:
+        from src.utils.sumo_config_manager import SUMOConfigManager
+
+        output_raw = SUMOConfigManager(str(project)).get_dataset_output_folder()
+        if output_raw:
+            output_folder = Path(output_raw)
+        else:
+            output_folder = project / "datasets"
+        snapshots_dir = output_folder / "snapshots"
+
+    try:
+        output_folder = output_folder.resolve()
+    except OSError:
+        output_folder = Path(output_folder)
+    try:
+        snapshots_dir = snapshots_dir.resolve()
+    except OSError:
+        snapshots_dir = Path(snapshots_dir)
+
+    return {
+        "output_folder": str(output_folder),
+        "snapshots_dir": str(snapshots_dir),
+        "snapshot_interval_sec": max(1, int(snapshot_interval_sec)),
+    }
+
+
+def read_output_dir_from_sim_config(sim_config: dict, project: PathLike) -> str:
+    """Read output_dir from simulation config, with legacy snapshot_dir migration."""
+    raw = str(sim_config.get("output_dir") or "").strip()
+    if raw:
+        return raw
+
+    legacy = str(sim_config.get("snapshot_dir") or "").strip()
+    if not legacy:
+        return ""
+
+    legacy_path = resolve_path(legacy, project)
+    if legacy_path.name == "snapshots":
+        return str(legacy_path.parent)
+    return legacy

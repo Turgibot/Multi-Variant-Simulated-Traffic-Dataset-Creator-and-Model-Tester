@@ -27,7 +27,7 @@ from src.gui.simulation_view import SimulationView
 from src.utils.network_parser import NetworkParser
 from src.utils.route_xml_generator import RouteXMLGenerator
 from src.utils.simulation_db_service import SimulationDBService
-from src.utils.project_paths import compact_path, resolve_path, to_display_path
+from src.utils.project_paths import compact_path, read_output_dir_from_sim_config, resolve_path, to_display_path
 from src.utils.sumo_config_manager import SUMOConfigManager
 
 
@@ -651,15 +651,15 @@ class RouteGenerationPage(QWidget):
         self._set_config_block_style(core_group, "#ece6ff")
         core_form = QFormLayout()
 
-        snapshot_row = QHBoxLayout()
-        self.snapshot_dir_input = QLineEdit(
-            to_display_path(Path(self.project_path) / "snapshots", self.project_path)
+        output_row = QHBoxLayout()
+        self.output_dir_input = QLineEdit(
+            to_display_path(Path(self.project_path) / "datasets", self.project_path)
         )
-        browse_snapshot_btn = QPushButton("Browse")
-        browse_snapshot_btn.clicked.connect(self.browse_snapshot_dir)
-        snapshot_row.addWidget(self.snapshot_dir_input)
-        snapshot_row.addWidget(browse_snapshot_btn)
-        core_form.addRow("snapshot_dir", snapshot_row)
+        browse_output_btn = QPushButton("Browse")
+        browse_output_btn.clicked.connect(self.browse_output_dir)
+        output_row.addWidget(self.output_dir_input)
+        output_row.addWidget(browse_output_btn)
+        core_form.addRow("output_dir", output_row)
 
         self.snapshot_interval_spin = NoScrollSpinBox()
         self.snapshot_interval_spin.setRange(1, 3600)
@@ -682,6 +682,21 @@ class RouteGenerationPage(QWidget):
         self.dev_fraction_spin.setSingleStep(0.05)
         self.dev_fraction_spin.setValue(1.0)
         core_form.addRow("dev_fraction", self.dev_fraction_spin)
+
+        self.seed_spin = NoScrollSpinBox()
+        self.seed_spin.setRange(0, 2_147_483_647)
+        self.seed_spin.setValue(43)
+        self.seed_spin.setToolTip("Seed used for random number generation.")
+        core_form.addRow("seed", self.seed_spin)
+
+        self.max_day_disruptions_spin = NoScrollSpinBox()
+        self.max_day_disruptions_spin.setRange(0, 1000)
+        self.max_day_disruptions_spin.setValue(2)
+        self.max_day_disruptions_spin.setToolTip(
+            "Maximum number of randomly generated traffic disruption events "
+            "that may be active simultaneously during the simulation."
+        )
+        core_form.addRow("max_day_disruptions", self.max_day_disruptions_spin)
         core_group.setLayout(core_form)
         config_layout.addWidget(core_group)
 
@@ -797,9 +812,9 @@ class RouteGenerationPage(QWidget):
         except Exception as e:
             QMessageBox.warning(self, "Error", f"Failed to load network: {str(e)}")
 
-    def browse_snapshot_dir(self):
-        """Select snapshot output directory."""
-        cur = self.snapshot_dir_input.text().strip()
+    def browse_output_dir(self):
+        """Select dataset output directory (parent of snapshots, labels, static, mapping)."""
+        cur = self.output_dir_input.text().strip()
         start = self.project_path
         if cur:
             rp = resolve_path(cur, self.project_path)
@@ -807,11 +822,11 @@ class RouteGenerationPage(QWidget):
                 start = str(rp)
         folder = QFileDialog.getExistingDirectory(
             self,
-            "Select Snapshot Directory",
+            "Select Output Directory",
             start,
         )
         if folder:
-            self.snapshot_dir_input.setText(
+            self.output_dir_input.setText(
                 to_display_path(folder, self.project_path)
             )
             self._persist_current_config_safely()
@@ -927,11 +942,13 @@ class RouteGenerationPage(QWidget):
 
     def _connect_auto_persist_signals(self):
         """Persist to project simulation config whenever form values change."""
-        self.snapshot_dir_input.textChanged.connect(lambda _: self._persist_current_config_safely())
+        self.output_dir_input.textChanged.connect(lambda _: self._persist_current_config_safely())
         self.snapshot_interval_spin.valueChanged.connect(lambda _: self._persist_current_config_safely())
         self.simulation_weeks_spin.valueChanged.connect(lambda _: self._persist_current_config_safely())
         self.total_vehicles_spin.valueChanged.connect(lambda _: self._persist_current_config_safely())
         self.dev_fraction_spin.valueChanged.connect(lambda _: self._persist_current_config_safely())
+        self.seed_spin.valueChanged.connect(lambda _: self._persist_current_config_safely())
+        self.max_day_disruptions_spin.valueChanged.connect(lambda _: self._persist_current_config_safely())
 
     def _read_project_simulation_config(self) -> Dict:
         """Read simulation config from project's simulation.config.json."""
@@ -961,16 +978,20 @@ class RouteGenerationPage(QWidget):
                 self.refresh_zone_allocation_section(preserve_existing=False)
                 return
 
-            raw_snap = config.get("snapshot_dir", "").strip()
-            if raw_snap:
-                self.snapshot_dir_input.setText(
+            raw_output = read_output_dir_from_sim_config(config, Path(self.project_path))
+            if raw_output:
+                self.output_dir_input.setText(
                     to_display_path(
-                        resolve_path(raw_snap, self.project_path),
+                        resolve_path(raw_output, self.project_path),
                         self.project_path,
                     )
                 )
             if "snapshot_interval_sec" in config:
                 self.snapshot_interval_spin.setValue(int(config.get("snapshot_interval_sec", 30)))
+            if "seed" in config:
+                self.seed_spin.setValue(int(config.get("seed", 43)))
+            if "max_day_disruptions" in config:
+                self.max_day_disruptions_spin.setValue(int(config.get("max_day_disruptions", 2)))
 
             vg = config.get("vehicle_generation", {})
             if isinstance(vg, dict):
@@ -2216,10 +2237,12 @@ class RouteGenerationPage(QWidget):
         zone_allocation = self._collect_zone_allocation_from_cards()
         vehicle_types = self._collect_vehicle_types_from_cards()
 
-        snap = self.snapshot_dir_input.text().strip()
+        output_dir = self.output_dir_input.text().strip()
         config = {
-            "snapshot_dir": compact_path(snap, self.project_path) if snap else "",
+            "output_dir": compact_path(output_dir, self.project_path) if output_dir else "",
             "snapshot_interval_sec": int(self.snapshot_interval_spin.value()),
+            "seed": int(self.seed_spin.value()),
+            "max_day_disruptions": int(self.max_day_disruptions_spin.value()),
             "vehicle_generation": {
                 "simulation_weeks": int(self.simulation_weeks_spin.value()),
                 "total_num_vehicles": int(self.total_vehicles_spin.value()),

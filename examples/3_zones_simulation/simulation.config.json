@@ -1,6 +1,8 @@
 {
-  "snapshot_dir": "/tmp/snapshots",
+  "output_dir": "/home/guy/Desktop/sampleDS",
   "snapshot_interval_sec": 30,
+  "seed": 43,
+  "max_day_disruptions": 2,
   "vehicle_generation": {
     "simulation_weeks": 4,
     "total_num_vehicles": 403848,

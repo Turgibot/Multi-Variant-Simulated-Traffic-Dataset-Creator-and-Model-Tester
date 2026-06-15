@@ -45,6 +45,7 @@ def _parse_ww_dd_hh_mm_ss(s: str) -> int:
     if w < 0 or d < 0 or d > 6 or h < 0 or h > 23 or m < 0 or m > 59 or sec < 0 or sec > 59:
         raise ValueError("Out of range (weeks>=0, days 0-6, hours 0-23, min/sec 0-59)")
     return w * 604800 + d * 86400 + h * 3600 + m * 60 + sec
+from src.utils.project_paths import resolve_dataset_output_layout
 from src.utils.simulation_db_service import SimulationDBService
 from src.utils.simulation_runner import SimulationRunner
 from src.utils.sumo_config_manager import SUMOConfigManager
@@ -800,14 +801,21 @@ class SimulationPage(QWidget):
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(payload, f, indent=2)
 
+    def _refresh_dataset_output_from_config(self):
+        """Apply output_dir and related paths from simulation.config.json."""
+        layout = resolve_dataset_output_layout(self.project_path)
+        self.output_folder = str(layout["output_folder"])
+        self._dataset_snapshots_dir = Path(str(layout["snapshots_dir"]))
+        self._dataset_sampling_period_sec = int(layout["snapshot_interval_sec"])
+
     def _init_dataset_export(self):
+        self._refresh_dataset_output_from_config()
         self._dataset_snapshot_timestamps = []
         self._dataset_snapshots_boundary_count = 0
         self._next_dataset_snapshot_sec = None
         self._dataset_static_written = False
         output_dir = Path(self.output_folder)
         output_dir.mkdir(parents=True, exist_ok=True)
-        self._dataset_snapshots_dir = output_dir / "snapshots"
         self._dataset_labels_dir = output_dir / "labels"
         self._dataset_snapshots_dir.mkdir(parents=True, exist_ok=True)
         self._dataset_labels_dir.mkdir(parents=True, exist_ok=True)
@@ -1008,6 +1016,7 @@ class SimulationPage(QWidget):
     
     def start_simulation(self):
         """Start the SUMO simulation."""
+        self._refresh_dataset_output_from_config()
         if hasattr(self, "dataset_progress_group"):
             self.dataset_progress_group.setVisible(True)
         if hasattr(self, "dataset_progress_bar") and self.dataset_progress_bar is not None:
@@ -1086,9 +1095,12 @@ class SimulationPage(QWidget):
 
     def _start_sumo_simulation(self):
         """Internal SUMO startup flow (called directly or after mapping export)."""
+        self._refresh_dataset_output_from_config()
         self.log_text.append("Starting SUMO simulation...")
         self.log_text.append(f"SUMO Config: {self.sumocfg_path}")
         self.log_text.append(f"Output Folder: {self.output_folder}")
+        if self._dataset_snapshots_dir is not None:
+            self.log_text.append(f"Snapshots Folder: {self._dataset_snapshots_dir}")
         self.log_text.append("")
         
         try:
